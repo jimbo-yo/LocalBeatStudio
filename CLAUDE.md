@@ -140,9 +140,28 @@ exit-code-52 errors) was removed.
 - Useful options: `-l 7` (single track), `-Z N` (repeat rips until checksums
   match, for damaged discs), `-s` offset / `-f` find offset, `-o flac,opus`,
   `-D`/`-F` naming schemes, `-R` release, `-Q` eject
-- Plan: rip Let Love Rule with cyanrip and compare against whipper's 12
-  AccurateRip-verified tracks; if identical, use it for track 7 on the new
-  drive, then decide whether rip-cd.sh switches to cyanrip
+- cyanrip behavior notes: stops with "Multiple releases found" (lists
+  `N (ID: …): Album (US) (date)`) unless `-R` given; exits 1 on ANY error but
+  still writes every track (unreadable spots become silence), so judge each
+  track from its output ("Track N ripped and encoded with errors",
+  "Accurip v1/v2: … (accurately ripped"); `-Z 1` = two identical reads;
+  `-I` lists each track's output path; cover is saved as `Front.jpg`; in rip
+  mode there's no "Track N info:" header (block follows "Track N ripped…")
+- **Branch `cyanrip`: rip-cd.sh rewritten for cyanrip** (master keeps the
+  whipper version). Info pass picks the US release and the tracks missing from
+  FLAC_DIR; rips only those into `~/.cache/rip-cd/staging`; moves a track into
+  the library only if AccurateRip-verified, else re-reads it up to AR_TRIES
+  (3) times hoping for a match, else accepts two identical reads (`-Z 1`);
+  failures go to `~/.cache/rip-cd/rejected`; never overwrites. Offsets per
+  drive (udev ID_SERIAL) in `~/.config/rip-cd/offsets`; SuperDrive seeded with
+  6; `rip-cd.sh setup` runs `cyanrip -f` and saves it. Drive auto-picked as
+  the one with an audio CD (no longer SuperDrive-only)
+- Tested on cyanrip's disc images (full rip, two-read fallback, resume of one
+  missing track, nothing-to-do). NOT yet tested on a real disc: AccurateRip
+  path, release selection, rejects, setup
+- Plan: re-rip Let Love Rule on the cyanrip branch: should find 12 tracks
+  present and rip only track 7 (on the new drive, after `rip-cd.sh setup`);
+  then compare a cyanrip rip of a verified track with whipper's file
 
 ## Next steps (planned 2026-11-05)
 
