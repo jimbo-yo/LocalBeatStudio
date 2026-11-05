@@ -164,6 +164,28 @@ exit-code-52 errors) was removed.
   Picked regular US release over the BMG club one. Fixed: multi-disc CUE
   sheets/logs now get " CDn" so disc 2 can't overwrite disc 1. cyanrip swaps
   `?` for a lookalike `？` in file names (phone-safe; `-T os_unicode` keeps it)
+- 2026-11-05 additions (cyanrip branch):
+  - A track whose clean re-read has the same EAC CRC32 as an earlier read is
+    accepted then ("repeat", same test as -Z 1) instead of after all AR_TRIES.
+    Seen on Led Zeppelin box disc 1: tracks 5/10 read identically every time
+    (no AR match, AR 450-frame CRC matched), 4/11/15 differed per read
+  - Per-drive lock (`~/.cache/rip-cd/lock-srN`, flock) and a flac2phone lock,
+    so two drives can rip at once; --loop and auto-pick skip busy drives
+  - `RIPCD_EVENTS=1` prints `@@event<TAB>fields` lines (waiting, inserted,
+    drive, stage, release, disc, track, cover, stagedir, pass, result,
+    accuraterip, accepted, rejected, finished, error, discend, remove)
+  - Replace rip-cd.sh with `mv` (new inode), never in-place edits, while a
+    rip runs: bash re-reads the file by offset after main() returns
+- **rip-cd-gui.py** (PySide6, Fedora python3-pyside6): desktop window that
+  runs `rip-cd.sh --loop` with RIPCD_EVENTS=1 in its own session (Stop kills
+  cyanrip too). Shows cover, artist/album/disc N of M, per-track status
+  (live AccurateRip result per read), current-track and pass progress with
+  ETA, session list, log pane; KDE notification per disc; saves output to
+  `~/rip.log`; single instance (QLocalServer). `--no-start`; other args go to
+  rip-cd.sh; `RIPCD_SCRIPT=` overrides the script (testing). Launchers
+  (symlinks into the repo's `desktop/`): app menu "CD Ripper", and a KDE
+  disc-inserted popup action "Rip with CD Ripper". Tested offscreen with
+  synthetic streams; NOT yet used on a real rip
 - Plan: re-rip Let Love Rule on the cyanrip branch: should find 12 tracks
   present and rip only track 7 (on the new drive, after `rip-cd.sh setup`);
   then compare a cyanrip rip of a verified track with whipper's file
@@ -171,8 +193,8 @@ exit-code-52 errors) was removed.
 ## Next steps (planned 2026-11-05)
 
 1. Test a second (shorter) CD with the new Artist/Album layout
-2. Desktop progress window for rip-cd.sh (CLI still works), and a loop mode
-   that waits for the next disc instead of exiting after eject
+2. ~~Desktop progress window and loop mode~~ done (rip-cd-gui.py, --loop);
+   try the window on a real disc
 3. Later: a replacement for Musicolet on the phone (user has ideas). The phone
    library is already in use in Musicolet; older phone folders still mix
    `Artist - Album` and `Artist/Album` layouts and straight vs. curly `'`
