@@ -127,6 +127,23 @@ exit-code-52 errors) was removed.
 - Format plan: FLAC (level 5) archive on the computer, Opus 160 kbps on the
   Android phone (Android 17; music player e.g. Musicolet/Poweramp).
 
+## cyanrip (candidate whipper replacement, 2026-11-05)
+
+- whipper 0.10.0 (2021) is aging: depends on deprecated `pkg_resources`, no
+  resume (re-rips and deletes existing tracks: its saved-checksum check always
+  fails on a new run), no single-track ripping, hides cdrdao errors
+- cyanrip: not in Fedora repos/Flathub; built from git master (0.9.4-rc3,
+  648b1dd) in `~/development/cyanrip`, installed to `~/.local/bin/cyanrip`
+  (`meson setup build --prefix=$HOME/.local && ninja -C build install`).
+  Build deps: meson ffmpeg-devel (negativo17, not ffmpeg-free-devel)
+  libcdio-paranoia-devel libmusicbrainz5-devel libcurl-devel. Self-tests pass
+- Useful options: `-l 7` (single track), `-Z N` (repeat rips until checksums
+  match, for damaged discs), `-s` offset / `-f` find offset, `-o flac,opus`,
+  `-D`/`-F` naming schemes, `-R` release, `-Q` eject
+- Plan: rip Let Love Rule with cyanrip and compare against whipper's 12
+  AccurateRip-verified tracks; if identical, use it for track 7 on the new
+  drive, then decide whether rip-cd.sh switches to cyanrip
+
 ## Next steps (planned 2026-11-05)
 
 1. Test a second (shorter) CD with the new Artist/Album layout
