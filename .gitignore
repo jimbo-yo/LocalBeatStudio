@@ -1,0 +1,15 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Rip output and logs never belong here
+*.flac
+*.opus
+*.log
+*.toc
+*.cue
+
+# Editor
+.vscode/
+*.swp
