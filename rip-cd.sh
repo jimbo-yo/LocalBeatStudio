@@ -9,6 +9,7 @@
 #   rip-cd.sh setup        # once per drive: find its read offset (needs a
 #                          # popular CD that's in the AccurateRip database)
 #   rip-cd.sh              # rip the disc in the drive
+#   rip-cd.sh --loop       # keep going: wait for the next disc after each one
 #   rip-cd.sh --unknown    # rip a disc MusicBrainz doesn't know (generic names)
 #   rip-cd.sh -R <mbid>    # use this exact MusicBrainz release
 #   (any other options are passed on to cyanrip)
@@ -57,14 +58,43 @@ command -v cyanrip >/dev/null || {
 udev_prop() {  # udev_prop DEVICE KEY
     { udevadm info --query=property --name="$1" 2>/dev/null || true; } | sed -n "s/^$2=//p"
 }
+has_audio_cd() { [[ $(udev_prop "$1" ID_CDROM_MEDIA_TRACK_COUNT_AUDIO) -gt 0 ]] 2>/dev/null; }
+
+# --loop: rip disc after disc. Each disc is a normal one-disc run of this
+# script; a failed disc is ejected and the loop carries on. Ctrl+C to stop.
+if [[ " $* " == *" --loop "* ]]; then
+    local args=() a dev self
+    for a in "$@"; do [[ $a == --loop ]] || args+=("$a"); done
+    self=$(realpath "$0")
+    while :; do
+        echo
+        echo "== Waiting for an audio CD (Ctrl+C to stop) =="
+        dev=""
+        while [[ -z $dev ]]; do
+            for d in ${DEVICE:-/dev/sr[0-9]*}; do
+                [[ -b $d ]] && has_audio_cd "$d" && { dev=$d; break; }
+            done
+            [[ -n $dev ]] || sleep 3
+        done
+        sleep 5   # let the drive and the desktop finish looking at the new disc
+        if ! DEVICE=$dev "$self" "${args[@]}"; then
+            echo
+            echo "== That disc didn't finish cleanly (see above); moving on =="
+            eject "$dev" 2>/dev/null || true
+        fi
+        # wait for the disc to be gone, in case it couldn't be ejected
+        while has_audio_cd "$dev"; do
+            echo "(Remove the disc from $dev to continue.)"
+            sleep 5
+        done
+    done
+fi
 
 # Pick the drive: $DEVICE if set, else the one drive that has an audio CD in it
 if [[ -z ${DEVICE:-} ]]; then
     found=()
     for dev in /dev/sr[0-9]*; do
-        [[ -b $dev ]] || continue
-        [[ $(udev_prop "$dev" ID_CDROM_MEDIA_TRACK_COUNT_AUDIO) -gt 0 ]] 2>/dev/null &&
-            found+=("$dev")
+        [[ -b $dev ]] && has_audio_cd "$dev" && found+=("$dev")
     done
     if (( ${#found[@]} == 0 )); then
         echo "No audio CD found in any drive. Insert one (wait for it to spin up)," >&2
