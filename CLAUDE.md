@@ -159,6 +159,11 @@ exit-code-52 errors) was removed.
 - Tested on cyanrip's disc images (full rip, two-read fallback, resume of one
   missing track, nothing-to-do). NOT yet tested on a real disc: AccurateRip
   path, release selection, rejects, setup
+- First real rip 2026-11-05: Kink Kronikles disc 1 (2-CD set), 14/14
+  AccurateRip exact on the first read, 0 errors, ~31 min on the SuperDrive.
+  Picked regular US release over the BMG club one. Fixed: multi-disc CUE
+  sheets/logs now get " CDn" so disc 2 can't overwrite disc 1. cyanrip swaps
+  `?` for a lookalike `？` in file names (phone-safe; `-T os_unicode` keeps it)
 - Plan: re-rip Let Love Rule on the cyanrip branch: should find 12 tracks
   present and rip only track 7 (on the new drive, after `rip-cd.sh setup`);
   then compare a cyanrip rip of a verified track with whipper's file

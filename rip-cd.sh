@@ -124,6 +124,8 @@ RUN_TAG=$(date '+%Y-%m-%d %H%M%S')
 # (track numbers padded to 2 digits; multi-disc albums get a "disc." prefix)
 dir_scheme() { echo "$1/{album_artist}/{album}"; }
 TRACK_SCHEME='{if #totaldiscs# > #1#|disc|.}{if #tracktotal# < #10#0}{track}. {artist} - {title}'
+# Multi-disc albums share a folder, so each disc gets its own CUE sheet/log name
+DISC_SUFFIX='{if #totaldiscs# > #1# CD|disc|}'
 
 # Options used for every cyanrip run on this disc. -X: skip data tracks.
 COMMON=(-d "$DEVICE" -s "$OFFSET" -o flac -X -F "$TRACK_SCHEME")
@@ -237,8 +239,8 @@ else
         local list; list=$(IFS=,; echo "${tracks[*]}")
         local rc=0
         cyanrip "${COMMON[@]}" -D "$(dir_scheme "$STAGE")" "${META[@]}" "${COVER[@]}" -l "$list" \
-            -L "{album_artist} - {album} (rip-cd $RUN_TAG pass $PASS)" \
-            -M "{album_artist} - {album}" "${extra[@]}" "${ARGS[@]}" 2>&1 |
+            -L "{album_artist} - {album}$DISC_SUFFIX (rip-cd $RUN_TAG pass $PASS)" \
+            -M "{album_artist} - {album}$DISC_SUFFIX" "${extra[@]}" "${ARGS[@]}" 2>&1 |
             tee "$WORK/pass$PASS.out" || rc=${PIPESTATUS[0]}
         # pick up the cover cyanrip downloaded, for flac2phone and later passes
         local d front
@@ -316,8 +318,10 @@ else
     for f in "$STAGE/$rel"/*.log; do
         [[ -e $f ]] && mv "$f" "$ALBUM_DIR/"
     done
-    if (( ${#MISSING[@]} == ALL_TRACKS )) && [[ ! -e $ALBUM_DIR/$(basename "$rel").cue ]]; then
-        for f in "$STAGE/$rel"/*.cue; do [[ -e $f ]] && mv "$f" "$ALBUM_DIR/"; done
+    if (( ${#MISSING[@]} == ALL_TRACKS )); then
+        for f in "$STAGE/$rel"/*.cue; do
+            [[ -e $f && ! -e $ALBUM_DIR/$(basename "$f") ]] && mv "$f" "$ALBUM_DIR/"
+        done
     fi
 
     # Anything still failing goes to the rejects folder, not the library
