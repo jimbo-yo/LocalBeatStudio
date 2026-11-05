@@ -17,6 +17,7 @@
 #
 # Override settings when running, e.g.
 #   DEVICE=/dev/sr1 rip-cd.sh       # which drive (default: the one with a CD)
+#   READS=8 rip-cd.sh               # try harder on a damaged disc (default 4 reads)
 #   COUNTRY=GB rip-cd.sh            # prefer a UK edition (default US; COUNTRY= for none)
 #   PHONE_DIR=~/Music/phone FLAC_DIR=~/Music/FLAC rip-cd.sh
 #   RIPCD_EVENTS=1 rip-cd.sh        # also print "@@event<TAB>..." lines (for the GUI)
@@ -27,11 +28,11 @@
 #   - Tracks are ripped into a staging folder; only tracks that check out are
 #     moved into FLAC_DIR:
 #       * a read that matches the AccurateRip database is proven correct
-#       * otherwise it's re-read up to AR_TRIES more times, hoping for a match;
-#         a re-read with the same checksum as an earlier read counts as two
-#         identical reads and is accepted then (more re-reads won't change it)
-#       * otherwise it needs two identical reads (cyanrip -Z 1), like whipper
-#   - Tracks that still fail are kept in ~/.cache/rip-cd/rejected for a listen.
+#       * otherwise it's re-read until two reads give the same checksum
+#         (or one matches AccurateRip), up to READS reads in all (default 4)
+#   - Tracks that still fail are kept in ~/.cache/rip-cd/rejected for a listen;
+#     a damaged spot rarely reads better with more tries, so it's quicker to
+#     clean the disc or use another drive and run the script again.
 #   - Each drive is locked while it's ripping, so two copies of this script
 #     (e.g. one per drive) never use the same drive.
 #
@@ -48,7 +49,7 @@ FLAC_DIR=${FLAC_DIR:-$HOME/Music/FLAC}
 PHONE_DIR=${PHONE_DIR:-$HOME/Music/phone}
 OPUS_BITRATE=${OPUS_BITRATE:-160}
 COUNTRY=${COUNTRY-US}
-AR_TRIES=${AR_TRIES:-3}
+READS=${READS:-4}       # most reads of one track before giving up on it
 
 CONFIG_DIR=$HOME/.config/rip-cd
 OFFSETS=$CONFIG_DIR/offsets          # lines of: <drive serial> <offset>
@@ -386,26 +387,17 @@ else
         echo "(This disc isn't in the AccurateRip database, so tracks are checked by reading twice.)"
     fi
 
-    # Retry: single reads, hoping for an AccurateRip match
-    if $AR_KNOWN; then
-        try=1
-        while (( ${#NEED[@]} && try <= AR_TRIES )); do
-            echo
-            echo "== Re-reading track(s) ${NEED[*]} (AccurateRip try $try of $AR_TRIES) =="
-            rip_pass "Re-reading (AccurateRip try $try of $AR_TRIES)" "${NEED[@]}" || true
-            accept "$WORK/result" verified
-            repeats
-            try=$((try + 1))
-        done
-    fi
-
-    # Last resort: two identical reads (up to cyanrip's -r limit of tries)
-    if (( ${#NEED[@]} )); then
+    # Re-read what's left: accept an AccurateRip match, or a read with the
+    # same checksum as an earlier one; give up after READS reads in all
+    read_no=2
+    while (( ${#NEED[@]} && read_no <= READS )); do
         echo
-        echo "== Track(s) ${NEED[*]}: reading until two reads match =="
-        rip_pass "Reading until two reads match" "${NEED[@]}" -- -Z 1 || true
-        accept "$WORK/result" verified unverified
-    fi
+        echo "== Re-reading track(s) ${NEED[*]} (read $read_no of $READS) =="
+        rip_pass "Re-reading (read $read_no of $READS)" "${NEED[@]}" || true
+        accept "$WORK/result" verified
+        repeats
+        read_no=$((read_no + 1))
+    done
 
     # Keep the logs; keep the CUE sheet only from a full-disc rip
     mkdir -p "$ALBUM_DIR"

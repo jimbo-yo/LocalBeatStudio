@@ -150,8 +150,11 @@ exit-code-52 errors) was removed.
 - **Branch `cyanrip`: rip-cd.sh rewritten for cyanrip** (master keeps the
   whipper version). Info pass picks the US release and the tracks missing from
   FLAC_DIR; rips only those into `~/.cache/rip-cd/staging`; moves a track into
-  the library only if AccurateRip-verified, else re-reads it up to AR_TRIES
-  (3) times hoping for a match, else accepts two identical reads (`-Z 1`);
+  the library if AccurateRip-verified or once two reads give the same
+  checksum; gives up after READS (4) reads in all (was: AR_TRIES re-reads
+  then `-Z 1`, up to ~15 reads; Zeppelin disc 1 spent ~1.5 h on 2 tracks that
+  read differently every time). cyanrip's `-r` can't be lowered for this: it
+  also sets per-frame retries;
   failures go to `~/.cache/rip-cd/rejected`; never overwrites. Offsets per
   drive (udev ID_SERIAL) in `~/.config/rip-cd/offsets`; SuperDrive seeded with
   6; `rip-cd.sh setup` runs `cyanrip -f` and saves it. Drive auto-picked as
