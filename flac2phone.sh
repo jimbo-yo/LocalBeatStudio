@@ -54,8 +54,21 @@ convert_one() {
     mkdir -p "$(dirname "$out")"
 
     if [[ $FORMAT == opus ]]; then
-        # opusenc reads FLAC directly and copies tags and embedded cover art
-        opusenc --quiet --bitrate "$BITRATE" "$in" "$tmp"
+        # opusenc reads FLAC directly and copies tags and embedded cover art.
+        # But it turns ReplayGain tags (cyanrip writes them) into a bogus
+        # header gain (+99.6 dB on a Kinks track: dangerously loud), so encode
+        # from a temporary copy without the loudness tags.
+        local clean; clean=$(mktemp --suffix=.flac)
+        cp "$in" "$clean" &&
+            metaflac --remove-tag=REPLAYGAIN_TRACK_GAIN --remove-tag=REPLAYGAIN_TRACK_PEAK \
+                --remove-tag=REPLAYGAIN_TRACK_RANGE --remove-tag=REPLAYGAIN_ALBUM_GAIN \
+                --remove-tag=REPLAYGAIN_ALBUM_PEAK --remove-tag=REPLAYGAIN_ALBUM_RANGE \
+                --remove-tag=REPLAYGAIN_REFERENCE_LOUDNESS --remove-tag=R128_TRACK_GAIN \
+                --remove-tag=R128_ALBUM_GAIN "$clean" &&
+            opusenc --quiet --bitrate "$BITRATE" "$clean" "$tmp"
+        local rc=$?
+        rm -f "$clean"
+        (( rc == 0 ))
     else
         local art=()
         # Carry over embedded cover art if the FLAC has any
