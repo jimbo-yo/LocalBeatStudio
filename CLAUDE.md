@@ -217,7 +217,13 @@ exit-code-52 errors) was removed.
   KDE Connect (sftp mount via `qdbus-qt6 org.kde.kdeconnect
   /modules/kdeconnect/devices/<id>/sftp mountAndWait/mountPoint/
   getDirectories`; folder `Music` in shared storage; free space via statvfs
-  on the sshfs mount: unverified). Fedora's FedoraWorkstation zone already
+  on the sshfs mount does NOT work: sshfs shows a fake
+  1000 GiB all-free, detected and treated as unknown; then estimates from the
+  last USB/adb numbers (`last_space` in config) or a "music limit" setting).
+  Verified 2026-11-06 with the Pixel 9 (read-only): mount at
+  `/run/user/1000/<id>/storage/emulated/0`, listing ~2 s; phone needed KDE
+  Connect's "filesystem access" permission. Phone had 3 empty album folders
+  (Meat Loaf x2, Groove) and was missing Mama Said track 03. Fedora's FedoraWorkstation zone already
   allows KDE Connect's ports
 - Albums matched by normalised folder name (case, curly/straight quotes,
   `Artist/Album` == `Artist - Album`), so old-style phone folders count as

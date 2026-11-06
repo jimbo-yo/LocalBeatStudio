@@ -27,6 +27,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QRectF, Qt, QThread, QTimer, Signal
@@ -46,6 +47,8 @@ DEFAULTS = {
     "kdeconnect_device": "",
     "kdeconnect_folder": "Music",      # inside the phone's shared storage
     "reserve_gb": 5.0,
+    "music_limit_gb": 0.0,             # used when the phone can't report free space
+    "last_space": None,                # last real numbers (from USB), for Wi-Fi estimates
 }
 AUDIO = {".opus", ".m4a", ".mp3", ".flac", ".ogg", ".aac", ".wav"}
 GB = 1e9
@@ -127,8 +130,10 @@ class FolderBackend:
             return self.fake_total, self.fake_total - other - used
         st = os.statvfs(self.root)
         total, free = st.f_blocks * st.f_frsize, st.f_bavail * st.f_frsize
-        if total == 0 or total > 2 ** 50:
-            raise SyncError("The phone didn't report its free space over this connection.")
+        # KDE Connect's SFTP doesn't report space, and sshfs then shows a
+        # made-up "1000 GiB, all free"
+        if total == 0 or total > 2 ** 50 or (free == total and total == 1000 * 2 ** 30):
+            return None
         return total, free
 
     def list_files(self):
@@ -336,10 +341,13 @@ class SettingsDialog(QDialog):
         self.adb_folder = QLineEdit(cfg["adb_folder"])
         self.kdc_folder = QLineEdit(cfg["kdeconnect_folder"])
         self.reserve = QDoubleSpinBox(suffix=" GB", decimals=1, maximum=500, value=cfg["reserve_gb"])
+        self.limit = QDoubleSpinBox(suffix=" GB", decimals=0, maximum=2000,
+                                    value=cfg.get("music_limit_gb", 0), specialValueText="none")
         form.addRow("Music library on this computer:", self.library)
         form.addRow("Music folder on the phone (USB):", self.adb_folder)
         form.addRow("Music folder on the phone (Wi-Fi):", self.kdc_folder)
         form.addRow("Always leave free on the phone:", self.reserve)
+        form.addRow("Music limit, if free space is unknown:", self.limit)
         form.addRow(QLabel("The phone folder is the one your music player (Musicolet) reads.\n"
                            "Phone Sync only ever adds and removes albums inside it."))
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -351,7 +359,8 @@ class SettingsDialog(QDialog):
         return {"library": self.library.text().strip(),
                 "adb_folder": self.adb_folder.text().strip() or DEFAULTS["adb_folder"],
                 "kdeconnect_folder": self.kdc_folder.text().strip().strip("/") or "Music",
-                "reserve_gb": self.reserve.value()}
+                "reserve_gb": self.reserve.value(),
+                "music_limit_gb": self.limit.value()}
 
 
 class Album:
@@ -384,7 +393,9 @@ class SyncWindow(QMainWindow):
         except (OSError, ValueError):
             pass
         self.backend = None
-        self.space = None          # (total, free) when connected
+        self.space = None          # (total, free); None when the phone won't say
+        self.is_connected = False
+        self.space_note = ""
         self.albums = {}
         self.worker = None
         self.building = False
@@ -504,6 +515,7 @@ class SyncWindow(QMainWindow):
             return
         self.backend = None
         self.space = None
+        self.is_connected = False
         self.status.setText("Connecting…")
         self.status.setStyleSheet("")
         backend = self.make_backend()
@@ -519,8 +531,30 @@ class SyncWindow(QMainWindow):
             self.cfg["kdeconnect_device"] = self.backend.device
             self.save_cfg()
         self.status.setText(f"Connected: {desc}")
+        self.is_connected = True
         self.load_library()
         self.merge_phone(files)
+        music = sum(a.phone_size() for a in self.albums.values() if a.phone_rel)
+        if self.space and isinstance(self.backend, AdbBackend):
+            self.cfg["last_space"] = {"total": self.space[0], "free": self.space[1],
+                                      "music": music, "when": time.strftime("%Y-%m-%d")}
+            self.save_cfg()
+        self.space_note = ""
+        if self.space is None:
+            last = self.cfg.get("last_space")
+            limit = self.cfg.get("music_limit_gb", 0) * GB
+            if last:
+                # other apps' use is assumed unchanged since that USB check
+                self.space = (last["total"], last["free"] + last["music"] - music)
+                self.space_note = (f"Free space estimated from the USB check on {last['when']} "
+                                   "(the phone doesn't report it over Wi-Fi).")
+            elif limit:
+                self.space = (limit, limit - music)
+                self.space_note = ("The phone doesn't report free space over Wi-Fi, so the bar "
+                                   f"shows your {human(limit)} music limit (Settings).")
+            else:
+                self.space_note = ("The phone doesn't report free space over Wi-Fi. Connect once "
+                                   "by USB, or set a music limit in Settings.")
         self.rebuild_tree()
 
     def connect_failed(self, msg):
@@ -630,7 +664,7 @@ class SyncWindow(QMainWindow):
             a = self.albums[it.data(0, Qt.UserRole)]
             want = it.checkState(0) == Qt.Checked
             dest = a.phone_rel or a.local_rel
-            if not self.space:
+            if not self.is_connected:
                 status, colour = ("on phone" if a.phone_rel else ""), None
             elif a.key in removing:
                 status, colour = "will be removed", RED
@@ -660,12 +694,15 @@ class SyncWindow(QMainWindow):
         add = sum(p[2] for p in pushes)
         rem = sum(r[1] for r in removes)
         reserve = self.cfg["reserve_gb"] * GB
+        self.bar.setVisible(bool(self.space))
         if not self.space:
             self.bar.set(0, [])
-            self.legend.setText("")
-            self.summary.setText(f"Selected changes: +{human(add)} / −{human(rem)} "
-                                 "(connect the phone to see its space)")
-            self.sync_btn.setEnabled(False)
+            self.legend.setText(self.space_note)
+            self.summary.setText(f"Selected changes: +{human(add)} / −{human(rem)}"
+                                 + ("" if self.is_connected else
+                                    " (connect the phone to see its space)"))
+            self.summary.setStyleSheet("")
+            self.sync_btn.setEnabled(self.is_connected and bool(pushes or removes))
             return
         total, free = self.space
         music = sum(a.phone_size() for a in self.albums.values() if a.phone_rel)
@@ -684,7 +721,8 @@ class SyncWindow(QMainWindow):
         self.legend.setText(
             f"{sw(GREY)} other apps {human(other)} &nbsp; {sw(BLUE)} music {human(stay)} &nbsp; "
             f"{sw(GREEN)} adding {human(add)} &nbsp; {sw(RED)} removing {human(rem)} &nbsp; "
-            f"{sw('#c0bfbc')} reserve {human(reserve)} &nbsp; of {human(total)}")
+            f"{sw('#c0bfbc')} reserve {human(reserve)} &nbsp; of {human(total)}"
+            + (f"<br><i>{self.space_note}</i>" if self.space_note else ""))
         if room < 0 and add > 0:
             self.summary.setText(f"Too much selected: {human(-room)} over "
                                  f"(keeping {human(reserve)} free for other apps).")
