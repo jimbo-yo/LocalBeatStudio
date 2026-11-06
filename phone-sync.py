@@ -253,8 +253,14 @@ class KdeConnectBackend(FolderBackend):
         self.device = dev[0]
         sftp = f"/modules/kdeconnect/devices/{dev[0]}/sftp"
         if self.qdbus(sftp, "org.kde.kdeconnect.device.sftp.mountAndWait") != "true":
-            raise SyncError("KDE Connect couldn't open the phone's storage. On the phone, allow "
-                            "KDE Connect to access files (Filesystem expose / storage permission).")
+            why = self.qdbus(sftp, "org.kde.kdeconnect.device.sftp.getMountError")
+            hint = ""
+            if "ermission" in why:
+                hint = (" On the phone: open KDE Connect, tap this computer, and allow "
+                        "Filesystem expose (or Settings > Apps > KDE Connect > Permissions > "
+                        "Files: allow management of all files).")
+            raise SyncError(f"KDE Connect couldn't open the phone's storage ({why or 'no reason given'})."
+                            + hint)
         mount = self.qdbus(sftp, "org.kde.kdeconnect.device.sftp.mountPoint")
         # the shared storage is a folder inside the mount (e.g. .../storage/emulated/0)
         dirs = self.qdbus(sftp, "org.kde.kdeconnect.device.sftp.getDirectories")
