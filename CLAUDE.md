@@ -240,6 +240,15 @@ exit-code-52 errors) was removed.
   (600 s). Can't keep the phone awake over KDE Connect; the fix on the phone
   is KDE Connect battery usage = Unrestricted. First real sync 2026-11-06
   (Meat Loaf x2, OK Computer, Mama Said track) worked
+- Re-rips: a local `Artist/Album` copy wins over an old `Artist - Album` one;
+  if the phone copy has audio files the local copy lacks (new file names), the
+  phone album is replaced (old folder removed, new pushed to the new name)
+- 2026-11-06 phone library review: old fre:ac rips (Appetite, UYI II 13/14,
+  Hole x2, Bat Out of Hell, BOOH II 6/11, Mama Said 4/16, Groove w/ broken
+  track 1) have no art/MBIDs: to be re-ripped. whipper rips (Let Love Rule,
+  OK Computer) lacked embedded art: embedded cover.jpg with metaflac, Opus
+  regenerated. After re-rips, delete the old `~/Music/Artist - Album` FLAC
+  folders and `~/Music/phone/Artist - Album` copies
 
 ## Next steps (planned 2026-11-05)
 

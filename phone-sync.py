@@ -383,6 +383,14 @@ class Album:
     def phone_size(self):
         return sum(self.phone_files.values())
 
+    def replaced(self):
+        """The phone copy has tracks this computer's copy doesn't (e.g. the album
+        was re-ripped with new file names): replace it rather than add to it."""
+        def audio(files):
+            return {n for n in files if os.path.splitext(n)[1].lower() in AUDIO}
+        return bool(self.phone_rel and self.local_rel
+                    and audio(self.phone_files) - audio(self.local_files))
+
     def missing_on_phone(self):
         return {n: s for n, s in self.local_files.items() if self.phone_files.get(n) != s}
 
@@ -690,7 +698,12 @@ class SyncWindow(QMainWindow):
         for _, it in self.album_items():
             a = self.albums[it.data(0, Qt.UserRole)]
             want = it.checkState(0) == Qt.Checked
-            if want and a.local_rel:
+            if want and a.local_rel and a.replaced():
+                # re-ripped: swap the old copy on the phone for the new one
+                removes.append((a, a.phone_size()))
+                for name, size in a.local_files.items():
+                    pushes.append((os.path.join(lib, a.local_rel, name), f"{a.local_rel}/{name}", size))
+            elif want and a.local_rel:
                 dest = a.phone_rel or a.local_rel
                 for name, size in a.missing_on_phone().items():
                     pushes.append((os.path.join(lib, a.local_rel, name), f"{dest}/{name}", size))
@@ -713,6 +726,8 @@ class SyncWindow(QMainWindow):
                 status, colour = ("on phone" if a.phone_rel else ""), None
             elif not want and not a.phone_rel:
                 status, colour = "not on phone", GREY
+            elif a.key in removing and want:
+                status, colour = "will be replaced (new rip)", BLUE
             elif a.key in removing:
                 status, colour = "will be removed", RED
             elif want and not a.phone_rel:
