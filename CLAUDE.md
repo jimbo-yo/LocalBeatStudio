@@ -186,7 +186,12 @@ exit-code-52 errors) was removed.
   450-frame CRCs matched = right audio, wrong alignment). Fixed: offset reset
   to 6; lookup falls back to ID_SERIAL_SHORT; setup asks before replacing a
   different saved offset; offset shown in output/GUI. **SuperDrive offset is
-  +6**: if all tracks fail AR on a good disc, suspect the offset first
+  +6**: if all tracks fail AR on a good disc, suspect the offset first.
+  Then re-ripped at +6: still no AR matches and the AR 450-frame check stopped
+  matching, so disc 2 is a **different pressing** shifted ~390 samples from
+  the one in AccurateRip (that's what fooled setup). Rip at +6 anyway (true
+  drive offset); tracks verify by two identical reads. The GUI now says so
+  after 3 first-pass misses with no hits
 - **rip-cd-gui.py** (PySide6, Fedora python3-pyside6): desktop window that
   runs `rip-cd.sh --loop` with RIPCD_EVENTS=1 in its own session (Stop kills
   cyanrip too). Shows cover, artist/album/disc N of M, per-track status

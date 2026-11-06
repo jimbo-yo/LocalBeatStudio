@@ -46,7 +46,7 @@ STATES = {
     "queued":   ("Waiting to read", None),
     "reading":  ("Reading…", BLUE),
     "ar-match": ("AccurateRip match ✓ (moves to library after this pass)", GREEN),
-    "ar-miss":  ("No AccurateRip match on this read", ORANGE),
+    "ar-miss":  ("No AccurateRip match: will re-read to compare", ORANGE),
     "readerr":  ("Read errors on this read", RED),
     "read":     ("Read, checking…", None),
     "retry":    ("Will re-read", ORANGE),
@@ -118,12 +118,20 @@ class RipWindow(QMainWindow):
         self.album.setFont(f)
         self.detail = QLabel(); self.detail.setWordWrap(True)
         self.stage = QLabel(); self.stage.setWordWrap(True)
+        self.pressing_note = QLabel(
+            "No track has matched AccurateRip so far. This is most likely a different "
+            "pressing from the ones in its database (common with box sets and reissues), "
+            "not a bad rip. Each track is read again instead, and kept when two reads match.")
+        self.pressing_note.setWordWrap(True)
+        self.pressing_note.setStyleSheet(f"color: {ORANGE}")
+        self.pressing_note.hide()
         f = self.stage.font(); f.setPointSizeF(f.pointSizeF() * 1.15); f.setBold(True)
         self.stage.setFont(f)
         for w in (self.artist, self.album, self.detail):
             w.setTextInteractionFlags(Qt.TextSelectableByMouse)
             info.addWidget(w)
         info.addStretch()
+        info.addWidget(self.pressing_note)
         info.addWidget(self.stage)
         top.addLayout(info, 1)
 
@@ -204,6 +212,7 @@ class RipWindow(QMainWindow):
         self.cover_path = ""
         self.ar_note = ""
         self.offset = ""
+        self.ar_hits = self.ar_misses = 0   # AccurateRip results on the first pass
         self.disc_start = None
         self.pass_label = ""
         self.pass_tracks = []
@@ -230,6 +239,7 @@ class RipWindow(QMainWindow):
             bits.append(self.device + (f" (offset {int(self.offset):+d})" if self.offset else ""))
         if self.ar_note:
             bits.append(self.ar_note)
+        self.pressing_note.setVisible(self.ar_misses >= 3 and self.ar_hits == 0)
         if self.disc_start:
             bits.append(f"elapsed {mmss(time.time() - self.disc_start)}")
         self.detail.setText(" · ".join(bits))
@@ -461,10 +471,16 @@ class RipWindow(QMainWindow):
         m = ACCURIP_RE.match(line)
         if m and self.cur in self.tracks:
             t = self.tracks[self.cur]
+            first_pass = self.pass_label == "Ripping"
             if m.group(1) == "accurately ripped":
+                if t.state != "ar-match" and first_pass:
+                    self.ar_hits += 1
                 t.state = "ar-match"
             elif t.state == "read":
                 t.state = "ar-miss"
+                if first_pass:
+                    self.ar_misses += 1
+                    self.refresh_header()
             self.show_track(t)
 
     # ---------- rip-cd.sh events ----------
