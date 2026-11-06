@@ -235,6 +235,11 @@ exit-code-52 errors) was removed.
 - Settings/remembered choices: `~/.config/rip-cd/phone-sync.json` (reserve
   GB default 5). Test: `PHONE_SYNC_TEST_DIR=dir PHONE_SYNC_TEST_SIZE=bytes`
 - Menu entry "Phone Sync" (desktop/phone-sync.desktop symlinked)
+- Sync waits out a sleeping phone: on a copy/remove error it shows "Wake it
+  up to continue", reconnects every 5 s and retries, up to WAIT_FOR_PHONE
+  (600 s). Can't keep the phone awake over KDE Connect; the fix on the phone
+  is KDE Connect battery usage = Unrestricted. First real sync 2026-11-06
+  (Meat Loaf x2, OK Computer, Mama Said track) worked
 
 ## Next steps (planned 2026-11-05)
 

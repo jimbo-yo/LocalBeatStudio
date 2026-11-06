@@ -52,6 +52,7 @@ DEFAULTS = {
 }
 AUDIO = {".opus", ".m4a", ".mp3", ".flac", ".ogg", ".aac", ".wav"}
 GB = 1e9
+WAIT_FOR_PHONE = 600       # seconds a sync waits for a sleeping phone before giving up
 
 GREEN, RED, BLUE, GREY = "#2e9e44", "#d03838", "#3584e4", "#9a9996"
 
@@ -147,6 +148,8 @@ class FolderBackend:
 
     def remove_album(self, rel):
         safe_rel(rel)
+        if not os.path.exists(os.path.join(self.root, rel)):
+            return                      # already gone (e.g. a retry after a dropout)
         shutil.rmtree(os.path.join(self.root, rel))
         # tidy an empty artist folder
         parent = os.path.dirname(os.path.join(self.root, rel))
@@ -848,19 +851,46 @@ class SyncWindow(QMainWindow):
         dlg.setMinimumDuration(0)
         dlg.setMinimumWidth(520)
 
+        class Stopped(Exception):
+            pass
+
         def job(progress):
-            for a, _ in removes:
-                if self.worker.cancelled:
-                    return "stopped"
-                progress(0, total, f"Removing {a.phone_rel}")
-                backend.remove_album(a.phone_rel)
             done = 0
-            for local, rel, size in pushes:
-                if self.worker.cancelled:
-                    return "stopped"
-                progress(done, total, f"Copying {rel}")
-                backend.push(local, rel)
-                done += size
+
+            def patiently(text, fn):
+                """Run fn; if the phone stops answering (asleep, Wi-Fi dropped),
+                keep reconnecting for up to WAIT_FOR_PHONE seconds, then retry."""
+                give_up = None
+                while True:
+                    if self.worker.cancelled:
+                        raise Stopped
+                    try:
+                        progress(done, total, text)
+                        return fn()
+                    except (OSError, SyncError) as e:
+                        give_up = give_up or time.time() + WAIT_FOR_PHONE
+                        if time.time() > give_up:
+                            raise SyncError(f"The phone stopped responding ({e}). Run Sync "
+                                            "again when it's awake: it continues where it left off.")
+                        progress(done, total, "The phone isn't responding (asleep?). "
+                                              "Wake it up to continue…")
+                        for _ in range(10):          # 5 s, but notice Stop quickly
+                            if self.worker.cancelled:
+                                raise Stopped
+                            time.sleep(0.5)
+                        try:
+                            backend.connect()
+                        except Exception:
+                            pass
+
+            try:
+                for a, _ in removes:
+                    patiently(f"Removing {a.phone_rel}", lambda a=a: backend.remove_album(a.phone_rel))
+                for local, rel, size in pushes:
+                    patiently(f"Copying {rel}", lambda l=local, r=rel: backend.push(l, r))
+                    done += size
+            except Stopped:
+                return "stopped"
             progress(total, total, "Checking the phone…")
             return "done"
 
