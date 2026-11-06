@@ -206,6 +206,26 @@ exit-code-52 errors) was removed.
   present and rip only track 7 (on the new drive, after `rip-cd.sh setup`);
   then compare a cyanrip rip of a verified track with whipper's file
 
+### phone-sync.py (2026-11-06; tested offscreen with a fake phone folder only)
+- PySide6 app "Phone Sync": albums in `~/Music/phone` with checkboxes (per
+  artist/album, search), capacity bar (other apps / music / adding /
+  removing / reserve), Sync = make the phone's music folder match the checks
+  (copies missing/changed files, removes unchecked albums after a confirm
+  list; removes first). Only touches the phone music folder
+- Connections, switchable in the window: USB `adb` (needs `sudo dnf install
+  android-tools` + USB debugging; default folder `/sdcard/Music`) and Wi-Fi
+  KDE Connect (sftp mount via `qdbus-qt6 org.kde.kdeconnect
+  /modules/kdeconnect/devices/<id>/sftp mountAndWait/mountPoint/
+  getDirectories`; folder `Music` in shared storage; free space via statvfs
+  on the sshfs mount: unverified). Fedora's FedoraWorkstation zone already
+  allows KDE Connect's ports
+- Albums matched by normalised folder name (case, curly/straight quotes,
+  `Artist/Album` == `Artist - Album`), so old-style phone folders count as
+  present and get missing files added in place
+- Settings/remembered choices: `~/.config/rip-cd/phone-sync.json` (reserve
+  GB default 5). Test: `PHONE_SYNC_TEST_DIR=dir PHONE_SYNC_TEST_SIZE=bytes`
+- Menu entry "Phone Sync" (desktop/phone-sync.desktop symlinked)
+
 ## Next steps (planned 2026-11-05)
 
 1. Test a second (shorter) CD with the new Artist/Album layout
