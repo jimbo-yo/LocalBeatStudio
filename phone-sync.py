@@ -517,7 +517,9 @@ class SyncWindow(QMainWindow):
     def load_library(self):
         lib = self.cfg["library"]
         self.albums = {}
-        for rel, files in albums_from_files(scan_local(lib) if os.path.isdir(lib) else {}).items():
+        found = albums_from_files(scan_local(lib) if os.path.isdir(lib) else {})
+        # a re-ripped album (Artist/Album) wins over an old copy (Artist - Album)
+        for rel, files in sorted(found.items(), key=lambda kv: "/" in kv[0]):
             a = self.albums.setdefault(norm_key(rel), Album(norm_key(rel)))
             a.local_rel, a.local_files = rel, files
         self.rebuild_tree()
