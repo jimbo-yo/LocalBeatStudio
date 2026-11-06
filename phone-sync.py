@@ -33,7 +33,7 @@ from pathlib import Path
 from PySide6.QtCore import QRectF, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
+    QFrame, QGridLayout, QApplication, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
     QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
     QMessageBox, QPlainTextEdit, QProgressDialog, QPushButton, QTreeWidget,
     QTreeWidgetItem, QVBoxLayout, QWidget,
@@ -299,9 +299,9 @@ class Worker(QThread):
 
 # ---------------------------------------------------------------- capacity bar
 class CapacityBar(QWidget):
-    def __init__(self):
+    def __init__(self, height=30):
         super().__init__()
-        self.setMinimumHeight(30)
+        self.setFixedHeight(height)
         self.total = 0
         self.segments = []          # (bytes, colour, pattern)
 
@@ -434,7 +434,26 @@ class SyncWindow(QMainWindow):
         top.addWidget(refresh)
         top.addWidget(settings)
 
-        self.bar = CapacityBar()
+        self.bar = CapacityBar(18)               # the whole phone
+        self.bar_label = QLabel("Whole phone:")
+        # three number tiles: music on the phone / free / room for more music
+        self.tiles = QWidget()
+        grid = QHBoxLayout(self.tiles)
+        grid.setContentsMargins(0, 0, 0, 0)
+        self.tile = {}
+        for key, title in (("music", "Music on the phone"), ("free", "Free on the phone"),
+                           ("room", "Room for more music")):
+            box = QFrame(frameShape=QFrame.StyledPanel)
+            lay = QVBoxLayout(box)
+            t = QLabel(title)
+            v = QLabel()
+            f = v.font(); f.setPointSizeF(f.pointSizeF() * 1.8); f.setBold(True); v.setFont(f)
+            sub = QLabel(); sub.setWordWrap(True)
+            sub.setStyleSheet(f"color: {GREY}")
+            for w in (t, v, sub):
+                lay.addWidget(w)
+            grid.addWidget(box, 1)
+            self.tile[key] = (v, sub)
         self.legend = QLabel()
         self.legend.setTextFormat(Qt.RichText)
         self.summary = QLabel()
@@ -442,6 +461,11 @@ class SyncWindow(QMainWindow):
 
         self.search = QLineEdit(placeholderText="Search artists and albums…", clearButtonEnabled=True)
         self.search.textChanged.connect(self.apply_filter)
+        self.show_what = QComboBox()
+        for text, key in (("All albums", "all"), ("On the phone", "on"),
+                          ("Not on the phone", "off"), ("Changes only", "changes")):
+            self.show_what.addItem(text, key)
+        self.show_what.currentIndexChanged.connect(self.apply_filter)
 
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Album", "Album size", "On the phone"])
@@ -469,10 +493,18 @@ class SyncWindow(QMainWindow):
 
         root = QVBoxLayout()
         root.addLayout(top)
-        root.addWidget(self.bar)
+        root.addWidget(self.tiles)
+        whole = QHBoxLayout()
+        whole.addWidget(self.bar_label)
+        whole.addWidget(self.bar, 1)
+        root.addLayout(whole)
         root.addWidget(self.legend)
         root.addWidget(self.summary)
-        root.addWidget(self.search)
+        find = QHBoxLayout()
+        find.addWidget(self.search, 1)
+        find.addWidget(QLabel("Show:"))
+        find.addWidget(self.show_what)
+        root.addLayout(find)
         root.addWidget(self.tree, 1)
         root.addLayout(buttons)
         w = QWidget(); w.setLayout(root)
@@ -625,17 +657,25 @@ class SyncWindow(QMainWindow):
 
     def apply_filter(self):
         text = self.search.text().strip().lower()
+        what = self.show_what.currentData()
         for i in range(self.tree.topLevelItemCount()):
             top = self.tree.topLevelItem(i)
             artist_hit = text in top.text(0).lower()
             any_shown = False
             for j in range(top.childCount()):
                 c = top.child(j)
+                a = self.albums[c.data(0, Qt.UserRole)]
                 show = not text or artist_hit or text in c.text(0).lower()
+                if what == "on":
+                    show &= bool(a.phone_rel)
+                elif what == "off":
+                    show &= not a.phone_rel
+                elif what == "changes":
+                    show &= c.text(2).startswith("will")
                 c.setHidden(not show)
                 any_shown |= show
             top.setHidden(not any_shown)
-            if text and any_shown:
+            if (text or what != "all") and any_shown:
                 top.setExpanded(True)
 
     # ---------- the plan: what Sync would do
@@ -692,13 +732,28 @@ class SyncWindow(QMainWindow):
             top.setText(1, human(total))
             top.setText(2, f"{on} of {len(kids)} albums" if len(kids) > 1 else "")
         self.building = False
+        if self.show_what.currentData() == "changes":
+            self.apply_filter()
         self.update_capacity(pushes, removes)
 
     def update_capacity(self, pushes, removes):
         add = sum(p[2] for p in pushes)
         rem = sum(r[1] for r in removes)
         reserve = self.cfg["reserve_gb"] * GB
-        self.bar.setVisible(bool(self.space))
+        on_phone = [a for a in self.albums.values() if a.phone_rel]
+        tracks = sum(1 for a in on_phone for n in a.phone_files
+                     if os.path.splitext(n)[1].lower() in AUDIO)
+        music_now = sum(a.phone_size() for a in on_phone)
+        self.tiles.setVisible(self.is_connected)
+        v, sub = self.tile["music"]
+        v.setText(human(music_now))
+        change = (f"; after sync {human(music_now + add - rem)}" if add or rem else "")
+        sub.setText(f"{len(on_phone)} albums · {tracks} tracks{change}")
+        for key in ("free", "room"):
+            self.tile[key][0].setText("?")
+            self.tile[key][1].setText(self.space_note or "")
+        for w in (self.bar, self.bar_label):
+            w.setVisible(bool(self.space))
         if not self.space:
             self.bar.set(0, [])
             self.legend.setText(self.space_note)
@@ -719,6 +774,17 @@ class SyncWindow(QMainWindow):
         res_seg = min(reserve, max(free_after, 0))
         segs.append((res_seg, "#c0bfbc", Qt.Dense5Pattern))
         self.bar.set(total, segs)
+        v, sub = self.tile["free"]
+        v.setText(human(free_after))
+        sub.setText(f"of {human(total)}" + (" after this sync" if add or rem else "")
+                    + (f". {self.space_note}" if self.space_note else ""))
+        v, sub = self.tile["room"]
+        v.setText(human(max(room, 0)))
+        v.setStyleSheet(f"color: {RED}" if room < 0 else "")
+        albums = [a.local_size() for a in self.albums.values() if a.local_rel]
+        avg = sum(albums) / len(albums) if albums else 0
+        more = f"about {int(room / avg):,} more albums like yours, " if avg and room > 0 else ""
+        sub.setText(f"{more}keeping {human(reserve)} free for other apps")
 
         def sw(c, pat=False):
             return (f"<span style='background:{c};color:{c}'>{'░' if pat else '█'}█</span>")
@@ -726,14 +792,13 @@ class SyncWindow(QMainWindow):
             f"{sw(GREY)} other apps {human(other)} &nbsp; {sw(BLUE)} music {human(stay)} &nbsp; "
             f"{sw(GREEN)} adding {human(add)} &nbsp; {sw(RED)} removing {human(rem)} &nbsp; "
             f"{sw('#c0bfbc')} reserve {human(reserve)} &nbsp; of {human(total)}"
-            + (f"<br><i>{self.space_note}</i>" if self.space_note else ""))
+            )
         if room < 0 and add > 0:
             self.summary.setText(f"Too much selected: {human(-room)} over "
                                  f"(keeping {human(reserve)} free for other apps).")
             self.summary.setStyleSheet(f"color: {RED}")
         else:
-            self.summary.setText(f"After sync: {human(free_after)} free on the phone, "
-                                 f"room for about {human(max(room, 0))} more music.")
+            self.summary.setText("")          # the tiles say it
             self.summary.setStyleSheet("")
         changes = bool(pushes or removes)
         self.sync_btn.setEnabled(changes and not (room < 0 and add > 0))
