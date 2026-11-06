@@ -255,7 +255,7 @@ exit-code-52 errors) was removed.
 1. Test a second (shorter) CD with the new Artist/Album layout
 2. ~~Desktop progress window and loop mode~~ done (rip-cd-gui.py, --loop);
    try the window on a real disc
-3. Musicolet replacement: **Spindle**, separate repo `~/development/Spindle`
+3. Musicolet replacement: **LocalBeat**, separate repo `~/development/LocalBeat`
    (started 2026-11-06; its CLAUDE.md records the folder/tag contract with
    this pipeline: change one, update the other). Musicolet garbles some UTF-8
    titles by guessing encodings (e.g. "Sittin’ on Top of the World"). The phone
