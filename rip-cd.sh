@@ -37,7 +37,7 @@
 #     (e.g. one per drive) never use the same drive.
 #
 # Needs: cyanrip (built from source, see CLAUDE.md), opus-tools, and
-# flac2phone.sh in the same folder as this script.
+# flac2phone.sh and mb-enrich.py in the same folder as this script.
 
 set -euo pipefail
 
@@ -56,6 +56,7 @@ OFFSETS=$CONFIG_DIR/offsets          # lines of: <drive serial> <offset>
 CACHE_DIR=$HOME/.cache/rip-cd
 REJECT_DIR=$CACHE_DIR/rejected
 FLAC2PHONE="$(dirname "$(realpath "$0")")/flac2phone.sh"
+MB_ENRICH="$(dirname "$(realpath "$0")")/mb-enrich.py"
 
 # Machine-readable progress for the GUI: "@@event<TAB>field<TAB>field..."
 ev() {
@@ -451,6 +452,14 @@ rm -rf "$STAGE"
 if [[ ! -e $ALBUM_DIR/cover.jpg && ! -e $ALBUM_DIR/cover.png ]]; then
     echo "(No cover art found for this album.)"
 fi
+
+# cyanrip doesn't write the album's original release date or genres; add them
+# from MusicBrainz before the Opus copies are made. Not fatal: a network
+# hiccup just leaves them for a later `mb-enrich.py` run.
+echo
+echo "== Adding original release date and genres from MusicBrainz =="
+ev stage tagging
+"$MB_ENRICH" "$ALBUM_DIR" || echo "(Couldn't add them now; run mb-enrich.py later.)"
 
 echo
 echo "== Making Opus copies in $PHONE_DIR =="

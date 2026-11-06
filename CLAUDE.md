@@ -250,6 +250,38 @@ exit-code-52 errors) was removed.
   regenerated. After re-rips, delete the old `~/Music/Artist - Album` FLAC
   folders and `~/Music/phone/Artist - Album` copies
 
+### mb-enrich.py (2026-11-06)
+- cyanrip writes no GENRE and no original release date (DATE is that CD's
+  release: Kink Kronikles says 1989, the album is 1972). LocalBeat's Genres and
+  Decades views need both
+- `mb-enrich.py [--force] [--dry-run] [PATH...]` (default `$FLAC_DIR`): for
+  FLACs with MUSICBRAINZ_ALBUMID, sets ORIGINALDATE/ORIGINALYEAR from the
+  release group's first-release-date and up to 3 GENRE values (release-group
+  genres by votes, Title Case; else the artist's). Skips files that already
+  have ORIGINALDATE; skips files without an MBID (old fre:ac rips). 1 req/s,
+  retries 503s. Tags only (audio MD5 and pictures unchanged; verified)
+- metaflac bumps the FLAC mtime, so flac2phone.sh re-makes those Opus copies
+  and Phone Sync replaces them on the phone
+- rip-cd.sh runs it on the album right before flac2phone (`ev stage tagging`;
+  failure is non-fatal)
+- Backfilled 2026-11-06: all 7 cyanrip/whipper albums (100 FLACs), 88 Opus
+  copies regenerated. Note the "Led Zeppelin" rip is the 1990 box set, so 1990
+  is its right original date
+
+### fetch-cover.py (2026-11-06)
+- For album folders with no front cover (old fre:ac rips): searches
+  MusicBrainz by ALBUMARTIST/ALBUM (drops bracketed junk like "(sdtk)"; tries
+  " - " as ": "; albums ranked above singles; artist "Soundtrack" searches
+  soundtracks), downloads the Cover Art Archive release-group front (1200 px),
+  saves cover.jpg and embeds it (type 3) in FLACs lacking one.
+  `--preview DIR` only downloads, to check first; `--release-group MBID`
+  overrides the search
+- Text search failed for Groove (sdtk); its CDTOC tag gave an exact MusicBrainz
+  TOC lookup (`/ws/2/discid/-?toc=1+N+leadout+offsets`, CDTOC values +150):
+  release group 352498a1-4906-395d-9c89-61fc4613e11b
+- Done 2026-11-06 for all 8 old albums in `~/Music/Artist - Album/` (covers
+  checked by eye), then `flac2phone.sh "~/Music/X" "~/Music/phone/X"` per album
+
 ## Next steps (planned 2026-11-05)
 
 1. Test a second (shorter) CD with the new Artist/Album layout

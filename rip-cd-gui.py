@@ -577,6 +577,8 @@ class RipWindow(QMainWindow):
             self.set_stage("Reading the disc and looking it up on MusicBrainz…")
         elif what == "ripping":
             self.set_stage("Ripping…")
+        elif what == "tagging":
+            self.set_stage("Adding genres and original release date…")
         elif what == "phone":
             self.set_stage("Making Opus copies for the phone…")
             self.track_bar.setValue(0)
