@@ -255,6 +255,9 @@ exit-code-52 errors) was removed.
 1. Test a second (shorter) CD with the new Artist/Album layout
 2. ~~Desktop progress window and loop mode~~ done (rip-cd-gui.py, --loop);
    try the window on a real disc
-3. Later: a replacement for Musicolet on the phone (user has ideas). The phone
+3. Musicolet replacement: **Spindle**, separate repo `~/development/Spindle`
+   (started 2026-11-06; its CLAUDE.md records the folder/tag contract with
+   this pipeline: change one, update the other). Musicolet garbles some UTF-8
+   titles by guessing encodings (e.g. "Sittin’ on Top of the World"). The phone
    library is already in use in Musicolet; older phone folders still mix
    `Artist - Album` and `Artist/Album` layouts and straight vs. curly `'`
