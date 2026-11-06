@@ -134,8 +134,21 @@ exec 9>"$(lock_file "$DEVICE")"
 flock -n 9 || die "Another rip is already using $DEVICE."
 DRIVE_ID=$(udev_prop "$DEVICE" ID_SERIAL)
 DRIVE_ID=${DRIVE_ID:-unknown-drive}
+# The serial number is what identifies the drive: the SuperDrive sometimes
+# reports its own name and sometimes its inner LG mechanism's (same serial)
+DRIVE_SN=$(udev_prop "$DEVICE" ID_SERIAL_SHORT)
 echo "Using drive: $DEVICE ($DRIVE_ID)"
 ev drive "$DEVICE" "$DRIVE_ID"
+
+saved_offset() {  # saved offset for this drive: by full ID, else by serial number
+    local o
+    o=$(awk -v id="$DRIVE_ID" '$1 == id {print $2}' "$OFFSETS" 2>/dev/null | tail -1)
+    if [[ -z $o && -n $DRIVE_SN ]]; then
+        o=$(awk -v sn="$DRIVE_SN" '$1 == sn || index($1, "_" sn "-") {print $2}' \
+            "$OFFSETS" 2>/dev/null | tail -1)
+    fi
+    echo "$o"
+}
 
 if [[ ${1:-} == setup ]]; then
     echo "== Finding the read offset (use a popular, commonly owned CD) =="
@@ -143,6 +156,17 @@ if [[ ${1:-} == setup ]]; then
     offset=$(grep -oP 'Drive offset of \K[+-]?[0-9]+(?= found)' <<<"$out" | tail -1)
     offset=${offset#+}
     [[ -n $offset ]] || die "Couldn't find the offset with this disc; try a different popular CD."
+    old=$(saved_offset)
+    if [[ -n $old && $old != "$offset" ]]; then
+        # a wrong offset makes every track fail AccurateRip, so don't replace
+        # a known-good one by accident (2026-11-06: setup found +396 on a
+        # SuperDrive whose real offset is +6)
+        echo
+        echo "WARNING: this drive already has offset $old saved, and this disc gave $offset."
+        echo "If $old verified fine before, keep it: offset finding can be fooled by some discs."
+        read -rp "Replace $old with $offset? [y/N] " yn
+        [[ $yn == [yY]* ]] || { echo "Kept $old."; exit 0; }
+    fi
     touch "$OFFSETS"
     grep -v "^$DRIVE_ID " "$OFFSETS" > "$OFFSETS.new" || true
     echo "$DRIVE_ID $offset" >> "$OFFSETS.new"
@@ -153,8 +177,10 @@ if [[ ${1:-} == setup ]]; then
     exit 0
 fi
 
-OFFSET=$(awk -v id="$DRIVE_ID" '$1 == id {print $2}' "$OFFSETS" 2>/dev/null | tail -1)
-[[ -n $OFFSET ]] || die "No read offset saved for this drive yet. Run: rip-cd.sh setup"
+OFFSET=$(saved_offset)
+[[ -n $OFFSET ]] || die "No read offset saved for this drive ($DRIVE_ID) yet. Run: rip-cd.sh setup"
+echo "Read offset: $OFFSET"
+ev offset "$OFFSET"
 
 [[ -x $FLAC2PHONE ]] || die "flac2phone.sh not found next to this script: $FLAC2PHONE"
 command -v opusenc >/dev/null || die "opusenc not found: sudo dnf install opus-tools"

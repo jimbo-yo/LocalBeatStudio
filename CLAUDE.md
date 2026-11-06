@@ -179,6 +179,14 @@ exit-code-52 errors) was removed.
     accuraterip, accepted, rejected, finished, error, discend, remove)
   - Replace rip-cd.sh with `mv` (new inode), never in-place edits, while a
     rip runs: bash re-reads the file by offset after main() returns
+- 2026-11-06: the SuperDrive's udev ID_SERIAL changed from
+  `HL-DT-ST_DVDRW_GX50N_KZ4F9KI4627-0:0` to `Apple_SuperDrive_KZ4F9KI4627-0:0`;
+  the offset lookup missed, `rip-cd.sh setup` was run on Zeppelin disc 2 and
+  cyanrip -f found a bogus **+396**, so every track failed AccurateRip (AR
+  450-frame CRCs matched = right audio, wrong alignment). Fixed: offset reset
+  to 6; lookup falls back to ID_SERIAL_SHORT; setup asks before replacing a
+  different saved offset; offset shown in output/GUI. **SuperDrive offset is
+  +6**: if all tracks fail AR on a good disc, suspect the offset first
 - **rip-cd-gui.py** (PySide6, Fedora python3-pyside6): desktop window that
   runs `rip-cd.sh --loop` with RIPCD_EVENTS=1 in its own session (Stop kills
   cyanrip too). Shows cover, artist/album/disc N of M, per-track status

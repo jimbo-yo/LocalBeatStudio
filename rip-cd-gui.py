@@ -203,6 +203,7 @@ class RipWindow(QMainWindow):
         self.device = getattr(self, "device", "")
         self.cover_path = ""
         self.ar_note = ""
+        self.offset = ""
         self.disc_start = None
         self.pass_label = ""
         self.pass_tracks = []
@@ -226,7 +227,7 @@ class RipWindow(QMainWindow):
         if self.release:
             bits.append(self.release)
         if self.device:
-            bits.append(self.device)
+            bits.append(self.device + (f" (offset {int(self.offset):+d})" if self.offset else ""))
         if self.ar_note:
             bits.append(self.ar_note)
         if self.disc_start:
@@ -490,6 +491,8 @@ class RipWindow(QMainWindow):
             self.set_stage(f"Disc found in {self.device}; letting it spin up…")
         elif kind == "drive":
             self.device = args[0]
+        elif kind == "offset":
+            self.offset = args[0]
         elif kind == "stage":
             self.stage_event(args[0])
         elif kind == "release":
