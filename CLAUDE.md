@@ -113,6 +113,10 @@ exit-code-52 errors) was removed.
 2. One disc: **track 1 failed AccurateRip** and the file stopped halfway
    through, a real read problem. Other tracks on that disc verified, so the
    drive offset is fine. Try cleaning and re-ripping that track.
+   Probably *Groove* (sdtk), fre:ac rip 2026-11-04 in
+   `~/Music/Soundtrack - Groove (sdtk)/`: track 1 FLAC is 8.7 KB/no audio
+   (its Opus is 0.007 s). The 2019 AAC rip `~/Music/Compilations/Groove/` has a
+   good track 1 (46 s). Plan: re-rip the CD with rip-cd.sh
 
 ## Background / history
 

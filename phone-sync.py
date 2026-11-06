@@ -444,7 +444,7 @@ class SyncWindow(QMainWindow):
         self.search.textChanged.connect(self.apply_filter)
 
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Album", "Size", "Status"])
+        self.tree.setHeaderLabels(["Album", "Album size", "On the phone"])
         self.tree.setUniformRowHeights(True)
         h = self.tree.header()
         h.setSectionResizeMode(0, QHeaderView.Stretch)
@@ -666,6 +666,8 @@ class SyncWindow(QMainWindow):
             dest = a.phone_rel or a.local_rel
             if not self.is_connected:
                 status, colour = ("on phone" if a.phone_rel else ""), None
+            elif not want and not a.phone_rel:
+                status, colour = "not on phone", GREY
             elif a.key in removing:
                 status, colour = "will be removed", RED
             elif want and not a.phone_rel:
@@ -677,6 +679,8 @@ class SyncWindow(QMainWindow):
             else:
                 status, colour = "", None
             it.setText(1, human(a.local_size() or a.phone_size()))
+            it.setToolTip(1, "Size of the album on this computer" if a.local_rel
+                          else "Size of the album on the phone")
             it.setText(2, status)
             it.setForeground(2, QColor(colour) if colour else self.palette().text().color())
         for i in range(self.tree.topLevelItemCount()):
