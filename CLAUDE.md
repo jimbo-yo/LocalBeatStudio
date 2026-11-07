@@ -334,6 +334,22 @@ exit-code-52 errors) was removed.
 - Done 2026-11-06 for all 8 old albums in `~/Music/Artist - Album/` (covers
   checked by eye), then `flac2phone.sh "~/Music/X" "~/Music/phone/X"` per album
 
+## Rust app "ripshelf" (branch `rust-app`, started 2026-11-07)
+
+- One app to replace all the scripts; Windows + Linux. Design and milestones:
+  `docs/rust-app-design.md`. Developed on a Windows laptop (third machine,
+  Rust 1.99 MSVC; no CMake yet, so no libFLAC/libopus crates yet)
+- Cargo workspace `app/`: `core` (no OS code), `platform` (drive/phone traits,
+  empty so far), `ripshelf` (CLI now, GUI later)
+- Done: AccurateRip v1/v2 checksums (unit-tested against the reference
+  algorithm), AR database fetch via `cdtoc`, TOC from CDTOC tag or
+  MusicBrainz disc ID, FLAC decode (claxon), Windows-safe naming
+- `ripshelf check DIR...`: decodes an album's FLACs and checks them against
+  AccurateRip. NOT yet run on real rips (none on the Windows laptop): run it on
+  a cyanrip album that matched AR (e.g. Kink Kronikles disc 1) to validate the
+  checksum code
+- Online test: `cargo test -p ripshelf-core -- --ignored`
+
 ## Next steps (planned 2026-11-05)
 
 1. Test a second (shorter) CD with the new Artist/Album layout

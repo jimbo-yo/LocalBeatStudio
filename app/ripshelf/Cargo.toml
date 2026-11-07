@@ -1,0 +1,12 @@
+[package]
+name = "ripshelf"
+description = "Rip CDs to verified FLAC, make phone copies, sync the phone"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+ripshelf-core.workspace = true
+ripshelf-platform.workspace = true
+anyhow.workspace = true
+clap.workspace = true
