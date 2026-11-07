@@ -240,6 +240,14 @@ exit-code-52 errors) was removed.
   the one in AccurateRip (that's what fooled setup). Rip at +6 anyway (true
   drive offset); tracks verify by two identical reads. The GUI now says so
   after 3 first-pass misses with no hits
+- 2026-11-06 new drive **hp DVDRAM GTA0N** (LG-made slim USB; udev
+  `hp_DVDRAM_GTA0N_423442525150313439373432-0:0`): **offset +102** (AccurateRip
+  drive list: all GTA0N variants +102, 56 hp submissions; confirmed: Bosstones
+  "Let's Face It" track 1 AR match conf 200). `rip-cd.sh setup` had found
+  **-1151** on Radiohead "I Might Be Wrong" (an odd pressing: tracks 1-7 matched
+  AR at -1151), so the Bosstones disc matched nothing. Lesson: offset finding
+  from one disc can be fooled; check the model in accuraterip.com/driveoffsets.htm.
+  The Radiohead rip (at -1151) should be re-ripped at +102
 - **rip-cd-gui.py** (PySide6, Fedora python3-pyside6): desktop window that
   runs `rip-cd.sh --loop` with RIPCD_EVENTS=1 in its own session (Stop kills
   cyanrip too). Shows cover, artist/album/disc N of M, per-track status
