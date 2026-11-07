@@ -29,14 +29,15 @@ Install (equivalents):
   python3-pyside6 android-tools qt6-qttools kde-connect` + cyanrip build deps
   `meson ffmpeg-devel` (negativo17, not ffmpeg-free-devel)
   `libcdio-paranoia-devel libmusicbrainz5-devel libcurl-devel`
-- Ubuntu: `sudo apt install flac opus-tools ffmpeg sg3-utils libnotify-bin
+- Ubuntu: `sudo apt install flac opus-tools ffmpeg libnotify-bin
   python3-pyside6.qtcore python3-pyside6.qtgui python3-pyside6.qtwidgets
   python3-pyside6.qtnetwork adb kdeconnect qdbus-qt6 sshfs` + cyanrip build
   deps `meson ninja-build pkg-config libcdio-paranoia-dev libmusicbrainz5-dev
   libcurl4-openssl-dev libavcodec-dev libavformat-dev libavutil-dev
   libswresample-dev libavfilter-dev`. Ubuntu packages cyanrip 0.9.3.1, but
   build master anyway: rip-cd.sh's output parsing was tested on 0.9.4-rc3
-- Both: the SuperDrive udev rule below; then build cyanrip
+- SuperDrive only (Fedora laptop; Ubuntu uses the HP drive): `sg3_utils`/
+  `sg3-utils` and the udev rule below. Then on both, build cyanrip
   (`meson setup build --prefix=$HOME/.local && ninja -C build install`)
 
 Ubuntu/GNOME differences:
