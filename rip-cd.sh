@@ -184,7 +184,7 @@ echo "Read offset: $OFFSET"
 ev offset "$OFFSET"
 
 [[ -x $FLAC2PHONE ]] || die "flac2phone.sh not found next to this script: $FLAC2PHONE"
-command -v opusenc >/dev/null || die "opusenc not found: sudo dnf install opus-tools"
+command -v opusenc >/dev/null || die "opusenc not found: sudo dnf install opus-tools (Ubuntu: sudo apt install opus-tools)"
 
 UNKNOWN=false
 ARGS=()

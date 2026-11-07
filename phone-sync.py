@@ -10,7 +10,7 @@ a confirmation listing them). Only the phone's music folder is ever touched.
 
 Connections (pick in the window, remembered in ~/.config/rip-cd/phone-sync.json):
   USB (adb)            phone plugged in with USB debugging on; needs
-                       `sudo dnf install android-tools`
+                       `sudo dnf install android-tools` (Ubuntu: `sudo apt install adb`)
   Wi-Fi (KDE Connect)  phone paired in KDE Connect, with its storage shared
 
 Albums already on the phone under an older folder name ("Artist - Album" vs
@@ -174,7 +174,7 @@ class AdbBackend:
             r = subprocess.run(["adb", *(["-s", self.serial] if self.serial else []), *args],
                                capture_output=True, text=True, timeout=timeout)
         except FileNotFoundError:
-            raise SyncError("adb isn't installed. Run: sudo dnf install android-tools")
+            raise SyncError("adb isn't installed. Run: sudo dnf install android-tools (Ubuntu: sudo apt install adb)")
         except subprocess.TimeoutExpired:
             raise SyncError("The phone stopped responding over USB.")
         if r.returncode:
@@ -243,7 +243,7 @@ class KdeConnectBackend(FolderBackend):
     def qdbus(path, method):
         exe = shutil.which("qdbus-qt6") or shutil.which("qdbus6") or shutil.which("qdbus")
         if not exe:
-            raise SyncError("qdbus not found (package qt6-qttools)")
+            raise SyncError("qdbus not found (Fedora: qt6-qttools; Ubuntu: qdbus-qt6)")
         r = subprocess.run([exe, "org.kde.kdeconnect", path, method],
                            capture_output=True, text=True, timeout=60)
         if r.returncode:

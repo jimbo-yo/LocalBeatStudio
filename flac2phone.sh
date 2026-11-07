@@ -14,7 +14,8 @@
 # again after ripping more CDs.
 #
 # Needs: opus-tools (for Opus) or ffmpeg (for AAC)
-#   sudo dnf install opus-tools ffmpeg-free
+#   Fedora: sudo dnf install opus-tools ffmpeg-free
+#   Ubuntu: sudo apt install opus-tools ffmpeg
 
 set -euo pipefail
 
@@ -32,9 +33,9 @@ FORMAT=${3:-opus}
 
 case $FORMAT in
     opus) BITRATE=${4:-160}; EXT=opus
-          command -v opusenc >/dev/null || { echo "opusenc not found: sudo dnf install opus-tools" >&2; exit 1; } ;;
+          command -v opusenc >/dev/null || { echo "opusenc not found: sudo dnf install opus-tools (Ubuntu: sudo apt install opus-tools)" >&2; exit 1; } ;;
     aac)  BITRATE=${4:-256}; EXT=m4a
-          command -v ffmpeg >/dev/null || { echo "ffmpeg not found: sudo dnf install ffmpeg-free" >&2; exit 1; } ;;
+          command -v ffmpeg >/dev/null || { echo "ffmpeg not found: sudo dnf install ffmpeg-free (Ubuntu: sudo apt install ffmpeg)" >&2; exit 1; } ;;
     *)    usage ;;
 esac
 

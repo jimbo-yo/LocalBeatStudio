@@ -4,7 +4,50 @@ Goal: a single CLI command that rips a CD to FLAC (accurate, verified), tags it
 with MusicBrainz metadata and embedded cover art, converts it to Opus for the
 phone, and ejects the disc.
 
-## System
+## Machines
+
+The repo is used on two computers. Check `/etc/os-release` to tell which one
+you're on; most notes below were written on the Fedora one.
+
+| | Fedora laptop (original) | Ubuntu laptop (added 2026-11-06) |
+|---|---|---|
+| OS / desktop | Fedora 44, KDE Plasma | Ubuntu 26.04 LTS, GNOME |
+| Drives | sr0 built-in GU90N (broken), sr1 Apple SuperDrive (+6) | sr0 built-in GU90N, sr1 HP DVDRAM GTA0N USB (`ID_SERIAL` `hp_DVDRAM_GTA0N_423442525150313439373432-0:0`, offset not yet found: run `rip-cd.sh setup`) |
+| Packages | `dnf` | `apt` |
+
+Same layout on both: repo in `~/development/CDRipPipeline`, symlinks in
+`~/Applications`, menu entries symlinked into `~/.local/share/applications`,
+offsets in `~/.config/rip-cd/offsets` (SuperDrive seeded with 6 under both
+serials), cyanrip built from `~/development/cyanrip` (648b1dd) into
+`~/.local/bin`. The FLAC/phone libraries are NOT synced between machines:
+copy `~/Music/FLAC` and `~/Music/phone` across, or rip-cd.sh re-rips albums
+that exist only on the other computer.
+
+Install (equivalents):
+
+- Fedora: `sudo dnf install flac opus-tools ffmpeg-free sg3_utils
+  python3-pyside6 android-tools qt6-qttools kde-connect` + cyanrip build deps
+  `meson ffmpeg-devel` (negativo17, not ffmpeg-free-devel)
+  `libcdio-paranoia-devel libmusicbrainz5-devel libcurl-devel`
+- Ubuntu: `sudo apt install flac opus-tools ffmpeg sg3-utils libnotify-bin
+  python3-pyside6.qtcore python3-pyside6.qtgui python3-pyside6.qtwidgets
+  python3-pyside6.qtnetwork adb kdeconnect qdbus-qt6 sshfs` + cyanrip build
+  deps `meson ninja-build pkg-config libcdio-paranoia-dev libmusicbrainz5-dev
+  libcurl4-openssl-dev libavcodec-dev libavformat-dev libavutil-dev
+  libswresample-dev libavfilter-dev`. Ubuntu packages cyanrip 0.9.3.1, but
+  build master anyway: rip-cd.sh's output parsing was tested on 0.9.4-rc3
+- Both: the SuperDrive udev rule below; then build cyanrip
+  (`meson setup build --prefix=$HOME/.local && ninja -C build install`)
+
+Ubuntu/GNOME differences:
+- `desktop/rip-cd-solid.desktop` (disc-inserted popup) is KDE-only; on GNOME
+  start rips from the "CD Ripper" menu entry
+- Phone Sync's Wi-Fi mode talks to KDE Connect's daemon (`org.kde.kdeconnect`
+  over D-Bus), not GSConnect's API, so install `kdeconnect` and don't also
+  enable GSConnect (same ports 1714-1764). The phone must be re-paired
+- `~/.local/bin` is added to PATH by `~/.profile` only if it existed at login
+
+## System (Fedora laptop; the SuperDrive notes apply on either)
 
 - Lenovo laptop, Fedora, KDE Plasma
 - Editor preference: **vi** (use vi, not nano, in instructions)
