@@ -12,7 +12,7 @@ you're on; most notes below were written on the Fedora one.
 | | Fedora laptop (original) | Ubuntu laptop (added 2026-11-06) |
 |---|---|---|
 | OS / desktop | Fedora 44, KDE Plasma | Ubuntu 26.04 LTS, GNOME |
-| Drives | sr0 built-in GU90N (broken), sr1 Apple SuperDrive (+6) | sr0 built-in GU90N, sr1 HP DVDRAM GTA0N USB (`ID_SERIAL` `hp_DVDRAM_GTA0N_423442525150313439373432-0:0`, offset not yet found: run `rip-cd.sh setup`) |
+| Drives | sr0 built-in GU90N (broken), sr1 Apple SuperDrive (+6) | sr0 built-in GU90N, sr1 HP DVDRAM GTA0N USB (`ID_SERIAL` `hp_DVDRAM_GTA0N_423442525150313439373432-0:0`, offset **+102**: `rip-cd.sh setup` 2026-11-06, 14/14 tracks; confirm with AccurateRip matches on a different disc) |
 | Packages | `dnf` | `apt` |
 
 Same layout on both: repo in `~/development/CDRipPipeline`, symlinks in
