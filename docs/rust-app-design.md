@@ -163,6 +163,20 @@ Check LocalBeat's CLAUDE.md (folder/tag contract) before settling this.
    identity, existing config files. Then retire the scripts.
 7. Optional: libcdio-paranoia engine, two drives at once in the GUI.
 
+## Later: Google Drive as a delivery route (idea, 2026-11-07)
+
+- ripshelf uploads each album (Opus, optionally FLAC as off-site backup) to a
+  Drive folder; on Windows it can simply write into the Google Drive desktop
+  app's synced folder, on Linux use the Drive API or rclone.
+- LocalBeat lists the Drive library and the user picks albums to download;
+  playback is **local files only** (no streaming).
+- Android: needs the INTERNET permission (auto-granted, general) plus Google
+  OAuth consent for Drive (limit to the `drive.file` scope). Using Drive
+  through the system file picker would avoid INTERNET, but Drive doesn't
+  offer folder picking there, so that isn't practical. Put Drive behind an
+  opt-in setting.
+- Free Drive is 15 GB (~200 Opus albums or ~50 FLAC).
+
 ## Open questions
 
 - App name.

@@ -6,3 +6,4 @@ pub mod album_check;
 pub mod flacfile;
 pub mod http;
 pub mod naming;
+pub mod secure_read;

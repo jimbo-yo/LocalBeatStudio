@@ -349,6 +349,22 @@ exit-code-52 errors) was removed.
   a cyanrip album that matched AR (e.g. Kink Kronikles disc 1) to validate the
   checksum code
 - Online test: `cargo test -p ripshelf-core -- --ignored`
+- cd-da-reader 1.0 review (2026-11-08): reads TOC + any sector range (READ
+  CD), set speed; Windows SPTI / Linux SG_IO / macOS. No eject, drive
+  identity, C2 pointers, subchannel (ISRC/pregaps), CD-TEXT. A failed sector
+  fails the whole range read (no silent zero-fill: good). Usable without a
+  fork; we add eject + identity (platform/src/windows.rs, linux.rs) and
+  chunking/offset/cache-flush (core/src/secure_read.rs, tested on a fake disc)
+- Drive test commands (NOT yet run on a real drive): `ripshelf drives`,
+  `toc`, `read-track N --offset 102 --reads 2 [--speed X] [--flush 1000]
+  [--wav f.wav]`, `eject`. read-track prints CRC + AR v1/v2 per read and
+  "VERIFIED" on an AR match or two equal CRCs. Things to learn on the HP
+  drive: does a re-read after --flush give a different CRC on a bad spot (cache
+  really defeated), real read speed, whether +102 gives AR matches
+- Offset sign: +N = the track's audio starts N frames later in what the drive
+  returns (same convention as EAC/AccurateRip/cyanrip -s)
+- linux.rs not yet compiled (ureq's TLS needs a C cross-compiler to check
+  from Windows); drive key has no serial on Linux until the udev crate is in
 
 ## Next steps (planned 2026-11-05)
 

@@ -1,3 +1,5 @@
+mod drive_cmds;
+
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -21,12 +23,53 @@ enum Command {
         #[arg(required = true)]
         dirs: Vec<PathBuf>,
     },
+    /// List CD drives with model, serial and whether an audio CD is in
+    Drives,
+    /// Show the disc's TOC, MusicBrainz and AccurateRip IDs
+    Toc {
+        /// Drive (E: on Windows, /dev/sr1 on Linux); default: the first with an audio CD
+        #[arg(short, long)]
+        drive: Option<String>,
+    },
+    /// Read one track and check it against AccurateRip (drive test)
+    ReadTrack {
+        /// Track number
+        track: usize,
+        /// Drive's read offset in samples (HP GTA0N: +102, SuperDrive: +6)
+        #[arg(short, long, allow_hyphen_values = true)]
+        offset: i32,
+        #[arg(short, long)]
+        drive: Option<String>,
+        /// How many times to read it (compares the reads)
+        #[arg(short, long, default_value_t = 1)]
+        reads: u32,
+        /// Read speed multiplier to request (default: leave as is)
+        #[arg(short, long)]
+        speed: Option<u8>,
+        /// Sectors to read elsewhere before each re-read, to empty the drive cache
+        #[arg(long, default_value_t = 1000)]
+        flush: u32,
+        /// Save the (last) read as a WAV file
+        #[arg(long)]
+        wav: Option<PathBuf>,
+    },
+    /// Eject the disc
+    Eject {
+        #[arg(short, long)]
+        drive: Option<String>,
+    },
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Command::Check { dirs } => check(&dirs),
+        Command::Drives => drive_cmds::drives(),
+        Command::Toc { drive } => drive_cmds::toc(drive.as_deref()),
+        Command::ReadTrack { track, offset, drive, reads, speed, flush, wav } => {
+            drive_cmds::read_track(drive_cmds::ReadTrackArgs { drive, track, offset, reads, speed, flush, wav })
+        }
+        Command::Eject { drive } => drive_cmds::eject(drive.as_deref()),
     };
     match result {
         Ok(true) => ExitCode::SUCCESS,
