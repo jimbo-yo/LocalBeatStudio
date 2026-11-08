@@ -103,6 +103,7 @@ pub fn identity(path: &str) -> Result<DriveIdentity> {
         product: field(d.ProductIdOffset),
         revision: field(d.ProductRevisionOffset),
         serial: field(d.SerialNumberOffset),
+        os_id: String::new(),
     })
 }
 

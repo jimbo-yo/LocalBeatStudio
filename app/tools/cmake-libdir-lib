@@ -1,0 +1,13 @@
+#!/bin/sh
+# cmake wrapper for Linux builds (see .cargo/config.toml). When configuring:
+#  - CMAKE_INSTALL_LIBDIR=lib: on Fedora/RHEL/openSUSE GNUInstallDirs installs
+#    to lib64/, but opus-static-sys hardcodes lib/libopus.a, so
+#    libopusenc-static-sys's build script panicked.
+#  - CMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF: opus-static-sys turns on CMake
+#    IPO, which with GCC means -fno-fat-lto-objects (GCC IR only); Rust's link
+#    step then can't resolve opus_* symbols. Appended last so it overrides.
+# --build/--install and other modes are passed through untouched.
+case " $* " in
+    *" --build "*|*" --install "*|*" -E "*|*" --version "*) exec cmake "$@" ;;
+    *) exec cmake "$@" -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF ;;
+esac

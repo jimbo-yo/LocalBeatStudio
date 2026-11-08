@@ -437,8 +437,24 @@ exit-code-52 errors) was removed.
   settings UI, phone sync tab
 - Offset sign: +N = the track's audio starts N frames later in what the drive
   returns (same convention as EAC/AccurateRip/cyanrip -s)
-- linux.rs not yet compiled (ureq's TLS needs a C cross-compiler to check
-  from Windows); drive key has no serial on Linux until the udev crate is in
+- **Linux build (Fedora, 2026-11-08)**: `sudo dnf install rust cargo rustfmt
+  clippy` (1.99.1, same as Windows) + cmake/gcc. Two Fedora-only build fixes,
+  Linux-only via `app/.cargo/config.toml` [env] target-suffixed names (Windows
+  never reads them): `CMAKE_x86_64_unknown_linux_gnu` -> `app/tools/
+  cmake-libdir-lib` wrapper adding `-DCMAKE_INSTALL_LIBDIR=lib` (opus-static-sys
+  hardcodes lib/libopus.a; Fedora's GNUInstallDirs uses lib64 -> build-script
+  panic) and `-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF` (GCC IPO =
+  -fno-fat-lto-objects -> undefined opus_*); `CFLAGS_x86_64_unknown_linux_gnu
+  = -ffat-lto-objects` (libopusenc's -flto -> undefined ope_*). After changing
+  the wrapper, delete target/*/build/opus-static-sys-* (CMake cache persists;
+  cargo doesn't track the script). Ubuntu (Debian: lib/) needs neither but
+  they're harmless. All 31 tests pass on Linux
+- Linux drive identity (platform/src/linux.rs): sysfs vendor/model/rev; key =
+  udev ID_SERIAL read from `/run/udev/data/b<maj>:<min>` (no libudev), serial
+  = ID_SERIAL_SHORT. `DriveIdentity.os_id` holds it and `key()` uses it as is
+  (rebuilding from parts fails: SATA ID_MODEL includes the vendor). So
+  rip-cd.sh's offsets file works unchanged: `ripshelf offset --drive /dev/sr1`
+  -> +102. /dev/srN readable without sudo (logind uaccess ACL)
 
 ## Next steps (planned 2026-11-05)
 

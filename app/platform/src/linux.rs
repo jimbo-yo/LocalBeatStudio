@@ -1,6 +1,6 @@
-//! Linux: drive identity from sysfs, eject via ioctl. NOT yet built or
-//! tested on Linux. The serial (udev ID_SERIAL, used by rip-cd.sh's offsets
-//! file) needs the udev crate; until then the key has no serial.
+//! Linux: drive identity from sysfs and udev's database, eject via ioctl.
+//! The offsets key is udev's ID_SERIAL, the same one rip-cd.sh's offsets file
+//! uses, so that file works unchanged.
 
 use std::ffi::CString;
 use std::io;
@@ -36,7 +36,30 @@ pub fn identity(path: &str) -> Result<DriveIdentity> {
             .map(|s| s.trim().to_string())
             .unwrap_or_default()
     };
-    Ok(DriveIdentity { vendor: read("vendor"), product: read("model"), revision: read("rev"), serial: String::new() })
+    let udev = udev_properties(name);
+    let prop = |k: &str| udev.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone()).unwrap_or_default();
+    Ok(DriveIdentity {
+        vendor: read("vendor"),
+        product: read("model"),
+        revision: read("rev"),
+        serial: prop("ID_SERIAL_SHORT"),
+        os_id: prop("ID_SERIAL"),
+    })
+}
+
+/// The `E:KEY=value` properties udev recorded for a block device, read from
+/// its database (`/run/udev/data/b<major>:<minor>`, what `udevadm info`
+/// prints), so no libudev is needed. Empty if udev has no record.
+fn udev_properties(name: &str) -> Vec<(String, String)> {
+    let Ok(dev) = std::fs::read_to_string(format!("/sys/block/{name}/dev")) else {
+        return Vec::new();
+    };
+    std::fs::read_to_string(format!("/run/udev/data/b{}", dev.trim()))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.strip_prefix("E:")?.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
 }
 
 pub fn eject(path: &str) -> Result<()> {

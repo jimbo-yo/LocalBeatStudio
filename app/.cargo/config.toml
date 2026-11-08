@@ -1,0 +1,9 @@
+[env]
+# Linux only: the cmake crate reads CMAKE_<target> before CMAKE, and Windows
+# targets never look at this name. See tools/cmake-libdir-lib for why.
+CMAKE_x86_64_unknown_linux_gnu = { value = "tools/cmake-libdir-lib", relative = true }
+# Linux only: libopus (CMake IPO) and libopusenc (cc, -flto) are built with
+# GCC link-time optimisation, which by default emits only GCC IR; Rust's link
+# step then can't resolve ope_*/opus_* symbols. Fat LTO objects also carry
+# machine code. (MSVC's equivalent problem is handled in core/build.rs.)
+CFLAGS_x86_64_unknown_linux_gnu = "-ffat-lto-objects"

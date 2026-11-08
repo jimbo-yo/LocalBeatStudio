@@ -16,6 +16,11 @@ pub struct DriveIdentity {
     pub revision: String,
     /// Empty if the OS doesn't report one.
     pub serial: String,
+    /// The OS's own id for the drive, used as the offsets key as is when set:
+    /// udev's ID_SERIAL on Linux (what rip-cd.sh stored). Rebuilding it from
+    /// the parts above isn't reliable: udev puts the vendor in the model for
+    /// SATA drives and uses USB descriptor strings for USB ones.
+    pub os_id: String,
 }
 
 impl DriveIdentity {
@@ -27,6 +32,9 @@ impl DriveIdentity {
     /// Key for the offsets file, shaped like udev's ID_SERIAL:
     /// `vendor_product_serial` with spaces as underscores.
     pub fn key(&self) -> String {
+        if !self.os_id.is_empty() {
+            return self.os_id.clone();
+        }
         [&self.vendor, &self.product, &self.serial]
             .iter()
             .filter(|s| !s.is_empty())
