@@ -69,6 +69,9 @@ enum Command {
     Rip {
         #[arg(short, long)]
         drive: Option<String>,
+        /// Keep going: after each disc, wait for the next one
+        #[arg(short, long = "loop")]
+        repeat: bool,
         /// Read offset for this rip (default: the one saved for the drive)
         #[arg(short, long, allow_hyphen_values = true)]
         offset: Option<i32>,
@@ -138,8 +141,8 @@ fn main() -> ExitCode {
             cdtoc.as_deref(),
             Some(country.as_str()).filter(|c| !c.is_empty()),
         ),
-        Command::Rip { drive, offset, release, country, unknown, reads, no_eject, flac_dir } => {
-            rip_cmd::rip(rip_cmd::RipArgs { drive, offset, release, country, unknown, reads, no_eject, flac_dir })
+        Command::Rip { drive, repeat, offset, release, country, unknown, reads, no_eject, flac_dir } => {
+            rip_cmd::rip(rip_cmd::RipArgs { drive, repeat, offset, release, country, unknown, reads, no_eject, flac_dir })
         }
         Command::Offset { drive, action } => {
             rip_cmd::offset(drive.as_deref(), action.map(|OffsetAction::Set { value }| value))
@@ -153,7 +156,10 @@ fn main() -> ExitCode {
                 None => s.phone_dir.clone(),
             });
             println!("{} -> {} (Opus {bitrate} kbps)", src.display(), dest.display());
-            rip_cmd::phone_copies(&src, &dest, bitrate)
+            match ripshelf_core::lock::lock(&s.cache_dir, "phone") {
+                Ok(_phone) => rip_cmd::phone_copies(&src, &dest, bitrate),
+                Err(e) => Err(e),
+            }
         }
         Command::Eject { drive } => drive_cmds::eject(drive.as_deref()),
     };

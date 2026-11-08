@@ -51,6 +51,17 @@ pub fn list_drives() -> Result<Vec<DriveInfo>> {
         .collect())
 }
 
+/// CD drive paths, without opening them (so a drive another process is
+/// ripping from isn't disturbed).
+pub fn drive_paths() -> Vec<String> {
+    sys::drive_paths()
+}
+
+/// Whether the drive has a disc with audio tracks in it.
+pub fn has_audio_cd(path: &str) -> bool {
+    Drive::open(path).and_then(|d| d.read_toc()).is_ok()
+}
+
 /// Accepts `E:`, `E`, `\\.\E:` (Windows) or `/dev/sr1`, `sr1` (Linux).
 pub fn normalize_path(s: &str) -> String {
     sys::normalize_path(s)

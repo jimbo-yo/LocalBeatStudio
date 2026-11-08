@@ -6,7 +6,9 @@ use std::ptr;
 
 use anyhow::{Result, bail};
 use windows_sys::Win32::Foundation::{GENERIC_READ, INVALID_HANDLE_VALUE};
-use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING};
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, GetDriveTypeW, OPEN_EXISTING,
+};
 use windows_sys::Win32::System::IO::DeviceIoControl;
 use windows_sys::Win32::System::Ioctl::{
     IOCTL_STORAGE_EJECT_MEDIA, IOCTL_STORAGE_QUERY_PROPERTY, PropertyStandardQuery, STORAGE_DEVICE_DESCRIPTOR,
@@ -25,6 +27,18 @@ pub fn normalize_path(s: &str) -> String {
         return format!(r"\\.\{}:", letter.to_ascii_uppercase());
     }
     s.to_string()
+}
+
+pub fn drive_paths() -> Vec<String> {
+    const DRIVE_CDROM: u32 = 5;
+    (b'A'..=b'Z')
+        .map(|l| l as char)
+        .filter(|l| {
+            let root: Vec<u16> = format!("{l}:\\").encode_utf16().chain(std::iter::once(0)).collect();
+            unsafe { GetDriveTypeW(root.as_ptr()) == DRIVE_CDROM }
+        })
+        .map(|l| format!(r"\\.\{l}:"))
+        .collect()
 }
 
 fn open(path: &str, access: u32) -> io::Result<OwnedHandle> {

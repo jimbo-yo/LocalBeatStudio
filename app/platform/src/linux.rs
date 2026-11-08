@@ -16,6 +16,19 @@ pub fn normalize_path(s: &str) -> String {
     if s.starts_with('/') { s.to_string() } else { format!("/dev/{s}") }
 }
 
+pub fn drive_paths() -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir("/dev")
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("sr") && n[2..].chars().all(|c| c.is_ascii_digit()) && n.len() > 2)
+        .map(|n| format!("/dev/{n}"))
+        .collect();
+    v.sort();
+    v
+}
+
 pub fn identity(path: &str) -> Result<DriveIdentity> {
     let name = path.rsplit('/').next().unwrap_or(path);
     let read = |f: &str| {

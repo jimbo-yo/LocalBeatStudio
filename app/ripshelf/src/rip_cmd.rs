@@ -7,11 +7,13 @@ use anyhow::{Result, anyhow, bail};
 use ripshelf_core::accuraterip::{self, Verdict};
 use ripshelf_core::config::{self, Settings};
 use ripshelf_core::rip::{self, Acceptance, Event, Metadata, RipContext};
-use ripshelf_core::{cover, musicbrainz};
-use ripshelf_platform::drive::{Drive, DriveIdentity};
+use ripshelf_core::{cover, lock, musicbrainz};
+use ripshelf_platform::drive::{self, Drive, DriveIdentity};
 
 pub struct RipArgs {
     pub drive: Option<String>,
+    /// Keep going: wait for the next disc after each one.
+    pub repeat: bool,
     pub offset: Option<i32>,
     pub release: Option<String>,
     pub country: Option<String>,
@@ -21,12 +23,6 @@ pub struct RipArgs {
     pub flac_dir: Option<PathBuf>,
 }
 
-fn open(path: Option<&str>) -> Result<Drive> {
-    match path {
-        Some(p) => Drive::open(p),
-        None => Drive::open_first_with_audio(),
-    }
-}
 
 fn saved_offset(s: &Settings, id: Option<&DriveIdentity>) -> Option<i32> {
     let id = id?;
@@ -35,17 +31,102 @@ fn saved_offset(s: &Settings, id: Option<&DriveIdentity>) -> Option<i32> {
 
 pub fn rip(a: RipArgs) -> Result<bool> {
     let mut s = Settings::load();
-    if let Some(d) = a.flac_dir {
-        s.flac_dir = d;
+    if let Some(d) = &a.flac_dir {
+        s.flac_dir = d.clone();
     }
-    if let Some(c) = a.country {
-        s.country = Some(c).filter(|c| !c.is_empty());
+    if let Some(c) = &a.country {
+        s.country = Some(c.clone()).filter(|c| !c.is_empty());
     }
     if let Some(r) = a.reads {
         s.reads = r.max(1);
     }
+    if a.repeat {
+        if a.release.is_some() {
+            bail!("--release picks one disc's release; it can't be used with --loop");
+        }
+        return rip_loop(&a, &s);
+    }
 
-    let mut drive = open(a.drive.as_deref())?;
+    let path = match &a.drive {
+        Some(p) => drive::normalize_path(p),
+        None => free_drive_with_audio(&s)?
+            .ok_or_else(|| anyhow!("no drive that isn't busy has an audio CD in it"))?,
+    };
+    let _lock = lock::try_lock(&s.cache_dir, &lock::drive_lock_name(&path))?
+        .ok_or_else(|| anyhow!("{path} is busy: another ripshelf is ripping from it"))?;
+    rip_disc(&path, &a, &s)
+}
+
+/// The first drive with an audio CD that no other ripshelf is using.
+fn free_drive_with_audio(s: &Settings) -> Result<Option<String>> {
+    for path in drive::drive_paths() {
+        let free = lock::try_lock(&s.cache_dir, &lock::drive_lock_name(&path))?.is_some();
+        if free && drive::has_audio_cd(&path) {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
+}
+
+/// MusicBrainz disc ID of the disc in the drive, if any.
+fn disc_in(path: &str) -> Option<String> {
+    Drive::open(path).and_then(|d| d.read_toc()).ok().map(|t| t.musicbrainz_id().to_string())
+}
+
+/// `rip --loop`: rip each disc put into a watched drive (all drives, or
+/// --drive), eject, wait for the next. A disc that fails is ejected and the
+/// loop carries on. One drive at a time; for two drives in parallel run a
+/// second `ripshelf rip --loop --drive X` (the drive locks keep them apart).
+fn rip_loop(a: &RipArgs, s: &Settings) -> Result<bool> {
+    use std::collections::HashMap;
+    use std::time::Duration;
+    let watch: Vec<String> = a.drive.iter().map(|d| drive::normalize_path(d)).collect();
+    // Discs finished but not yet removed (eject failed, or --no-eject).
+    let mut finished: HashMap<String, String> = HashMap::new();
+    let mut waiting_shown = false;
+    let mut discs = 0;
+    loop {
+        if !waiting_shown {
+            println!("
+Waiting for a disc{} (Ctrl+C to stop)...", if discs > 0 { format!(" ({discs} done)") } else { String::new() });
+            waiting_shown = true;
+        }
+        let paths = if watch.is_empty() { drive::drive_paths() } else { watch.clone() };
+        for path in paths {
+            // Busy in another ripshelf: don't even probe it.
+            let Some(lock) = lock::try_lock(&s.cache_dir, &lock::drive_lock_name(&path))? else { continue };
+            match disc_in(&path) {
+                None => {
+                    finished.remove(&path);
+                }
+                Some(id) if finished.get(&path) == Some(&id) => {}
+                Some(id) => {
+                    // Let Windows/the desktop finish looking at the new disc.
+                    std::thread::sleep(Duration::from_secs(3));
+                    println!("
+======== New disc in {path} ========");
+                    if let Err(e) = rip_disc(&path, a, s) {
+                        println!("error: {e:#}");
+                        println!("That disc didn't finish; ejecting it and carrying on.");
+                        if !a.no_eject {
+                            let _ = Drive::open(&path).and_then(|d| d.eject());
+                        }
+                    }
+                    finished.insert(path.clone(), id);
+                    discs += 1;
+                    waiting_shown = false;
+                }
+            }
+            drop(lock);
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+}
+
+/// Rips the disc in `path` (the caller holds the drive's lock).
+fn rip_disc(path: &str, a: &RipArgs, s: &Settings) -> Result<bool> {
+    let s = s.clone();
+    let mut drive = Drive::open(path)?;
     let id = drive.identity().ok();
     let model = id.as_ref().map(|i| i.model()).unwrap_or_else(|| "unknown drive".into());
     let offset = match a.offset.or_else(|| saved_offset(&s, id.as_ref())) {
@@ -196,6 +277,7 @@ pub fn rip(a: RipArgs) -> Result<bool> {
         if let Ok(rel) = plan.album_dir.strip_prefix(&s.flac_dir) {
             println!("
 Phone copies:");
+            let _phone = lock::lock(&s.cache_dir, "phone")?;
             phone_copies(&plan.album_dir, &s.phone_dir.join(rel), s.opus_kbps)?;
         }
     }

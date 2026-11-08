@@ -8,6 +8,7 @@ pub mod cover;
 pub mod flac_encode;
 pub mod flacfile;
 pub mod http;
+pub mod lock;
 pub mod musicbrainz;
 pub mod naming;
 pub mod phone_copy;

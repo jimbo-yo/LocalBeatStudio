@@ -360,13 +360,14 @@ exit-code-52 errors) was removed.
   minus `-0:0`, so one offsets entry can serve both OSes. Track 1 (16:20) of
   an 8-track disc read twice at +102: both AccurateRip v2 match (conf 15),
   same CRC, ~5.3x (debug build), ~3 min each. Confirms AR checksum code,
-  offset +102 and its sign. Cache flush still untested (needs a bad disc)
+  offset +102 and its sign
 - Drive test commands: `ripshelf drives`,
   `toc`, `read-track N --offset 102 --reads 2 [--speed X] [--flush 1000]
   [--wav f.wav]`, `eject`. read-track prints CRC + AR v1/v2 per read and
   "VERIFIED" on an AR match or two equal CRCs. Things to learn on the HP
   drive: does a re-read after --flush give a different CRC on a bad spot (cache
-  really defeated), real read speed, whether +102 gives AR matches
+  really defeated: yes, see rip --loop below), real read speed, whether +102
+  gives AR matches (yes)
 - FLAC encoding (core/src/flac_encode.rs): reference libFLAC via
   `libflac-sys` (built by CMake: `winget install Kitware.CMake`; a new shell
   may need `C:\Program Files\CMake\bin` on PATH), level 5, **verify mode**,
@@ -396,7 +397,19 @@ exit-code-52 errors) was removed.
   `<Album>[ CDn].log`; ejects unless --no-eject. Multi-disc: `2.07. Artist -
   Title` in one folder (as rip-cd.sh). First full rip 2026-11-08: Gershwin
   8/8 AR on first read, 9 min (release build, ~7.7x); `check` re-verified
-  the FLACs. Not yet: CUE sheet, drive lock, disc-insert loop
+  the FLACs. Not yet: CUE sheet
+- `rip --loop` (rip_cmd.rs rip_loop): polls drives every 2 s (all, or
+  --drive), rips each new disc, ejects, carries on after a failed disc
+  (ejects it); remembers a finished disc per drive until it's removed. One
+  drive at a time per process; parallel = a second `rip --loop --drive X`.
+  Locks (core/src/lock.rs, std File::try_lock): `<cache>/lock-D` per drive
+  (held while probing and ripping; busy drives aren't even opened) and
+  `lock-phone` around phone conversion. --release refused with --loop.
+  Drive paths listed without opening (platform drive_paths: GetDriveTypeW /
+  /dev/sr*). Tested 2026-11-08: Gershwin (already present: skipped,
+  ejected), then OK Computer 12/12 AR conf 200. **Cache flush confirmed**:
+  track 2 read 1 and 2 differed (no AR match), read 3 matched AR, so re-reads
+  really hit the disc
 - Phone copies (core/src/phone_copy.rs; `ripshelf phone [SRC] [DEST]
   [--bitrate 160]`, and `rip` runs it on the album after ejecting):
   flac2phone.sh's rules (only new/changed, .part + rename, all cores, copy
