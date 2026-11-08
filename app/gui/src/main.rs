@@ -23,6 +23,13 @@ use ripshelf_platform::phone_notify;
 const AUTO_CHOOSE_SECS: u64 = 30;
 
 fn main() -> eframe::Result {
+    // Linux: draw with OpenGL unless the user picked a backend. On the Fedora
+    // laptop's Intel Haswell GPU, Mesa's Vulkan driver is incomplete and wgpu's
+    // default (Vulkan) garbled all text. Set before any threads start.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WGPU_BACKEND").is_none() {
+        unsafe { std::env::set_var("WGPU_BACKEND", "gl") };
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([980.0, 680.0]).with_title("ripshelf"),
         ..Default::default()

@@ -476,6 +476,10 @@ exit-code-52 errors) was removed.
   `config::Prefs`, keeps unknown keys); results in the log. CLI: `rip --loop
   --notify-phone`; `ripshelf notify [MSG]` sends a test (worked to the Pixel 9).
   KDE Connect goes over the LAN (not Bluetooth), home Wi-Fi only by design
+- GUI on Linux: wgpu's default Vulkan backend **garbled all text** on the
+  Fedora laptop (Intel Haswell; Mesa: "Haswell Vulkan support is incomplete";
+  same reason COSMIC looked broken there). gui main() sets WGPU_BACKEND=gl on
+  Linux unless already set: renders correctly. Release build takes ~10 min
 
 ## Next steps (planned 2026-11-05)
 
