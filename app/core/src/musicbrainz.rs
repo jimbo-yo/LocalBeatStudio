@@ -29,6 +29,8 @@ pub struct Release {
     /// "album", "single", ... plus secondary types ("compilation").
     pub release_types: Vec<String>,
     pub original_date: String,
+    /// Audio CDs in the release (a bonus DVD isn't counted, so a CD + DVD
+    /// edition is filed like a single CD). Used for DISCTOTAL and disc prefixes.
     pub media_count: usize,
     pub has_front_cover: bool,
     /// The medium (disc of the release) this CD is.
@@ -39,6 +41,7 @@ pub struct Release {
 
 #[derive(Debug, Clone, Default)]
 pub struct Medium {
+    /// Which audio CD of the release this is (1-based, other media skipped).
     pub position: usize,
     pub title: String,
     pub format: String,
@@ -158,6 +161,8 @@ fn parse_release(r: &Value, disc_id: &str, track_count: usize) -> Option<Release
     let m = exact.or_else(|| {
         media.iter().find(|m| m["track-count"].as_u64() == Some(track_count as u64) && m["tracks"].is_array())
     })?;
+    let cds: Vec<&Value> = media.iter().filter(|x| is_audio_cd(x["format"].as_str().unwrap_or(""))).collect();
+    let cd_position = cds.iter().position(|x| std::ptr::eq(*x, m)).map(|i| i + 1);
 
     let tracks: Vec<TrackMeta> = m["tracks"]
         .as_array()?
@@ -207,11 +212,27 @@ fn parse_release(r: &Value, disc_id: &str, track_count: usize) -> Option<Release
         release_group_id: s(&rg["id"]),
         release_types,
         original_date: s(&rg["first-release-date"]),
-        media_count: media.len(),
+        media_count: cds.len().max(1),
         has_front_cover: r["cover-art-archive"]["front"].as_bool().unwrap_or(false),
-        medium: Medium { position: m["position"].as_u64().unwrap_or(1) as usize, title: s(&m["title"]), format: s(&m["format"]), tracks },
+        medium: Medium {
+            position: cd_position.unwrap_or_else(|| m["position"].as_u64().unwrap_or(1) as usize),
+            title: s(&m["title"]),
+            format: s(&m["format"]),
+            tracks,
+        },
         fuzzy,
     })
+}
+
+/// Whether a MusicBrainz medium format is an audio CD (CD, Enhanced CD,
+/// Copy Control CD, HDCD, SHM-CD, hybrid SACD, DualDisc...), not a DVD,
+/// Blu-ray, video CD or data disc. An unknown format counts as a CD.
+fn is_audio_cd(format: &str) -> bool {
+    let f = format.to_ascii_uppercase();
+    if f.is_empty() || f == "DUALDISC" {
+        return true;
+    }
+    f.contains("CD") && !f.contains("VCD") && !f.contains("CD-ROM") && !f.contains("DVD")
 }
 
 /// Sorts releases best first: exact disc ID match, preferred country (e.g.
@@ -366,7 +387,17 @@ mod tests {
     }
 
     #[test]
-    fn toc_query_format() {
+    fn audio_cd_formats() {
+        for f in ["CD", "Enhanced CD", "Copy Control CD", "HDCD", "SHM-CD", "Hybrid SACD", "DualDisc", ""] {
+            assert!(is_audio_cd(f), "{f}");
+        }
+        for f in ["DVD-Video", "DVD-Audio", "VCD", "SVCD", "CD-ROM", "Blu-ray", "Digital Media", "Vinyl"] {
+            assert!(!is_audio_cd(f), "{f}");
+        }
+    }
+
+    #[test]
+        fn toc_query_format() {
         let toc = Toc::from_cdtoc(GERSHWIN_TOC).unwrap();
         // Same offsets as MusicBrainz lists for disc rQRpBjAQ...
         assert_eq!(toc_query(&toc), "1 8 310263 150 73678 148985 196470 224868 237588 250550 274298");
