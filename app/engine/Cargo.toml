@@ -1,0 +1,13 @@
+[package]
+name = "ripshelf-engine"
+description = "The rip session: drive, identification, rip, eject, phone copies, loop; shared by the CLI and the GUI"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+ripshelf-core.workspace = true
+ripshelf-platform.workspace = true
+anyhow.workspace = true
+cdtoc.workspace = true
+chrono.workspace = true

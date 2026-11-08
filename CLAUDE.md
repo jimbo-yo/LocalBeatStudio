@@ -420,6 +420,21 @@ exit-code-52 errors) was removed.
   symbols get lost when bundled into the rlib on MSVC; core/build.rs links
   opus.lib directly. Gershwin album: 8 files in 51 s, ~161 kbps. AAC mode
   not ported (Opus only)
+- Crates now: `core`, `platform`, `engine` (the rip session: rip_once,
+  rip_loop, rip_disc; owned `Event`s; `Frontend` trait answers
+  choose_release + cancelled; Stop works by a SectorSource wrapper that fails
+  reads once cancelled), `ripshelf` (CLI = text Frontend: auto-picks the best
+  exact release, refuses fuzzy/unknown), `gui` (`ripshelf-gui.exe`, eframe/
+  egui **0.37**: App has `fn ui(&mut self, ui, frame)` and panels are
+  `egui::Panel::top/bottom/left(..).show(ui, ..)`, `show_collapsible`,
+  `exact_size`; older TopBottomPanel/SidePanel/update() are gone)
+- GUI (gui/src/main.rs): starts the loop on launch; Start/Stop; stage +
+  overall progress/ETA; left: cover, album, release, drive/offset, session
+  list; centre: tracks with status, per-read CRC/AR lines, progress bars;
+  log panel toggle; release dialog when several match or none/fuzzy (best
+  exact one auto-chosen after 30 s; "Rip as unknown", "Skip disc"). No
+  console window in release builds. Not yet: notifications, single instance,
+  settings UI, phone sync tab
 - Offset sign: +N = the track's audio starts N frames later in what the drive
   returns (same convention as EAC/AccurateRip/cyanrip -s)
 - linux.rs not yet compiled (ureq's TLS needs a C cross-compiler to check

@@ -22,6 +22,12 @@ pub struct Picture {
     pub height: u32,
 }
 
+impl std::fmt::Debug for Picture {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Picture({}, {}x{}, {} bytes)", self.mime, self.width, self.height, self.data.len())
+    }
+}
+
 /// Room left after the tags so later edits (mb-enrich, re-tagging) don't
 /// rewrite the whole file. metaflac's default.
 const PADDING_BYTES: u32 = 8192;
