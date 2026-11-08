@@ -3186,6 +3186,7 @@ dependencies = [
  "image",
  "ripshelf-core",
  "ripshelf-engine",
+ "ripshelf-platform",
 ]
 
 [[package]]
@@ -3197,6 +3198,7 @@ dependencies = [
  "cdtoc",
  "libc",
  "ripshelf-core",
+ "serde_json",
  "windows-sys 0.60.2",
 ]
 

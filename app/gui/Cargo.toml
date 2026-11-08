@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 ripshelf-core.workspace = true
 ripshelf-engine.workspace = true
+ripshelf-platform.workspace = true
 anyhow.workspace = true
 eframe = "0.37"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }

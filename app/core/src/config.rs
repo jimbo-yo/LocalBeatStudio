@@ -62,6 +62,55 @@ impl Settings {
     }
 }
 
+/// Choices made in the app (checkboxes), kept in `<config_dir>/ripshelf.json`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Prefs {
+    /// Phone notification when a drive has waited this long for the next disc.
+    pub notify_phone: bool,
+    pub notify_after_secs: u64,
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Prefs { notify_phone: false, notify_after_secs: 60 }
+    }
+}
+
+impl Prefs {
+    fn file(s: &Settings) -> PathBuf {
+        s.config_dir.join("ripshelf.json")
+    }
+
+    pub fn load(s: &Settings) -> Self {
+        let d = Prefs::default();
+        let Some(v) = std::fs::read_to_string(Self::file(s)).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        else {
+            return d;
+        };
+        Prefs {
+            notify_phone: v.get("notify_phone").and_then(|x| x.as_bool()).unwrap_or(d.notify_phone),
+            notify_after_secs: v.get("notify_after_secs").and_then(|x| x.as_u64()).unwrap_or(d.notify_after_secs),
+        }
+    }
+
+    /// Saves these values, keeping any other keys already in the file.
+    pub fn save(&self, s: &Settings) -> Result<()> {
+        let f = Self::file(s);
+        let mut v = std::fs::read_to_string(&f)
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .filter(|v| v.is_object())
+            .unwrap_or_else(|| serde_json::json!({}));
+        v["notify_phone"] = self.notify_phone.into();
+        v["notify_after_secs"] = self.notify_after_secs.into();
+        std::fs::create_dir_all(&s.config_dir).with_context(|| format!("creating {}", s.config_dir.display()))?;
+        let tmp = f.with_extension("new");
+        std::fs::write(&tmp, serde_json::to_string_pretty(&v)? + "\n").with_context(|| format!("writing {}", tmp.display()))?;
+        std::fs::rename(&tmp, &f).with_context(|| format!("replacing {}", f.display()))?;
+        Ok(())
+    }
+}
+
 /// Offsets file: lines of `<drive id> <offset>`; later lines win.
 ///
 /// The drive id is udev's ID_SERIAL on Linux (`hp_DVDRAM_GTA0N_4234...-0:0`)
@@ -111,6 +160,21 @@ fn strip_lun(id: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prefs_round_trip_keeps_other_keys() {
+        let dir = std::env::temp_dir().join(format!("ripshelf-prefs-{}", std::process::id()));
+        let mut s = Settings::load();
+        s.config_dir = dir.clone();
+        assert_eq!(Prefs::load(&s), Prefs::default());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ripshelf.json"), "{\"other\": 1}").unwrap();
+        let p = Prefs { notify_phone: true, notify_after_secs: 90 };
+        p.save(&s).unwrap();
+        assert_eq!(Prefs::load(&s), p);
+        assert!(std::fs::read_to_string(dir.join("ripshelf.json")).unwrap().contains("\"other\": 1"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn offsets_across_oses() {

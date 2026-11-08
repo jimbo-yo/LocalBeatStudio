@@ -10,6 +10,7 @@ use anyhow::Result;
 use crate::drive::DriveIdentity;
 
 const CDROMEJECT: u64 = 0x5309;
+const CDROM_LOCKDOOR: u64 = 0x5329;
 
 pub fn normalize_path(s: &str) -> String {
     let s = s.trim();
@@ -62,19 +63,36 @@ fn udev_properties(name: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Ejects the disc. The tray can be left locked against removal after a rip
+/// (seen with the HP GTA0N), and CDROMEJECT then returns a positive SCSI
+/// status (2, check condition) instead of failing, so: unlock the door first,
+/// count only 0 as success, and retry briefly in case the drive is busy.
 pub fn eject(path: &str) -> Result<()> {
     let c = CString::new(path)?;
-    unsafe {
-        let fd = libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_NONBLOCK);
-        if fd < 0 {
-            return Err(io::Error::last_os_error().into());
+    let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_NONBLOCK) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    let mut last = String::new();
+    for attempt in 0..5 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_secs(1));
         }
-        let r = libc::ioctl(fd, CDROMEJECT as _, 0);
-        let err = io::Error::last_os_error();
-        libc::close(fd);
-        if r < 0 {
-            return Err(err.into());
+        unsafe {
+            // Ignore failure: the eject below says whether it worked.
+            libc::ioctl(fd, CDROM_LOCKDOOR as _, 0);
+            let r = libc::ioctl(fd, CDROMEJECT as _, 0);
+            if r == 0 {
+                libc::close(fd);
+                return Ok(());
+            }
+            last = if r < 0 {
+                io::Error::last_os_error().to_string()
+            } else {
+                format!("the drive refused (status {r})")
+            };
         }
     }
-    Ok(())
+    unsafe { libc::close(fd) };
+    Err(anyhow::anyhow!("couldn't eject: {last}"))
 }

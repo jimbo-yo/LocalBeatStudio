@@ -10,6 +10,7 @@ ripshelf-core.workspace = true
 anyhow.workspace = true
 cdtoc.workspace = true
 cd-da-reader = "1"
+serde_json.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.60", features = [

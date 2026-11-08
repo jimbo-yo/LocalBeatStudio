@@ -127,8 +127,13 @@ impl Drive {
         Ok(())
     }
 
-    pub fn eject(&self) -> Result<()> {
-        sys::eject(&self.path).with_context(|| format!("ejecting {}", self.path))
+    /// Closes the drive, then ejects. On Linux the kernel locks the tray while
+    /// the device is open, and an eject sent through another handle then
+    /// "succeeds" without the tray moving, so the reader must be closed first.
+    pub fn eject(self) -> Result<()> {
+        let Drive { reader, path, .. } = self;
+        drop(reader);
+        sys::eject(&path).with_context(|| format!("ejecting {path}"))
     }
 }
 

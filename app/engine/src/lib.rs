@@ -17,6 +17,8 @@ use ripshelf_core::secure_read::SectorSource;
 use ripshelf_core::{cover, lock, phone_copy};
 use ripshelf_platform::drive::{self, Drive, DriveIdentity};
 
+pub mod notify;
+
 #[derive(Debug, Clone, Default)]
 pub struct Options {
     /// Only this drive (else any free drive with an audio CD).
@@ -366,11 +368,12 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
         });
     }
 
-    if !opts.no_eject {
+    if opts.no_eject {
+        drop(drive);
+    } else {
         let ok = drive.eject().is_ok();
         fe.event(Event::Ejected { ok });
     }
-    drop(drive);
 
     if plan.album_dir.is_dir() {
         if let Ok(rel) = plan.album_dir.strip_prefix(&s.flac_dir) {

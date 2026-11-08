@@ -455,6 +455,27 @@ exit-code-52 errors) was removed.
   (rebuilding from parts fails: SATA ID_MODEL includes the vendor). So
   rip-cd.sh's offsets file works unchanged: `ripshelf offset --drive /dev/sr1`
   -> +102. /dev/srN readable without sudo (logind uaccess ACL)
+- **First Linux rip 2026-11-08** (debug build, HP on /dev/sr1, into a scratch
+  FLAC_DIR/PHONE_DIR): OK Computer 12/12 AR conf 200 in 9 min (track 2 matched
+  on read 2), tags incl. genres/ORIGINALDATE/ISRC, cover, log, 12 Opus copies.
+  Audio MD5 of all 12 FLACs **identical** to the 2026-11 whipper/SuperDrive rip
+- Linux eject: CDROMEJECT returned **2** (SCSI check condition, drive refused)
+  instead of failing, and the tray stayed shut; the old code only treated
+  r < 0 as failure, so it said "Ejected". The tray had been left locked
+  against removal. Fix (linux.rs eject): CDROM_LOCKDOOR(0) first, success only
+  on 0, up to 5 tries 1 s apart. Also `Drive::eject(self)` now closes the
+  reader before ejecting (the kernel locks the tray while the device is open)
+- Phone notifications (2026-11-08): platform/src/phone_notify.rs runs
+  `kdeconnect-cli -d <id> --ping-msg` (Phone Sync's `kdeconnect_device` if
+  reachable, else first reachable; Windows: `%ProgramFiles%\KDE Connect\bin`).
+  engine/src/notify.rs `Notifier`: observes Events; after Waiting{done>0} for
+  `notify_after_secs` (60) sends one summary ("OK Computer: all 12 tracks in
+  the library (8:12). Ready for the next disc."); rejected tracks / DiscFailed
+  sent at once; nothing if the next disc starts in time. GUI: "Notify phone"
+  checkbox (top bar), saved in `<config>/rip-cd/ripshelf.json` (core
+  `config::Prefs`, keeps unknown keys); results in the log. CLI: `rip --loop
+  --notify-phone`; `ripshelf notify [MSG]` sends a test (worked to the Pixel 9).
+  KDE Connect goes over the LAN (not Bluetooth), home Wi-Fi only by design
 
 ## Next steps (planned 2026-11-05)
 

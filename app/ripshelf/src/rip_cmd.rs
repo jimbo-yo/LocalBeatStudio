@@ -2,7 +2,8 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use ripshelf_core::accuraterip::Verdict;
@@ -10,13 +11,16 @@ use ripshelf_core::config::{self, Settings};
 use ripshelf_core::musicbrainz::Release;
 use ripshelf_core::phone_copy;
 use ripshelf_core::rip::Acceptance;
+use ripshelf_engine::notify::Notifier;
 use ripshelf_engine::{self as engine, Event, Frontend, Options, ReleaseChoice};
 use ripshelf_platform::drive::Drive;
+use ripshelf_platform::phone_notify;
 
 pub struct RipArgs {
     pub drive: Option<String>,
     /// Keep going: wait for the next disc after each one.
     pub repeat: bool,
+    pub notify_phone: bool,
     pub offset: Option<i32>,
     pub release: Option<String>,
     pub country: Option<String>,
@@ -38,7 +42,20 @@ pub fn rip(a: RipArgs) -> Result<bool> {
         s.reads = r.max(1);
     }
     let opts = Options { drive: a.drive, offset: a.offset, release: a.release, unknown: a.unknown, no_eject: a.no_eject };
-    let p = Printer::default();
+    let mut p = Printer::default();
+    if a.repeat && a.notify_phone {
+        let after = config::Prefs::load(&s).notify_after_secs;
+        let config_dir = s.config_dir.clone();
+        p.notifier = Some(Notifier::new(
+            true,
+            Duration::from_secs(after),
+            Box::new(move |msg: &str| match phone_notify::notify(&config_dir, msg) {
+                Ok(phone) => println!("(Phone notification sent to {phone})"),
+                Err(e) => println!("(Couldn't notify the phone: {e:#})"),
+            }),
+        ));
+        println!("Phone notifications on: after {after} s waiting for a disc, and for problems.");
+    }
     if a.repeat {
         println!("Ripping disc after disc (Ctrl+C to stop).");
         engine::rip_loop(&s, &opts, &p)?;
@@ -52,6 +69,7 @@ pub fn rip(a: RipArgs) -> Result<bool> {
 #[derive(Default)]
 struct Printer {
     tracks: Mutex<Vec<engine::TrackInfo>>,
+    notifier: Option<Arc<Notifier>>,
 }
 
 impl Printer {
@@ -65,6 +83,9 @@ impl Printer {
 
 impl Frontend for Printer {
     fn event(&self, e: Event) {
+        if let Some(n) = &self.notifier {
+            n.observe(&e);
+        }
         match e {
             Event::Waiting { done } => {
                 let d = if done > 0 { format!(" ({done} done)") } else { String::new() };

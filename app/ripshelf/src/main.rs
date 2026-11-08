@@ -72,6 +72,10 @@ enum Command {
         /// Keep going: after each disc, wait for the next one
         #[arg(short, long = "loop")]
         repeat: bool,
+        /// With --loop: tell the phone (KDE Connect) when the drive has waited
+        /// a minute for the next disc, and straight away about problems
+        #[arg(long)]
+        notify_phone: bool,
         /// Read offset for this rip (default: the one saved for the drive)
         #[arg(short, long, allow_hyphen_values = true)]
         offset: Option<i32>,
@@ -102,6 +106,11 @@ enum Command {
         action: Option<OffsetAction>,
     },
     /// Make Opus phone copies of new or changed FLACs (like flac2phone.sh)
+    /// Send a test notification to the phone (KDE Connect, same Wi-Fi)
+    Notify {
+        #[arg(default_value = "ripshelf test: phone notifications work.")]
+        message: String,
+    },
     Phone {
         /// FLAC library or album folder (default: the library)
         src: Option<PathBuf>,
@@ -141,11 +150,18 @@ fn main() -> ExitCode {
             cdtoc.as_deref(),
             Some(country.as_str()).filter(|c| !c.is_empty()),
         ),
-        Command::Rip { drive, repeat, offset, release, country, unknown, reads, no_eject, flac_dir } => {
-            rip_cmd::rip(rip_cmd::RipArgs { drive, repeat, offset, release, country, unknown, reads, no_eject, flac_dir })
+        Command::Rip { drive, repeat, notify_phone, offset, release, country, unknown, reads, no_eject, flac_dir } => {
+            rip_cmd::rip(rip_cmd::RipArgs { drive, repeat, notify_phone, offset, release, country, unknown, reads, no_eject, flac_dir })
         }
         Command::Offset { drive, action } => {
             rip_cmd::offset(drive.as_deref(), action.map(|OffsetAction::Set { value }| value))
+        }
+        Command::Notify { message } => {
+            let s = ripshelf_core::config::Settings::load();
+            ripshelf_platform::phone_notify::notify(&s.config_dir, &message).map(|phone| {
+                println!("Sent to {phone}: {message}");
+                true
+            })
         }
         Command::Phone { src, dest, bitrate } => {
             let s = ripshelf_core::config::Settings::load();

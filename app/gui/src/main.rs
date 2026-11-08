@@ -11,11 +11,13 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 use ripshelf_core::accuraterip::Verdict;
-use ripshelf_core::config::Settings;
+use ripshelf_core::config::{Prefs, Settings};
 use ripshelf_core::flac_encode::Picture;
 use ripshelf_core::musicbrainz::Release;
 use ripshelf_core::rip::Acceptance;
+use ripshelf_engine::notify::Notifier;
 use ripshelf_engine::{self as engine, Event, Frontend, Options, ReleaseChoice, TrackInfo};
+use ripshelf_platform::phone_notify;
 
 /// Seconds before the best exact release is used if nobody answers.
 const AUTO_CHOOSE_SECS: u64 = 30;
@@ -39,10 +41,12 @@ struct GuiFrontend {
     tx: Sender<Msg>,
     stop: Arc<AtomicBool>,
     ctx: egui::Context,
+    notifier: Arc<Notifier>,
 }
 
 impl Frontend for GuiFrontend {
     fn event(&self, e: Event) {
+        self.notifier.observe(&e);
         let _ = self.tx.send(Msg::Event(e));
         self.ctx.request_repaint();
     }
@@ -121,13 +125,33 @@ struct App {
     session: Vec<(bool, String)>,
     log: Vec<String>,
     show_log: bool,
+    prefs: Prefs,
+    notifier: Arc<Notifier>,
+    /// Results of phone notifications, for the log.
+    notes: Receiver<String>,
 }
 
 impl App {
     fn new(ctx: egui::Context) -> Self {
+        let settings = Settings::load();
+        let prefs = Prefs::load(&settings);
+        let (note_tx, notes) = channel::<String>();
+        let (config_dir, repaint) = (settings.config_dir.clone(), ctx.clone());
+        let notifier = Notifier::new(
+            prefs.notify_phone,
+            Duration::from_secs(prefs.notify_after_secs),
+            Box::new(move |msg: &str| {
+                let note = match phone_notify::notify(&config_dir, msg) {
+                    Ok(phone) => format!("Phone notification sent to {phone}: {msg}"),
+                    Err(e) => format!("Couldn't notify the phone: {e:#}"),
+                };
+                let _ = note_tx.send(note);
+                repaint.request_repaint();
+            }),
+        );
         let mut app = App {
             ctx,
-            settings: Settings::load(),
+            settings,
             rx: None,
             stop: Arc::new(AtomicBool::new(false)),
             running: false,
@@ -137,6 +161,9 @@ impl App {
             session: Vec::new(),
             log: Vec::new(),
             show_log: false,
+            prefs,
+            notifier,
+            notes,
         };
         app.start();
         app
@@ -145,7 +172,7 @@ impl App {
     fn start(&mut self) {
         let (tx, rx) = channel();
         self.stop = Arc::new(AtomicBool::new(false));
-        let fe = GuiFrontend { tx: tx.clone(), stop: self.stop.clone(), ctx: self.ctx.clone() };
+        let fe = GuiFrontend { tx: tx.clone(), stop: self.stop.clone(), ctx: self.ctx.clone(), notifier: self.notifier.clone() };
         let settings = self.settings.clone();
         std::thread::spawn(move || {
             let r = engine::rip_loop(&settings, &Options::default(), &fe);
@@ -174,6 +201,10 @@ impl App {
     }
 
     fn poll(&mut self) {
+        let notes: Vec<String> = self.notes.try_iter().collect();
+        for n in notes {
+            self.log(n);
+        }
         let Some(rx) = &self.rx else { return };
         let msgs: Vec<Msg> = rx.try_iter().collect();
         for m in msgs {
@@ -438,6 +469,19 @@ impl eframe::App for App {
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.toggle_value(&mut self.show_log, "Log");
+                    let hint = format!(
+                        "Through KDE Connect (phone on the same Wi-Fi): once the drive has waited {} s for the \
+                         next disc, say how the last one went. Problems are sent straight away.",
+                        self.prefs.notify_after_secs
+                    );
+                    if ui.checkbox(&mut self.prefs.notify_phone, "Notify phone").on_hover_text(hint).changed() {
+                        self.notifier.set_enabled(self.prefs.notify_phone);
+                        let state = if self.prefs.notify_phone { "on" } else { "off" };
+                        match self.prefs.save(&self.settings) {
+                            Ok(()) => self.log(format!("Phone notifications {state}")),
+                            Err(e) => self.log(format!("Phone notifications {state} (couldn't save the setting: {e:#})")),
+                        }
+                    }
                 });
             });
         });
