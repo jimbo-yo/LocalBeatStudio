@@ -383,6 +383,19 @@ exit-code-52 errors) was removed.
   in drive 2026-11-08: Gershwin "Greatest Hits" (RCA Victor 60834-2-RG, US
   1991); fixture core/tests/data/discid-rQRpBjAQ.json. Still to do: compare
   with the tags cyanrip writes (need a cyanrip FLAC here)
+- `ripshelf rip` (core/src/rip.rs, ripshelf/src/rip_cmd.rs): offset from the
+  offsets file (`ripshelf offset [set N]`; Windows file
+  `%APPDATA%\rip-cd\offsets`, HP drive saved as +102 on 2026-11-08; lookup
+  ignores udev's `-0:0` so Linux lines match), MusicBrainz (refuses a
+  fuzzy-only match: use -R ID or --unknown), genres, CAA front-1200 cover
+  (release, else release group), AccurateRip, then per missing track up to 4
+  reads with cache flush; accept on AR match or a clean read repeating an
+  earlier clean CRC (reads with unreadable sectors never count); encode to
+  `<name>.part` then rename; never overwrite; rejects (last read) to
+  `<cache>\rip-cd\rejected\<Artist - Album>\`; cover.jpg; appends
+  `<Album>[ CDn].log`; ejects unless --no-eject. Multi-disc: `2.07. Artist -
+  Title` in one folder (as rip-cd.sh). Not yet: Opus copies, CUE sheet,
+  drive lock, disc-insert loop
 - Offset sign: +N = the track's audio starts N frames later in what the drive
   returns (same convention as EAC/AccurateRip/cyanrip -s)
 - linux.rs not yet compiled (ureq's TLS needs a C cross-compiler to check

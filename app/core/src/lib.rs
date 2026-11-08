@@ -3,9 +3,12 @@
 
 pub mod accuraterip;
 pub mod album_check;
+pub mod config;
+pub mod cover;
 pub mod flac_encode;
 pub mod flacfile;
 pub mod http;
 pub mod musicbrainz;
 pub mod naming;
+pub mod rip;
 pub mod secure_read;

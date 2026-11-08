@@ -13,3 +13,5 @@ ureq.workspace = true
 serde_json.workspace = true
 crc32fast.workspace = true
 libflac-sys = { version = "0.3.4", default-features = false, features = ["build-flac"] }
+dirs.workspace = true
+imagesize.workspace = true

@@ -54,9 +54,12 @@ fn is_reserved(name: &str) -> bool {
             && stem.as_bytes()[3] != b'0')
 }
 
-/// File name (no folder, no extension) for a track: `07. Artist - Title`.
-pub fn track_stem(number: usize, artist: &str, title: &str) -> String {
-    clean(&format!("{number:02}. {artist} - {title}"), false)
+/// File name (no folder, no extension) for a track: `07. Artist - Title`,
+/// or `2.07. Artist - Title` for disc 2 of a multi-disc album (all discs share
+/// the album folder, as rip-cd.sh does).
+pub fn track_stem(disc: Option<usize>, number: usize, artist: &str, title: &str) -> String {
+    let prefix = disc.map(|d| format!("{d}.")).unwrap_or_default();
+    clean(&format!("{prefix}{number:02}. {artist} - {title}"), false)
 }
 
 #[cfg(test)]
@@ -94,7 +97,8 @@ mod tests {
 
     #[test]
     fn track_names() {
-        assert_eq!(track_stem(7, "The Kinks", "Days"), "07. The Kinks - Days");
-        assert_eq!(track_stem(12, "AC/DC", "T.N.T."), "12. AC／DC - T.N.T.");
+        assert_eq!(track_stem(None, 7, "The Kinks", "Days"), "07. The Kinks - Days");
+        assert_eq!(track_stem(None, 12, "AC/DC", "T.N.T."), "12. AC／DC - T.N.T.");
+        assert_eq!(track_stem(Some(2), 3, "The Kinks", "Lola"), "2.03. The Kinks - Lola");
     }
 }

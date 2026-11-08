@@ -11,3 +11,4 @@ ripshelf-platform.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 cdtoc.workspace = true
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }

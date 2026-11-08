@@ -1,4 +1,5 @@
 mod drive_cmds;
+mod rip_cmd;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -64,10 +65,52 @@ enum Command {
         #[arg(long, default_value = "US")]
         country: String,
     },
+    /// Rip the disc: the tracks missing from the library, verified, tagged, filed
+    Rip {
+        #[arg(short, long)]
+        drive: Option<String>,
+        /// Read offset for this rip (default: the one saved for the drive)
+        #[arg(short, long, allow_hyphen_values = true)]
+        offset: Option<i32>,
+        /// Use this MusicBrainz release ID
+        #[arg(short = 'R', long)]
+        release: Option<String>,
+        /// Preferred release country (default US, or $COUNTRY; "" for none)
+        #[arg(long)]
+        country: Option<String>,
+        /// Disc not in MusicBrainz: rip with generic names
+        #[arg(short = 'U', long)]
+        unknown: bool,
+        /// Reads per track before giving up (default 4)
+        #[arg(long)]
+        reads: Option<u32>,
+        /// Leave the disc in the drive
+        #[arg(long)]
+        no_eject: bool,
+        /// Library folder (default: Music/FLAC, or $FLAC_DIR)
+        #[arg(long)]
+        flac_dir: Option<PathBuf>,
+    },
+    /// Show the drive's saved read offset, or save one: offset set 102
+    Offset {
+        #[arg(short, long)]
+        drive: Option<String>,
+        #[command(subcommand)]
+        action: Option<OffsetAction>,
+    },
     /// Eject the disc
     Eject {
         #[arg(short, long)]
         drive: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum OffsetAction {
+    /// Save the read offset for the drive
+    Set {
+        #[arg(allow_hyphen_values = true)]
+        value: i32,
     },
 }
 
@@ -85,6 +128,12 @@ fn main() -> ExitCode {
             cdtoc.as_deref(),
             Some(country.as_str()).filter(|c| !c.is_empty()),
         ),
+        Command::Rip { drive, offset, release, country, unknown, reads, no_eject, flac_dir } => {
+            rip_cmd::rip(rip_cmd::RipArgs { drive, offset, release, country, unknown, reads, no_eject, flac_dir })
+        }
+        Command::Offset { drive, action } => {
+            rip_cmd::offset(drive.as_deref(), action.map(|OffsetAction::Set { value }| value))
+        }
         Command::Eject { drive } => drive_cmds::eject(drive.as_deref()),
     };
     match result {
