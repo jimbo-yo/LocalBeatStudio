@@ -355,12 +355,34 @@ exit-code-52 errors) was removed.
   fails the whole range read (no silent zero-fill: good). Usable without a
   fork; we add eject + identity (platform/src/windows.rs, linux.rs) and
   chunking/offset/cache-flush (core/src/secure_read.rs, tested on a fake disc)
-- Drive test commands (NOT yet run on a real drive): `ripshelf drives`,
+- **First real-drive test 2026-11-08 (Windows, HP GTA0N on D:)**: `drives`
+  reports key `hp_DVDRAM_GTA0N_423442525150313439373432` = udev ID_SERIAL
+  minus `-0:0`, so one offsets entry can serve both OSes. Track 1 (16:20) of
+  an 8-track disc read twice at +102: both AccurateRip v2 match (conf 15),
+  same CRC, ~5.3x (debug build), ~3 min each. Confirms AR checksum code,
+  offset +102 and its sign. Cache flush still untested (needs a bad disc)
+- Drive test commands: `ripshelf drives`,
   `toc`, `read-track N --offset 102 --reads 2 [--speed X] [--flush 1000]
   [--wav f.wav]`, `eject`. read-track prints CRC + AR v1/v2 per read and
   "VERIFIED" on an AR match or two equal CRCs. Things to learn on the HP
   drive: does a re-read after --flush give a different CRC on a bad spot (cache
   really defeated), real read speed, whether +102 gives AR matches
+- FLAC encoding (core/src/flac_encode.rs): reference libFLAC via
+  `libflac-sys` (built by CMake: `winget install Kitware.CMake`; a new shell
+  may need `C:\Program Files\CMake\bin` on PATH), level 5, **verify mode**,
+  Vorbis comments + front cover + 8 KiB padding, written through Rust File
+  (Unicode paths OK). Workspace Cargo.toml builds libflac-sys/claxon
+  optimized in dev (else CMake links the debug CRT: LNK4098)
+- MusicBrainz (core/src/musicbrainz.rs): discid lookup with `toc=` so
+  unknown disc IDs still get similar-TOC ("fuzzy") candidates; ranking =
+  exact disc ID, country (US default), Official, not club edition, CD,
+  earliest date; genres/original date like mb-enrich.py; Picard tag names
+  (ALBUMARTIST, TRACKTOTAL, DISCTOTAL, RELEASETYPE, MUSICBRAINZ_* ...) plus
+  MUSICBRAINZ_DISCID and CDTOC. 1 req/s, 503 retries (core/src/http.rs).
+  `ripshelf identify [--drive D:] [--cdtoc X] [--country US]`. Test disc
+  in drive 2026-11-08: Gershwin "Greatest Hits" (RCA Victor 60834-2-RG, US
+  1991); fixture core/tests/data/discid-rQRpBjAQ.json. Still to do: compare
+  with the tags cyanrip writes (need a cyanrip FLAC here)
 - Offset sign: +N = the track's audio starts N frames later in what the drive
   returns (same convention as EAC/AccurateRip/cyanrip -s)
 - linux.rs not yet compiled (ureq's TLS needs a C cross-compiler to check

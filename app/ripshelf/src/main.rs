@@ -53,6 +53,17 @@ enum Command {
         #[arg(long)]
         wav: Option<PathBuf>,
     },
+    /// Look the disc up on MusicBrainz: candidate releases and the tags it would get
+    Identify {
+        #[arg(short, long)]
+        drive: Option<String>,
+        /// Use this CDTOC tag value instead of reading a drive
+        #[arg(long)]
+        cdtoc: Option<String>,
+        /// Preferred release country ("" for none)
+        #[arg(long, default_value = "US")]
+        country: String,
+    },
     /// Eject the disc
     Eject {
         #[arg(short, long)]
@@ -69,6 +80,11 @@ fn main() -> ExitCode {
         Command::ReadTrack { track, offset, drive, reads, speed, flush, wav } => {
             drive_cmds::read_track(drive_cmds::ReadTrackArgs { drive, track, offset, reads, speed, flush, wav })
         }
+        Command::Identify { drive, cdtoc, country } => drive_cmds::identify(
+            drive.as_deref(),
+            cdtoc.as_deref(),
+            Some(country.as_str()).filter(|c| !c.is_empty()),
+        ),
         Command::Eject { drive } => drive_cmds::eject(drive.as_deref()),
     };
     match result {

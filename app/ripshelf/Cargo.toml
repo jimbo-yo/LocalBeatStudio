@@ -10,3 +10,4 @@ ripshelf-core.workspace = true
 ripshelf-platform.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+cdtoc.workspace = true

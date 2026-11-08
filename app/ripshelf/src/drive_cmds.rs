@@ -197,3 +197,45 @@ pub fn eject(path: Option<&str>) -> Result<bool> {
     println!("Ejected {path}");
     Ok(true)
 }
+
+/// Identifies the disc on MusicBrainz: candidate releases best first, and
+/// the tags track 1 would get.
+pub fn identify(path: Option<&str>, cdtoc: Option<&str>, country: Option<&str>) -> Result<bool> {
+    use ripshelf_core::musicbrainz;
+    let toc = match cdtoc {
+        Some(t) => cdtoc::Toc::from_cdtoc(t).map_err(|e| anyhow!("bad CDTOC: {e}"))?,
+        None => open(path)?.read_toc()?,
+    };
+    println!("Disc ID {} ({} tracks)", toc.musicbrainz_id(), toc.audio_len());
+    let mut releases = musicbrainz::lookup(&toc)?;
+    if releases.is_empty() {
+        println!("Not in MusicBrainz. Add it: {}", toc.musicbrainz_url());
+        return Ok(false);
+    }
+    musicbrainz::rank(&mut releases, country);
+    for (i, r) in releases.iter().enumerate() {
+        println!(
+            "{} {:>2}. {}{}\n       {}",
+            if i == 0 { "→" } else { " " },
+            i + 1,
+            r.summary(),
+            if r.fuzzy { "  [similar TOC, not this exact disc]" } else { "" },
+            r.id
+        );
+    }
+    let best = &releases[0];
+    let genres = musicbrainz::genres(best).unwrap_or_else(|e| {
+        println!("(genre lookup failed: {e:#})");
+        Vec::new()
+    });
+    println!("\nTags for track 1:");
+    for (k, v) in musicbrainz::track_tags(best, 1, &genres, &toc) {
+        println!("  {k}={v}");
+    }
+    println!("\nTracks:");
+    for t in &best.medium.tracks {
+        let secs = t.length_ms / 1000;
+        println!("  {:>2}. {} - {}  ({}:{:02})", t.position, t.artist, t.title, secs / 60, secs % 60);
+    }
+    Ok(true)
+}
