@@ -98,6 +98,16 @@ enum Command {
         #[command(subcommand)]
         action: Option<OffsetAction>,
     },
+    /// Make Opus phone copies of new or changed FLACs (like flac2phone.sh)
+    Phone {
+        /// FLAC library or album folder (default: the library)
+        src: Option<PathBuf>,
+        /// Where the copies go (default: Music/phone, or $PHONE_DIR)
+        dest: Option<PathBuf>,
+        /// Opus bitrate in kbps
+        #[arg(short, long, default_value_t = 160)]
+        bitrate: u32,
+    },
     /// Eject the disc
     Eject {
         #[arg(short, long)]
@@ -133,6 +143,17 @@ fn main() -> ExitCode {
         }
         Command::Offset { drive, action } => {
             rip_cmd::offset(drive.as_deref(), action.map(|OffsetAction::Set { value }| value))
+        }
+        Command::Phone { src, dest, bitrate } => {
+            let s = ripshelf_core::config::Settings::load();
+            let src = src.unwrap_or_else(|| s.flac_dir.clone());
+            // An album inside the library maps to the same place under the phone folder.
+            let dest = dest.unwrap_or_else(|| match std::path::absolute(&src).ok().and_then(|a| a.strip_prefix(&s.flac_dir).ok().map(|r| r.to_path_buf())) {
+                Some(rel) => s.phone_dir.join(rel),
+                None => s.phone_dir.clone(),
+            });
+            println!("{} -> {} (Opus {bitrate} kbps)", src.display(), dest.display());
+            rip_cmd::phone_copies(&src, &dest, bitrate)
         }
         Command::Eject { drive } => drive_cmds::eject(drive.as_deref()),
     };

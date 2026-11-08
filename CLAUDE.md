@@ -394,8 +394,19 @@ exit-code-52 errors) was removed.
   `<name>.part` then rename; never overwrite; rejects (last read) to
   `<cache>\rip-cd\rejected\<Artist - Album>\`; cover.jpg; appends
   `<Album>[ CDn].log`; ejects unless --no-eject. Multi-disc: `2.07. Artist -
-  Title` in one folder (as rip-cd.sh). Not yet: Opus copies, CUE sheet,
-  drive lock, disc-insert loop
+  Title` in one folder (as rip-cd.sh). First full rip 2026-11-08: Gershwin
+  8/8 AR on first read, 9 min (release build, ~7.7x); `check` re-verified
+  the FLACs. Not yet: CUE sheet, drive lock, disc-insert loop
+- Phone copies (core/src/phone_copy.rs; `ripshelf phone [SRC] [DEST]
+  [--bitrate 160]`, and `rip` runs it on the album after ejecting):
+  flac2phone.sh's rules (only new/changed, .part + rename, all cores, copy
+  cover/folder images, drop REPLAYGAIN_*/R128_* tags) with libopusenc via
+  raw `libopusenc-static-sys` (the `libopusenc` wrapper only takes 48/24/..
+  kHz input); cover from the FLAC PICTURE block (parsed in flacfile.rs),
+  else cover.jpg. Link quirk: opus-static-sys builds libopus with LTCG, whose
+  symbols get lost when bundled into the rlib on MSVC; core/build.rs links
+  opus.lib directly. Gershwin album: 8 files in 51 s, ~161 kbps. AAC mode
+  not ported (Opus only)
 - Offset sign: +N = the track's audio starts N frames later in what the drive
   returns (same convention as EAC/AccurateRip/cyanrip -s)
 - linux.rs not yet compiled (ureq's TLS needs a C cross-compiler to check

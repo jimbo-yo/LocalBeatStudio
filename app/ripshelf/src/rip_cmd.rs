@@ -192,7 +192,33 @@ pub fn rip(a: RipArgs) -> Result<bool> {
         println!("Rejected tracks {:?}: clean the disc (or try another drive) and run rip again; it will only redo those.", sum.rejected);
     }
     eject(&drive, a.no_eject);
+    if plan.album_dir.is_dir() {
+        if let Ok(rel) = plan.album_dir.strip_prefix(&s.flac_dir) {
+            println!("
+Phone copies:");
+            phone_copies(&plan.album_dir, &s.phone_dir.join(rel), s.opus_kbps)?;
+        }
+    }
     Ok(sum.rejected.is_empty())
+}
+
+/// Converts `src` (a library or one album) to Opus under `dest`, printing
+/// each file. Ok(true) if nothing failed.
+pub fn phone_copies(src: &std::path::Path, dest: &std::path::Path, kbps: u32) -> Result<bool> {
+    use ripshelf_core::phone_copy;
+    let stats = phone_copy::convert_tree(src, dest, kbps, &|rel, r| match r {
+        Ok(()) => println!("  OK    {}", rel.display()),
+        Err(e) => println!("  FAIL  {}: {e:#}", rel.display()),
+    })?;
+    println!(
+        "  {} converted, {} already up to date, {} failed{}  ->  {}",
+        stats.converted.len(),
+        stats.up_to_date,
+        stats.failed.len(),
+        if stats.covers_copied > 0 { format!(", {} cover images copied", stats.covers_copied) } else { String::new() },
+        dest.display()
+    );
+    Ok(stats.failed.is_empty())
 }
 
 fn choose_release(toc: &cdtoc::Toc, country: Option<&str>) -> Result<musicbrainz::Release> {

@@ -25,6 +25,8 @@ pub struct Settings {
     pub compression: u32,
     /// Sectors read elsewhere before a re-read, to empty the drive cache.
     pub flush_sectors: u32,
+    /// Opus bitrate for phone copies.
+    pub opus_kbps: u32,
 }
 
 impl Settings {
@@ -47,6 +49,7 @@ impl Settings {
             reads: 4,
             compression: 5,
             flush_sectors: 1000,
+            opus_kbps: crate::phone_copy::DEFAULT_BITRATE_KBPS,
         }
     }
 

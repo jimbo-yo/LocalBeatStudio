@@ -10,5 +10,6 @@ pub mod flacfile;
 pub mod http;
 pub mod musicbrainz;
 pub mod naming;
+pub mod phone_copy;
 pub mod rip;
 pub mod secure_read;

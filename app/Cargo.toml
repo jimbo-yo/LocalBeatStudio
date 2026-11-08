@@ -29,3 +29,9 @@ debug = false
 
 [profile.dev.package.claxon]
 opt-level = 3
+
+[profile.dev.package.opus-static-sys]
+opt-level = 3
+
+[profile.dev.package.libopusenc-static-sys]
+opt-level = 3

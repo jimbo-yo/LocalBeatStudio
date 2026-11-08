@@ -358,6 +358,7 @@ mod tests {
             reads: 4,
             compression: 0,
             flush_sectors: 0,
+            opus_kbps: 160,
         };
         (s, root)
     }
