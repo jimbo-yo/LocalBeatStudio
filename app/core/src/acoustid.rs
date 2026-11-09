@@ -63,7 +63,9 @@ pub fn fingerprint(path: &Path) -> Result<(String, u32)> {
         bail!("no audio in {}", path.display());
     }
     fp.finish();
-    let secs = audio_source::read_info(path).ok().and_then(|i| i.seconds).unwrap_or(frames / rate.max(1) as f64);
+    // The whole song's length (AcoustID checks it), not just what we decoded.
+    let known = if is_flac { flacfile::seconds(path) } else { audio_source::read_info(path).ok().and_then(|i| i.seconds) };
+    let secs = known.unwrap_or(frames / rate.max(1) as f64);
     let compressed = FingerprintCompressor::from(&config).compress(fp.fingerprint());
     Ok((base64url(&compressed), secs.round() as u32))
 }

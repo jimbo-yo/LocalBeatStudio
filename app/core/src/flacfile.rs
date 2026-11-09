@@ -31,6 +31,12 @@ pub fn read_tags(path: &Path) -> Result<FlacFile> {
     Ok(FlacFile { tags: collect_tags(&reader) })
 }
 
+/// Length in seconds, from STREAMINFO (None if the file doesn't say).
+pub fn seconds(path: &Path) -> Option<f64> {
+    let info = claxon::FlacReader::open(path).ok()?.streaminfo();
+    Some(info.samples? as f64 / info.sample_rate.max(1) as f64)
+}
+
 /// Reads tags and decodes the audio as CD frames (44.1 kHz, 16-bit stereo
 /// only).
 pub fn read_cd_audio(path: &Path) -> Result<(FlacFile, Vec<u32>)> {
