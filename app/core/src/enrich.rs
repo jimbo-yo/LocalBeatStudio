@@ -220,6 +220,22 @@ fn is_various(artist: &str) -> bool {
     a.is_empty() || a == "various artists" || a == "various" || a == "compilations" || a == "soundtrack" || a == "va"
 }
 
+/// Whether two album names plausibly name the same album: similar, or most
+/// of the shorter one's words are in the longer ("Groove" and "Music From
+/// and Inspired by the Motion Picture Groove"). A sound match proves the
+/// recordings, not that the folder is that album ("Best of" folders match
+/// the studio album their songs first came out on).
+pub fn album_names_agree(a: &str, b: &str) -> bool {
+    let (a, b) = (clean_album(a), clean_album(b));
+    if similarity(&a, &b) >= 0.8 {
+        return true;
+    }
+    let words = |x: &str| norm(x).split_whitespace().map(String::from).collect::<Vec<_>>();
+    let (wa, wb) = (words(&a), words(&b));
+    let (short, long) = if wa.len() <= wb.len() { (wa, wb) } else { (wb, wa) };
+    !short.is_empty() && short.iter().filter(|w| long.contains(w)).count() * 5 >= short.len() * 3
+}
+
 /// An album name as iTunes left it, ready to search: `_` (iTunes' stand-in
 /// for `:` and `?`) as a space, no disc label ("(Disc 2)", "- Disc 2",
 /// "-- Disc 2 (Dawn)", "CD1"), no "[Explicit]"-style brackets, no "-ADVANCE".
@@ -866,6 +882,18 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn album_names() {
+        assert!(album_names_agree("Groove", "Music From and Inspired by the Motion Picture Groove"));
+        assert!(album_names_agree("Crossroads - Disc 2", "Crossroads"));
+        assert!(album_names_agree("Mellon Collie And The Infinite Sadness - Dawn To Dusk", "Mellon Collie and the Infinite Sadness"));
+        assert!(album_names_agree("Pulp Fiction - Soundtrack", "Pulp Fiction: Music From the Motion Picture"));
+        assert!(!album_names_agree("Best of.._", "Pleasure Victim"));
+        assert!(!album_names_agree("Stankonia", "Big Boi & Dre Present...Outkast"));
+        assert!(!album_names_agree("Fred's Songs", "150 Fun Songs for Kids"));
+        assert!(!album_names_agree("Water Music", "Feuerwerks-Musik"));
     }
 
     #[test]

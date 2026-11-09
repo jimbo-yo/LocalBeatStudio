@@ -226,6 +226,7 @@ fn sound_pass(s: &Settings, state: &mut State, a: &EnrichArgs, key: &str) -> Res
         .map(|x| x.rel)
         .filter(|rel| wanted(rel))
         .filter(|rel| match state.status(rel) {
+            Some("review") if state.albums.get(rel).is_some_and(|v| v["by"] == "sound") => a.retry,
             Some("nomatch" | "mixed" | "review" | "partial") => true,
             Some("sound_nomatch" | "sound_partial") => a.retry,
             Some(_) => false,
@@ -294,6 +295,16 @@ fn sound_pass(s: &Settings, state: &mut State, a: &EnrichArgs, key: &str) -> Res
                 let sm = enrich::Match { sure: sm.sure && enough, ..sm };
                 (c, sm, sub)
             });
+            let folder_name = phone_sync::split_album(&rel).1;
+            if let Some((c, m, _)) = best.as_ref().filter(|(c, m, _)| {
+                m.sure && !enrich::album_names_agree(&folder_name, &c.title) && !enrich::album_names_agree(&local.album, &c.title)
+            }) {
+                println!("  ? {rel}\n      = {} (by sound, {:.0}%): album name differs, to review", c.summary(), m.score * 100.0);
+                state.albums.insert(rel.clone(), json!({"status": "review", "by": "sound", "release": c.release_id,
+                    "summary": c.summary(), "score": m.score, "why": "the songs are on this release, but its name doesn't match the folder", "when": today()}));
+                state.save()?;
+                continue;
+            }
             if let Some((c, m, local)) = best.filter(|(_, m, _)| m.sure) {
                 let whole = local.tracks.len() == local_count;
                 println!("  ✔ {rel}\n      = {} (by sound, {:.0}%){}", c.summary(), m.score * 100.0,
