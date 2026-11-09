@@ -596,6 +596,32 @@ exit-code-52 errors) was removed.
   before undo records were per file, so its undo restores the crashed run's
   (correct) tags, not the originals
 
+### ripshelf enrich --sound: AcoustID (2026-11-09, step B done)
+- Key: free application key (acoustid.org/new-application; NOT the user
+  key, which gives "invalid API key"), saved by `ripshelf enrich
+  --acoustid-key KEY` in `ripshelf.json` (never in git). `ripshelf
+  fingerprint FILE` tests one file
+- core/acoustid.rs: rusty-chromaprint (preset_test2), first 120 s; the
+  duration sent must be the WHOLE song's (FLAC via flacfile::seconds:
+  sending 120 s made every FLAC fail). Equal-score hits: file's own title,
+  then most releases (AcoustID has bad links)
+- `enrich --sound` takes nomatch/mixed/review/partial folders (--retry adds
+  sound_nomatch/sound_partial and sound-made reviews). Album folders (`A/B`
+  or `Artist - Album`, not "Unknown Album"): release holding most songs; if
+  not all fit, write the sure tracks if they're > half the folder (rest left
+  alone, status sound_partial); else song by song (mixes). Song-by-song
+  scattered albums over editions/compilations ("Don't Cry" -> Kuschelrock 8):
+  fixed, redone. **Album-name guard**: an album-folder match whose release
+  name agrees with neither folder nor ALBUM tag goes to review (sound proves
+  recordings, not the album: "Best of" -> studio album, Stankonia -> hits set)
+- Run 2026-11-09: ~135 albums whole, ~620 loose songs, 12 folders
+  unidentified (children's/niche), ~22 album folders to review by name.
+  Known misses: "Dirty Water: Birth of Punk Attitude" (Various) written as
+  The Standells' "Dirty Water". Unwritable: Fiona Apple "Extraordinary
+  Machine.mp3" (zero padding after ID3: lofty finds no format), En Vogue
+  "My Lovin'" (TDRC with "_")
+- Next: step C, GUI review tab (show summary/why, accept/reject)
+
 ## Next steps (planned 2026-11-05)
 
 1. Test a second (shorter) CD with the new Artist/Album layout
