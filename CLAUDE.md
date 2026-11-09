@@ -524,7 +524,9 @@ exit-code-52 errors) was removed.
   to 10 min, "wake it up" message), safe because every op is idempotent.
   `ripshelf sync --usb | --wifi | --to DIR`. Dry runs on the Pixel 9: same
   plan both ways (16 albums, 15 adopt, Led Zeppelin +2 files); USB 0.8 s with
-  19.7 GB free of 117.5 GB, Wi-Fi 3.3 s
+  19.7 GB free of 117.5 GB, Wi-Fi 3.3 s. First real sync 2026-11-08 over USB: 2 Zeppelin
+  tracks converted + sent in 16 s, 16 albums adopted, record written; re-run =
+  nothing to do
 - Next: step 3 = Phone tab in the GUI; then rip stops making phone copies and
   ~/Music/phone can go
 
