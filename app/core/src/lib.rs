@@ -13,5 +13,6 @@ pub mod lock;
 pub mod musicbrainz;
 pub mod naming;
 pub mod phone_copy;
+pub mod phone_sync;
 pub mod rip;
 pub mod secure_read;

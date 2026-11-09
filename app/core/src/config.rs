@@ -13,6 +13,9 @@ pub struct Settings {
     pub flac_dir: PathBuf,
     /// Phone (Opus) copies.
     pub phone_dir: PathBuf,
+    /// Everything not ripped with ripshelf, as is (old AAC/MP3 libraries...):
+    /// synced to the phone like the FLAC library, which wins for an album in both.
+    pub misc_dir: PathBuf,
     /// Settings and the offsets file.
     pub config_dir: PathBuf,
     /// Rejected reads, logs.
@@ -30,7 +33,7 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// OS defaults; `FLAC_DIR`, `PHONE_DIR` and `COUNTRY` environment
+    /// OS defaults; `FLAC_DIR`, `PHONE_DIR`, `MISC_DIR` and `COUNTRY` environment
     /// variables override, as in the scripts.
     pub fn load() -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
@@ -39,6 +42,7 @@ impl Settings {
         Settings {
             flac_dir: env_path("FLAC_DIR").unwrap_or_else(|| music.join("FLAC")),
             phone_dir: env_path("PHONE_DIR").unwrap_or_else(|| music.join("phone")),
+            misc_dir: env_path("MISC_DIR").unwrap_or_else(|| music.join("Miscellaneous")),
             config_dir: dirs::config_dir().unwrap_or_else(|| home.join(".config")).join("rip-cd"),
             cache_dir: dirs::cache_dir().unwrap_or_else(|| home.join(".cache")).join("rip-cd"),
             country: match std::env::var("COUNTRY") {

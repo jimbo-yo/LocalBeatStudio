@@ -352,6 +352,7 @@ mod tests {
         let s = Settings {
             flac_dir: root.join("FLAC"),
             phone_dir: root.join("phone"),
+            misc_dir: root.join("Miscellaneous"),
             config_dir: root.join("config"),
             cache_dir: root.join("cache"),
             country: None,

@@ -1,5 +1,6 @@
 mod drive_cmds;
 mod rip_cmd;
+mod sync_cmd;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -106,6 +107,22 @@ enum Command {
         action: Option<OffsetAction>,
     },
     /// Make Opus phone copies of new or changed FLACs (like flac2phone.sh)
+    /// Make the phone's music folder hold the chosen albums (as Opus, made from
+    /// the FLAC and Miscellaneous libraries). Starts from what's there now.
+    Sync {
+        /// The phone's music folder (for now a folder: a mounted phone or a test folder)
+        #[arg(long)]
+        to: std::path::PathBuf,
+        /// Also put on albums whose folder name contains this (repeatable)
+        #[arg(long)]
+        add: Vec<String>,
+        /// Take off albums whose folder name contains this (repeatable)
+        #[arg(long)]
+        remove: Vec<String>,
+        /// Only show what would happen
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Send a test notification to the phone (KDE Connect, same Wi-Fi)
     Notify {
         #[arg(default_value = "ripshelf test: phone notifications work.")]
@@ -156,6 +173,7 @@ fn main() -> ExitCode {
         Command::Offset { drive, action } => {
             rip_cmd::offset(drive.as_deref(), action.map(|OffsetAction::Set { value }| value))
         }
+        Command::Sync { to, add, remove, dry_run } => sync_cmd::sync(sync_cmd::SyncArgs { to, add, remove, dry_run }),
         Command::Notify { message } => {
             let s = ripshelf_core::config::Settings::load();
             ripshelf_platform::phone_notify::notify(&s.config_dir, &message).map(|phone| {

@@ -493,6 +493,32 @@ exit-code-52 errors) was removed.
   same reason COSMIC looked broken there). gui main() sets WGPU_BACKEND=gl on
   Linux unless already set: renders correctly. Release build takes ~10 min
 
+### ripshelf phone sync (2026-11-08, replacing phone-sync.py; steps 1a/1b done)
+- core/audio_source.rs: Symphonia 0.5 (pure Rust) reads tags/cover/bitrate
+  and decodes AAC/ALAC/MP3/Ogg/WAV; FLAC stays on claxon. phone_copy::
+  convert_file takes any of them; lossy sources at min(160, own bitrate)
+  (>= 64). .m4p (FairPlay DRM) listed, never converted. Old iTunes .m4a files
+  have no embedded art and thin tags. `ripshelf phone SRC DEST` = bulk convert
+- core/phone_sync.rs: library = album folders in FLAC_DIR + MISC_DIR
+  (Settings.misc_dir, $MISC_DIR), matched by norm_key (case, quotes, ？/∶,
+  `/` = ` - `), FLAC wins (`also_in_misc` noted). Phone record
+  `Music/.ripshelf-sync.json`: phone album folder -> {source "flac:rel" /
+  "misc:rel", files {phone name -> "size:mtime" of the source}}. Plan per
+  album: Add / Update (changed fingerprints, stale files removed) / Replace
+  (source label differs, or unrecorded folder with names we wouldn't make) /
+  Adopt (unrecorded, names a subset of ours: old Phone Sync copies) / Remove
+  (unticked). Phone-only albums stay unless unticked; loose files and dot
+  folders never touched. Execute: removals first, then per album: convert on
+  all cores into cache/sync-work, push, save record. Opus size estimate:
+  FLAC x0.18, lossy = own size. `PhoneFs` trait; FolderPhone (folder/KDE
+  Connect mount) done; adb next
+- `ripshelf sync --to DIR [--add TEXT] [--remove TEXT] [--dry-run]`. Dry run
+  against ~/Music/phone (what Phone Sync put on the phone): all 27 albums
+  adopted, nothing to send. 404 library albums scanned in 0.05 s
+- Next: step 2 = adb + KDE Connect PhoneFs (from phone-sync.py, incl. waiting
+  for a sleeping phone, space from adb), step 3 = Phone tab in the GUI; then
+  rip stops making phone copies and ~/Music/phone can go
+
 ## Next steps (planned 2026-11-05)
 
 1. Test a second (shorter) CD with the new Artist/Album layout
