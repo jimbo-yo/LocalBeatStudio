@@ -96,19 +96,25 @@ pub fn read_album(dir: &Path, misc_root: &Path) -> Result<LocalAlbum> {
         });
     }
     let (folder_artist, folder_album) = crate::phone_sync::split_album(&rel);
-    let albums: std::collections::BTreeSet<String> =
-        tracks.iter().map(|t| norm(&t.album)).filter(|a| !a.is_empty()).collect();
+    // Several album names = loose songs; near-identical ones ("Cat Came
+    // Back" / "The Cat Came Back", disc suffixes) count as one album.
+    let names: Vec<&str> = tracks.iter().map(|t| t.album.as_str()).filter(|a| !norm(a).is_empty()).collect();
+    let mixed = names.iter().any(|a| names.iter().any(|b| similarity(a, b) < 0.8));
     let album = Some(most_common(tracks.iter().map(|t| t.album.clone()))).filter(|a| !a.is_empty()).unwrap_or(folder_album);
     let artist = Some(most_common(tracks.iter().map(|t| if t.album_artist.is_empty() { t.artist.clone() } else { t.album_artist.clone() })))
         .filter(|a| !a.is_empty())
         .unwrap_or(folder_artist);
-    Ok(LocalAlbum { dir: dir.to_path_buf(), rel, tracks, album, artist, mixed: albums.len() > 1 })
+    Ok(LocalAlbum { dir: dir.to_path_buf(), rel, tracks, album, artist, mixed })
 }
 
 // ---------------------------------------------------------------- comparing names
 
-/// Lower case, letters and digits only, single spaces; "&" = "and".
+/// Lower case, letters and digits only, accents dropped ("Björk" =
+/// "Bjork"), single spaces; "&" = "and".
 pub fn norm(s: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    use unicode_normalization::char::is_combining_mark;
+    let s: String = s.nfkd().filter(|c| !is_combining_mark(*c)).collect();
     let s = s.to_lowercase().replace('&', " and ").replace(['’', '‘'], "'");
     let s: String = s.chars().map(|c| if c.is_alphanumeric() { c } else { ' ' }).collect();
     s.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -390,7 +396,7 @@ pub fn best<'a>(local: &LocalAlbum, cands: &'a [Candidate], country: Option<&str
 // ---------------------------------------------------------------- writing
 
 /// The tags a match sets on one file (old values are saved before writing).
-const TEXT_KEYS: [ItemKey; 11] = [
+const TEXT_KEYS: [ItemKey; 12] = [
     ItemKey::TrackTitle,
     ItemKey::TrackArtist,
     ItemKey::AlbumTitle,
@@ -402,18 +408,53 @@ const TEXT_KEYS: [ItemKey; 11] = [
     ItemKey::MusicBrainzRecordingId,
     ItemKey::MusicBrainzReleaseGroupId,
     ItemKey::MusicBrainzArtistId,
+    // Not set, but rewritten if the file's comment frame is malformed.
+    ItemKey::Comment,
 ];
 
 fn key_name(k: &ItemKey) -> String {
     format!("{k:?}")
 }
 
-/// Writes the match into the files; returns the undo record (old values).
-pub fn apply(local: &LocalAlbum, c: &Candidate, m: &Match, genres: &[String], cover: Option<&[u8]>) -> Result<Value> {
+/// What [`apply`] did: the undo record (old values of every file written)
+/// and the files it couldn't write.
+pub struct Applied {
+    pub record: Value,
+    pub failed: Vec<(String, String)>,
+}
+
+/// Writes the match into the files. A file that can't be written is listed
+/// in `failed` and the others still go ahead; the undo record always covers
+/// exactly the files that were written.
+pub fn apply(local: &LocalAlbum, c: &Candidate, m: &Match, genres: &[String], cover: Option<&[u8]>) -> Applied {
     let mut undo = serde_json::Map::new();
+    let mut failed = Vec::new();
     for (t, idx) in local.tracks.iter().zip(&m.mapping) {
         let Some(i) = idx else { continue };
-        let ct = &c.tracks[*i];
+        match with_id3_repair(&t.path, || apply_file(t, &c.tracks[*i], c, genres, cover)) {
+            Ok(old) => {
+                undo.insert(t.path.to_string_lossy().into_owned(), old);
+            }
+            Err(e) => failed.push((t.path.to_string_lossy().into_owned(), format!("{e:#}"))),
+        }
+    }
+    if let Some(img) = cover.filter(|_| !undo.is_empty()) {
+        let name = if img.starts_with(&[0x89, b'P', b'N', b'G']) { "cover.png" } else { "cover.jpg" };
+        let p = local.dir.join(name);
+        if !local.dir.join("cover.jpg").exists() && !local.dir.join("cover.png").exists() {
+            match std::fs::write(&p, img) {
+                Ok(()) => {
+                    undo.insert("_cover_file".into(), json!(p.to_string_lossy()));
+                }
+                Err(e) => failed.push((p.to_string_lossy().into_owned(), e.to_string())),
+            }
+        }
+    }
+    Applied { record: Value::Object(undo), failed }
+}
+
+fn apply_file(t: &LocalTrack, ct: &CandTrack, c: &Candidate, genres: &[String], cover: Option<&[u8]>) -> Result<Value> {
+    {
         let mut tf = lofty::read_from_path(&t.path).with_context(|| format!("reading tags of {}", t.path.display()))?;
         let tt = tf.primary_tag_type();
         if tf.tag_mut(tt).is_none() {
@@ -463,18 +504,52 @@ pub fn apply(local: &LocalAlbum, c: &Candidate, m: &Match, genres: &[String], co
             let mime = if img.starts_with(&[0x89, b'P', b'N', b'G']) { MimeType::Png } else { MimeType::Jpeg };
             tag.push_picture(Picture::unchecked(img.to_vec()).pic_type(PictureType::CoverFront).mime_type(mime).build());
         }
-        tag.save_to_path(&t.path, WriteOptions::default()).with_context(|| format!("writing tags to {}", t.path.display()))?;
-        undo.insert(t.path.to_string_lossy().into_owned(), Value::Object(old));
+        save(tag, &t.path)?;
+        Ok(Value::Object(old))
     }
-    if let Some(img) = cover {
-        let name = if img.starts_with(&[0x89, b'P', b'N', b'G']) { "cover.png" } else { "cover.jpg" };
-        let p = local.dir.join(name);
-        if !local.dir.join("cover.jpg").exists() && !local.dir.join("cover.png").exists() {
-            std::fs::write(&p, img).with_context(|| format!("writing {}", p.display()))?;
-            undo.insert("_cover_file".into(), json!(p.to_string_lossy()));
+}
+
+/// Saves a tag.
+fn save(tag: &mut Tag, path: &Path) -> Result<()> {
+    tag.save_to_path(path, WriteOptions::default()).with_context(|| format!("writing tags to {}", path.display()))
+}
+
+/// Runs `op` (read the file, change its tags, save). Some old ID3 comment
+/// frames have an invalid language code (MusicMatch wrote `\0\0\0`) that
+/// lofty refuses to write; they aren't generic tag items (lofty keeps them
+/// aside and writes them back as read), so they're repaired in the file's
+/// ID3v2 tag itself (same text, language "XXX" = unknown) and `op` runs again
+/// from a fresh read.
+fn with_id3_repair<T>(path: &Path, mut op: impl FnMut() -> Result<T>) -> Result<T> {
+    match op() {
+        Err(e) if e.chain().any(|c| c.to_string().contains("frame language")) => {
+            fix_id3_languages(path).with_context(|| format!("repairing the ID3 tag of {}", path.display()))?;
+            op()
         }
+        r => r,
     }
-    Ok(Value::Object(undo))
+}
+
+fn fix_id3_languages(path: &Path) -> Result<()> {
+    use lofty::config::ParseOptions;
+    use lofty::id3::v2::Frame;
+    use lofty::mpeg::MpegFile;
+    let mut mpeg = {
+        let mut f = std::fs::File::open(path)?;
+        MpegFile::read_from(&mut f, ParseOptions::new())?
+    };
+    let Some(id3) = mpeg.id3v2_mut() else { return Ok(()) };
+    let valid = |l: &[u8; 3]| l.iter().all(|b| b.is_ascii_alphabetic());
+    id3.retain_mut(|frame| {
+        match frame {
+            Frame::Comment(c) if !valid(&c.language) => c.language = lofty::tag::items::UNKNOWN_LANGUAGE,
+            Frame::UnsynchronizedText(u) if !valid(&u.language) => u.language = lofty::tag::items::UNKNOWN_LANGUAGE,
+            _ => {}
+        }
+        true
+    });
+    id3.save_to_path(path, WriteOptions::default())?;
+    Ok(())
 }
 
 /// Puts back what [`apply`] changed.
@@ -487,42 +562,46 @@ pub fn undo(record: &Value) -> Result<usize> {
             }
             continue;
         }
-        let mut tf = lofty::read_from_path(path).with_context(|| format!("reading {path}"))?;
-        let tt = tf.primary_tag_type();
-        let Some(tag) = tf.tag_mut(tt) else { continue };
-        for k in TEXT_KEYS {
-            match old[key_name(&k)].as_str() {
-                Some(v) => {
-                    tag.insert_text(k, v.to_string());
-                }
-                None => tag.remove_key(k),
-            }
-        }
-        match old["track"].as_u64() {
-            Some(v) => tag.set_track(v as u32),
-            None => tag.remove_track(),
-        }
-        match old["track_total"].as_u64() {
-            Some(v) => tag.set_track_total(v as u32),
-            None => tag.remove_track_total(),
-        }
-        match old["disk"].as_u64() {
-            Some(v) => tag.set_disk(v as u32),
-            None => tag.remove_disk(),
-        }
-        match old["disk_total"].as_u64() {
-            Some(v) => tag.set_disk_total(v as u32),
-            None => tag.remove_disk_total(),
-        }
-        // Remove the pictures added (they're appended after the old ones).
-        let before = old["pictures_before"].as_u64().unwrap_or(u64::MAX) as usize;
-        while tag.pictures().len() > before {
-            tag.remove_picture(tag.pictures().len() - 1);
-        }
-        tag.save_to_path(path, WriteOptions::default()).with_context(|| format!("writing {path}"))?;
+        with_id3_repair(Path::new(path), || undo_file(path, old))?;
         n += 1;
     }
     Ok(n)
+}
+
+fn undo_file(path: &str, old: &Value) -> Result<()> {
+    let mut tf = lofty::read_from_path(path).with_context(|| format!("reading {path}"))?;
+    let tt = tf.primary_tag_type();
+    let Some(tag) = tf.tag_mut(tt) else { return Ok(()) };
+    for k in TEXT_KEYS {
+        match old[key_name(&k)].as_str() {
+            Some(v) => {
+                tag.insert_text(k, v.to_string());
+            }
+            None => tag.remove_key(k),
+        }
+    }
+    match old["track"].as_u64() {
+        Some(v) => tag.set_track(v as u32),
+        None => tag.remove_track(),
+    }
+    match old["track_total"].as_u64() {
+        Some(v) => tag.set_track_total(v as u32),
+        None => tag.remove_track_total(),
+    }
+    match old["disk"].as_u64() {
+        Some(v) => tag.set_disk(v as u32),
+        None => tag.remove_disk(),
+    }
+    match old["disk_total"].as_u64() {
+        Some(v) => tag.set_disk_total(v as u32),
+        None => tag.remove_disk_total(),
+    }
+    // Remove the pictures added (they're appended after the old ones).
+    let before = old["pictures_before"].as_u64().unwrap_or(u64::MAX) as usize;
+    while tag.pictures().len() > before {
+        tag.remove_picture(tag.pictures().len() - 1);
+    }
+    save(tag, Path::new(path))
 }
 
 // ---------------------------------------------------------------- state
@@ -622,6 +701,8 @@ mod tests {
         assert_eq!(similarity("Waterloo (Remastered 2001)", "Waterloo"), 0.95);
         assert!(similarity("Dancing Queen", "Money, Money, Money") < 0.3);
         assert_eq!(similarity("Simon & Garfunkel", "Simon and Garfunkel"), 1.0);
+        assert_eq!(similarity("Bjork", "Björk"), 1.0);
+        assert_eq!(similarity("Sigur Ros", "Sigur Rós"), 1.0);
     }
 
     #[test]

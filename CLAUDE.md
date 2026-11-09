@@ -576,6 +576,25 @@ exit-code-52 errors) was removed.
   unchanged (ffmpeg md5), tags + cover written; undo -> exactly the original
   (0 pictures, genre back to "Pop"); re-applied and left enriched
 - Writing tags changes mtime, so the phone sync re-sends enriched albums
+- **Full run 2026-11-09** (318 albums): 90 written, 84 review, 106 not found,
+  42 for sound matching. 49 review albums score 1.00 but are single-song
+  folders ("one track: too little") - candidates for AcoustID or a relaxed
+  rule. Fixes from the run: (1) one bad file aborted the whole run -> now per
+  album/file: errors listed, album marked "partial" (retried next run), lookup
+  failures skip only that album; (2) undo record now covers exactly the files
+  written, and is **merged** (first-saved old values kept) when an album is
+  re-applied; (3) MusicMatch-era ID3 COMM frames with language `\0\0\0`
+  (e.g. desc "MusicMatch_Preference") make lofty refuse to write: they aren't
+  generic tag items, so `with_id3_repair` fixes them in the file's Id3v2Tag
+  (language "XXX", text kept) via MpegFile + retain_mut and re-runs the whole
+  read/set/save (the in-memory tag still holds the bad frame); match the
+  error through anyhow's chain (top level is just "failed to write Mpeg
+  file"); (4) names compared without accents (unicode-normalization NFKD,
+  "Bjork" = "Björk"); (5) near-identical album tags ("Cat Came Back" / "The
+  Cat Came Back") aren't "mixed"; (6) normal runs skip albums in review
+  (`--retry` re-checks). Fred Penner "Sandwiches": its first write happened
+  before undo records were per file, so its undo restores the crashed run's
+  (correct) tags, not the originals
 
 ## Next steps (planned 2026-11-05)
 

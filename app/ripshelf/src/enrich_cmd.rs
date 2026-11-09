@@ -35,7 +35,7 @@ pub fn enrich(a: EnrichArgs) -> Result<bool> {
     if a.undo {
         let mut n = 0;
         for rel in state.albums.keys().cloned().collect::<Vec<_>>() {
-            if !wanted(&rel) || state.status(&rel) != Some("applied") {
+            if !wanted(&rel) || !matches!(state.status(&rel), Some("applied" | "partial")) {
                 continue;
             }
             let f = backup_file(&s, &rel);
@@ -56,12 +56,12 @@ pub fn enrich(a: EnrichArgs) -> Result<bool> {
         .filter(|x| x.origin == Origin::Misc && x.track_count() > 0)
         .map(|x| x.rel)
         .filter(|rel| wanted(rel))
-        .filter(|rel| a.retry || !matches!(state.status(rel), Some("applied" | "nomatch" | "mixed")))
+        .filter(|rel| a.retry || !matches!(state.status(rel), Some("applied" | "nomatch" | "mixed" | "review")))
         .take(a.limit.unwrap_or(usize::MAX))
         .collect();
     println!("{} Miscellaneous albums to look up{}", albums.len(), if a.dry_run { " (dry run: nothing written)" } else { "" });
 
-    let (mut applied, mut review, mut nomatch, mut mixed) = (0, 0, 0, 0);
+    let (mut applied, mut review, mut nomatch, mut mixed, mut errors) = (0, 0, 0, 0, 0);
     for rel in albums {
         let local = match enrich::read_album(&s.misc_dir.join(&rel), &s.misc_dir) {
             Ok(l) => l,
@@ -79,18 +79,30 @@ pub fn enrich(a: EnrichArgs) -> Result<bool> {
             state.save()?;
             continue;
         }
-        // Search by the tags, then by the folder names if those differ.
-        let (fa, ft) = phone_sync::split_album(&rel);
-        let mut ids = enrich::search(&local.album, &local.artist)?;
-        if ids.is_empty() && (ft != local.album || fa != local.artist) {
-            ids = enrich::search(&ft, &fa)?;
-        }
-        let mut cands = Vec::new();
-        for id in ids.iter().take(3) {
-            if let Some(c) = enrich::fetch_candidate(id)? {
-                cands.push(c);
+        // Search by the tags, then by the folder names if those differ. A
+        // network/MusicBrainz problem only skips this album (retried next run).
+        let lookup = || -> Result<Vec<enrich::Candidate>> {
+            let (fa, ft) = phone_sync::split_album(&rel);
+            let mut ids = enrich::search(&local.album, &local.artist)?;
+            if ids.is_empty() && (ft != local.album || fa != local.artist) {
+                ids = enrich::search(&ft, &fa)?;
             }
-        }
+            let mut cands = Vec::new();
+            for id in ids.iter().take(3) {
+                if let Some(c) = enrich::fetch_candidate(id)? {
+                    cands.push(c);
+                }
+            }
+            Ok(cands)
+        };
+        let cands = match lookup() {
+            Ok(c) => c,
+            Err(e) => {
+                println!("  ✘ {rel}: lookup failed ({e:#}); will be tried again next run");
+                errors += 1;
+                continue;
+            }
+        };
         let Some((c, m)) = enrich::best(&local, &cands, s.country.as_deref()).filter(|(_, m)| m.score >= 0.5) else {
             println!("  ✘ {rel}: not found on MusicBrainz");
             state.albums.insert(rel.clone(), json!({"status": "nomatch", "when": today()}));
@@ -128,26 +140,48 @@ pub fn enrich(a: EnrichArgs) -> Result<bool> {
         } else {
             ripshelf_core::cover::fetch_front(&release).ok().flatten().map(|p| p.data)
         };
-        let record = enrich::apply(&local, &c, &m, &genres, cover.as_deref())?;
+        let done = enrich::apply(&local, &c, &m, &genres, cover.as_deref());
+        // Merge into an existing undo record: the first saved old values of a
+        // file are its original ones, so they're never replaced.
         let f = backup_file(&s, &rel);
-        std::fs::create_dir_all(f.parent().unwrap())?;
-        std::fs::write(&f, serde_json::to_vec_pretty(&record)?)?;
+        let mut record = std::fs::read(&f)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default();
+        for (k, v) in done.record.as_object().cloned().unwrap_or_default() {
+            record.entry(k).or_insert(v);
+        }
+        if !record.is_empty() {
+            std::fs::create_dir_all(f.parent().unwrap())?;
+            std::fs::write(&f, serde_json::to_vec_pretty(&record)?)?;
+        }
+        let written = done.record.as_object().map(|o| o.keys().filter(|k| !k.starts_with('_')).count()).unwrap_or(0);
         println!(
-            "      written: {} files{}{}",
-            m.mapping.iter().filter(|x| x.is_some()).count(),
+            "      written: {written} files{}{}",
             if cover.is_some() { ", cover" } else { "" },
             genres.first().map(|g| format!(", genre {g}")).unwrap_or_default()
         );
+        for (file, e) in &done.failed {
+            println!("      ✘ couldn't write {file}: {e}");
+        }
+        let status = if done.failed.is_empty() { "applied" } else { "partial" };
         state.albums.insert(
             rel.clone(),
-            json!({"status": "applied", "release": c.release_id, "summary": c.summary(), "score": m.score, "when": today()}),
+            json!({"status": status, "release": c.release_id, "summary": c.summary(), "score": m.score,
+                   "failed": done.failed.iter().map(|(f, e)| json!({"file": f, "error": e})).collect::<Vec<_>>(),
+                   "when": today()}),
         );
         applied += 1;
+        if !done.failed.is_empty() {
+            errors += 1;
+        }
         state.save()?;
     }
     println!(
-        "Done: {applied} {}, {review} to review, {nomatch} not found, {mixed} mixed folders",
-        if a.dry_run { "sure (not written)" } else { "written" }
+        "Done: {applied} {}, {review} to review, {nomatch} not found, {mixed} for matching by sound{}",
+        if a.dry_run { "sure (not written)" } else { "written" },
+        if errors > 0 { format!(", {errors} with problems (see above)") } else { String::new() }
     );
     Ok(true)
 }
