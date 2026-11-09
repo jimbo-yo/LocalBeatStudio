@@ -117,7 +117,14 @@ pub fn norm(s: &str) -> String {
     let s: String = s.nfkd().filter(|c| !is_combining_mark(*c)).collect();
     let s = s.to_lowercase().replace('&', " and ").replace(['’', '‘'], "'");
     let s: String = s.chars().map(|c| if c.is_alphanumeric() { c } else { ' ' }).collect();
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
+    s.split_whitespace()
+        .map(|w| match w {
+            "vol" => "volume",
+            "pt" => "part",
+            w => w,
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Without "(Remastered 2009)", "[Live]" and the like.
@@ -212,15 +219,70 @@ fn is_various(artist: &str) -> bool {
     a.is_empty() || a == "various artists" || a == "various" || a == "compilations" || a == "soundtrack" || a == "va"
 }
 
-/// Release IDs MusicBrainz finds for this album name (best first).
-pub fn search(album: &str, artist: &str) -> Result<Vec<String>> {
-    let title = strip_brackets(album);
-    let title = if title.trim().is_empty() { album.to_string() } else { title };
-    let mut q = format!("release:{}", phrase(title.trim()));
-    if !is_various(artist) {
-        q.push_str(&format!(" AND artist:{}", phrase(artist)));
+/// An album name as iTunes left it, ready to search: `_` (iTunes' stand-in
+/// for `:` and `?`) as a space, no disc label ("(Disc 2)", "- Disc 2",
+/// "-- Disc 2 (Dawn)", "CD1"), no "[Explicit]"-style brackets, no "-ADVANCE".
+pub fn clean_album(album: &str) -> String {
+    let s = album.replace('_', " ");
+    let lower = s.to_lowercase();
+    let mut cut = s.len();
+    for marker in ["disc", "disk", "cd"] {
+        let mut from = 0;
+        while let Some(i) = lower[from..].find(marker).map(|i| i + from) {
+            let before_ok = i == 0 || !lower[..i].chars().next_back().is_some_and(|c| c.is_alphanumeric());
+            let rest = lower[i + marker.len()..].trim_start();
+            if before_ok && rest.starts_with(|c: char| c.is_ascii_digit()) && i > 0 {
+                cut = cut.min(i);
+            }
+            from = i + marker.len();
+        }
     }
-    let Some(v) = http::musicbrainz(&format!("release?query={}&limit=10", url_encode(&q)))? else { return Ok(Vec::new()) };
+    let mut s = s[..cut].to_string();
+    if let Some(i) = s.to_lowercase().find("-advance") {
+        s.truncate(i);
+    }
+    let s = strip_brackets(&s);
+    let s = s.trim().trim_end_matches(|c: char| "-([:,".contains(c) || c.is_whitespace()).trim();
+    if s.is_empty() { album.trim().to_string() } else { s.to_string() }
+}
+
+/// An artist as iTunes left it: `_` as a space, no "Feat. …" guests.
+pub fn clean_artist(artist: &str) -> String {
+    let s = artist.replace('_', " ");
+    let lower = s.to_lowercase();
+    let cut = [" feat. ", " feat ", " featuring ", " ft. "].iter().filter_map(|m| lower.find(m)).min().unwrap_or(s.len());
+    s[..cut].trim().to_string()
+}
+
+/// Words only, for a loose (not exact-phrase) Lucene search.
+fn words(s: &str) -> String {
+    let w: String = s.chars().map(|c| if c.is_alphanumeric() || c == '\'' { c } else { ' ' }).collect();
+    w.split_whitespace().filter(|w| !matches!(w.to_lowercase().as_str(), "and" | "or" | "not")).collect::<Vec<_>>().join(" ")
+}
+
+/// Release IDs MusicBrainz finds for this album name (best first): the exact
+/// phrase first, then a looser search by words (the track-by-track scoring
+/// still decides whether a candidate fits).
+pub fn search(album: &str, artist: &str) -> Result<Vec<String>> {
+    let (title, artist) = (clean_album(album), clean_artist(artist));
+    let various = is_various(&artist);
+    let mut q = format!("release:{}", phrase(&title));
+    if !various {
+        q.push_str(&format!(" AND artist:{}", phrase(&artist)));
+    }
+    let ids = search_query(&q)?;
+    if !ids.is_empty() || words(&title).is_empty() {
+        return Ok(ids);
+    }
+    let mut q = format!("release:({})", words(&title));
+    if !various && !words(&artist).is_empty() {
+        q.push_str(&format!(" AND artist:({})", words(&artist)));
+    }
+    search_query(&q)
+}
+
+fn search_query(q: &str) -> Result<Vec<String>> {
+    let Some(v) = http::musicbrainz(&format!("release?query={}&limit=10", url_encode(q)))? else { return Ok(Vec::new()) };
     Ok(v["releases"]
         .as_array()
         .into_iter()
@@ -356,9 +418,12 @@ pub fn score(local: &LocalAlbum, c: &Candidate) -> Match {
         }
     }
     let n = local.tracks.len().max(1) as f64;
-    let album_similarity = similarity(&local.album, &c.title).max(similarity(&strip_brackets(&local.album), &c.title));
-    let artist_similarity =
-        if is_various(&local.artist) && (is_various(&c.artist) || c.artist.is_empty()) { 1.0 } else { similarity(&local.artist, &c.artist) };
+    let album_similarity = similarity(&local.album, &c.title).max(similarity(&clean_album(&local.album), &c.title));
+    let artist_similarity = if is_various(&local.artist) && (is_various(&c.artist) || c.artist.is_empty()) {
+        1.0
+    } else {
+        similarity(&local.artist, &c.artist).max(similarity(&clean_artist(&local.artist), &c.artist))
+    };
     if album_similarity < 0.8 {
         problems.push(format!("album \"{}\" vs \"{}\"", local.album, c.title));
     }
@@ -702,6 +767,14 @@ mod tests {
         assert!(similarity("Dancing Queen", "Money, Money, Money") < 0.3);
         assert_eq!(similarity("Simon & Garfunkel", "Simon and Garfunkel"), 1.0);
         assert_eq!(similarity("Bjork", "Björk"), 1.0);
+        assert_eq!(clean_album("Crossroads - Disc 2"), "Crossroads");
+        assert_eq!(clean_album("Chill Out In Ibiza -- Disc 2 (Dawn)"), "Chill Out In Ibiza");
+        assert_eq!(clean_album("Pandora's Box [Disc 1]"), "Pandora's Box");
+        assert_eq!(clean_album("Sea Change-ADVANCE"), "Sea Change");
+        assert_eq!(clean_album("E.L.E. (Extinction Level Event)_ The Final World Front"), "E.L.E.   The Final World Front");
+        assert_eq!(clean_album("Discovery"), "Discovery");
+        assert_eq!(clean_artist("Busta Rhymes Feat. Janet Jackson"), "Busta Rhymes");
+        assert_eq!(similarity("The Greatest Hits Vol 1", "The Greatest Hits, Volume 1"), 1.0);
         assert_eq!(similarity("Sigur Ros", "Sigur Rós"), 1.0);
     }
 
