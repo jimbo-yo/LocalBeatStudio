@@ -2,6 +2,7 @@
 //! here, so everything builds and tests the same on Windows and Linux.
 
 pub mod accuraterip;
+pub mod acoustid;
 pub mod album_check;
 pub mod audio_source;
 pub mod config;

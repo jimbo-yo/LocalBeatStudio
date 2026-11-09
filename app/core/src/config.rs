@@ -79,11 +79,13 @@ pub struct Prefs {
     /// The last free-space reading over USB: (total, free, music bytes,
     /// date), for estimating over Wi-Fi, which can't tell.
     pub last_space: Option<(u64, u64, u64, String)>,
+    /// AcoustID application key, for identifying songs by sound (enrich).
+    pub acoustid_key: String,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { notify_phone: false, notify_after_secs: 60, phone_usb: true, reserve_gb: 5.0, last_space: None }
+        Prefs { notify_phone: false, notify_after_secs: 60, phone_usb: true, reserve_gb: 5.0, last_space: None, acoustid_key: String::new() }
     }
 }
 
@@ -103,6 +105,7 @@ impl Prefs {
             notify_after_secs: v.get("notify_after_secs").and_then(|x| x.as_u64()).unwrap_or(d.notify_after_secs),
             phone_usb: v.get("phone_usb").and_then(|x| x.as_bool()).unwrap_or(d.phone_usb),
             reserve_gb: v.get("reserve_gb").and_then(|x| x.as_f64()).unwrap_or(d.reserve_gb),
+            acoustid_key: v.get("acoustid_key").and_then(|x| x.as_str()).unwrap_or("").to_string(),
             last_space: v.get("last_space").and_then(|x| {
                 Some((x["total"].as_u64()?, x["free"].as_u64()?, x["music"].as_u64()?, x["date"].as_str()?.to_string()))
             }),
@@ -121,6 +124,7 @@ impl Prefs {
         v["notify_after_secs"] = self.notify_after_secs.into();
         v["phone_usb"] = self.phone_usb.into();
         v["reserve_gb"] = self.reserve_gb.into();
+        v["acoustid_key"] = self.acoustid_key.clone().into();
         v["last_space"] = match &self.last_space {
             Some((total, free, music, date)) => serde_json::json!({"total": total, "free": free, "music": music, "date": date}),
             None => serde_json::Value::Null,
@@ -197,6 +201,7 @@ mod tests {
             phone_usb: false,
             reserve_gb: 7.5,
             last_space: Some((117, 19, 1, "2026-11-08".into())),
+            acoustid_key: "abc".into(),
         };
         p.save(&s).unwrap();
         assert_eq!(Prefs::load(&s), p);

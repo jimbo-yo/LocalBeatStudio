@@ -3,7 +3,7 @@
 //! the rest are listed for review.
 
 use anyhow::Result;
-use ripshelf_core::config::Settings;
+use ripshelf_core::config::{Prefs, Settings};
 use ripshelf_core::enrich::{self, State};
 use ripshelf_core::musicbrainz::{self, Release};
 use ripshelf_core::phone_sync::{self, Origin};
@@ -15,6 +15,32 @@ pub struct EnrichArgs {
     pub limit: Option<usize>,
     pub retry: bool,
     pub undo: bool,
+    /// Identify the albums name search couldn't, by sound (AcoustID).
+    pub sound: bool,
+    pub acoustid_key: Option<String>,
+}
+
+/// Merges into the album's undo record: the first saved old values of a
+/// file are its original ones, so they're never replaced.
+fn merge_backup(s: &Settings, rel: &str, new: &serde_json::Value) -> Result<()> {
+    let f = backup_file(s, rel);
+    let mut record = std::fs::read(&f)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    for (k, v) in new.as_object().cloned().unwrap_or_default() {
+        record.entry(k).or_insert(v);
+    }
+    if !record.is_empty() {
+        std::fs::create_dir_all(f.parent().unwrap())?;
+        std::fs::write(&f, serde_json::to_vec_pretty(&record)?)?;
+    }
+    Ok(())
+}
+
+fn written_count(record: &serde_json::Value) -> usize {
+    record.as_object().map(|o| o.keys().filter(|k| !k.starts_with('_')).count()).unwrap_or(0)
 }
 
 fn backup_file(s: &Settings, rel: &str) -> std::path::PathBuf {
@@ -29,7 +55,22 @@ fn today() -> String {
 
 pub fn enrich(a: EnrichArgs) -> Result<bool> {
     let s = Settings::load();
+    let mut prefs = Prefs::load(&s);
+    if let Some(k) = &a.acoustid_key {
+        prefs.acoustid_key = k.trim().to_string();
+        prefs.save(&s)?;
+        println!("AcoustID key saved in {}", s.config_dir.join("ripshelf.json").display());
+        if !a.sound {
+            return Ok(true);
+        }
+    }
     let mut state = State::load(&s.config_dir);
+    if a.sound {
+        if prefs.acoustid_key.is_empty() {
+            anyhow::bail!("no AcoustID key yet: get one at https://acoustid.org/new-application, then: ripshelf enrich --acoustid-key KEY");
+        }
+        return sound_pass(&s, &mut state, &a, &prefs.acoustid_key);
+    }
     let wanted = |rel: &str| a.patterns.is_empty() || a.patterns.iter().any(|p| rel.to_lowercase().contains(&p.to_lowercase()));
 
     if a.undo {
@@ -140,23 +181,9 @@ pub fn enrich(a: EnrichArgs) -> Result<bool> {
         } else {
             ripshelf_core::cover::fetch_front(&release).ok().flatten().map(|p| p.data)
         };
-        let done = enrich::apply(&local, &c, &m, &genres, cover.as_deref());
-        // Merge into an existing undo record: the first saved old values of a
-        // file are its original ones, so they're never replaced.
-        let f = backup_file(&s, &rel);
-        let mut record = std::fs::read(&f)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-            .and_then(|v| v.as_object().cloned())
-            .unwrap_or_default();
-        for (k, v) in done.record.as_object().cloned().unwrap_or_default() {
-            record.entry(k).or_insert(v);
-        }
-        if !record.is_empty() {
-            std::fs::create_dir_all(f.parent().unwrap())?;
-            std::fs::write(&f, serde_json::to_vec_pretty(&record)?)?;
-        }
-        let written = done.record.as_object().map(|o| o.keys().filter(|k| !k.starts_with('_')).count()).unwrap_or(0);
+        let done = enrich::apply(&local, &c, &m, &genres, cover.as_deref(), true);
+        merge_backup(&s, &rel, &done.record)?;
+        let written = written_count(&done.record);
         println!(
             "      written: {written} files{}{}",
             if cover.is_some() { ", cover" } else { "" },
@@ -182,6 +209,128 @@ pub fn enrich(a: EnrichArgs) -> Result<bool> {
         "Done: {applied} {}, {review} to review, {nomatch} not found, {mixed} for matching by sound{}",
         if a.dry_run { "sure (not written)" } else { "written" },
         if errors > 0 { format!(", {errors} with problems (see above)") } else { String::new() }
+    );
+    Ok(true)
+}
+
+/// Albums name search couldn't settle (not found, mixed/loose, review),
+/// identified by sound. An album folder whose songs all sit on one release
+/// is written as an album; otherwise each identified song gets its own
+/// release (its tagged album if that has it, else its original album), with
+/// the cover embedded but no cover.jpg (the folder isn't one album).
+fn sound_pass(s: &Settings, state: &mut State, a: &EnrichArgs, key: &str) -> Result<bool> {
+    let wanted = |rel: &str| a.patterns.is_empty() || a.patterns.iter().any(|p| rel.to_lowercase().contains(&p.to_lowercase()));
+    let albums: Vec<String> = phone_sync::scan_library(&s.flac_dir, &s.misc_dir)
+        .into_iter()
+        .filter(|x| x.origin == Origin::Misc && x.track_count() > 0)
+        .map(|x| x.rel)
+        .filter(|rel| wanted(rel))
+        .filter(|rel| match state.status(rel) {
+            Some("nomatch" | "mixed" | "review" | "partial") => true,
+            Some("sound_nomatch" | "sound_partial") => a.retry,
+            Some(_) => false,
+            None => a.retry,
+        })
+        .take(a.limit.unwrap_or(usize::MAX))
+        .collect();
+    println!("{} albums to identify by sound{}", albums.len(), if a.dry_run { " (dry run: nothing written)" } else { "" });
+    let mut cands: std::collections::BTreeMap<String, Option<enrich::Candidate>> = Default::default();
+    let mut extras: std::collections::BTreeMap<String, (Vec<String>, Option<Vec<u8>>)> = Default::default();
+    let (mut albums_done, mut songs_done, mut none) = (0, 0, 0);
+    for rel in albums {
+        let Ok(local) = enrich::read_album(&s.misc_dir.join(&rel), &s.misc_dir) else { continue };
+        let hits = enrich::identify(&local, key);
+        let known = hits.iter().filter(|h| !h.is_empty()).count();
+        if known == 0 {
+            println!("  ✘ {rel}: none of its {} songs identified", local.tracks.len());
+            state.albums.insert(rel.clone(), json!({"status": "sound_nomatch", "when": today()}));
+            none += 1;
+            state.save()?;
+            continue;
+        }
+        let mut fetch = |id: &str| -> Option<enrich::Candidate> {
+            cands.entry(id.to_string()).or_insert_with(|| enrich::fetch_candidate(id).ok().flatten()).clone()
+        };
+        let mut extras_for = |c: &enrich::Candidate| -> (Vec<String>, Option<Vec<u8>>) {
+            extras
+                .entry(c.release_id.clone())
+                .or_insert_with(|| {
+                    let r = Release { id: c.release_id.clone(), release_group_id: c.release_group_id.clone(), artist_ids: c.artist_ids.clone(), ..Default::default() };
+                    (musicbrainz::genres(&r).unwrap_or_default(), ripshelf_core::cover::fetch_front(&r).ok().flatten().map(|p| p.data))
+                })
+                .clone()
+        };
+
+        // As one album, if the folder looks like one.
+        let unnamed = |x: &str| matches!(enrich::norm(x).as_str(), "" | "unknown album" | "untitled" | "unknown");
+        let album_folder = rel.contains('/') && !local.mixed && !(unnamed(&local.album) && unnamed(&phone_sync::split_album(&rel).1));
+        if album_folder {
+            let best = enrich::releases_by_sound(&hits)
+                .iter()
+                .take(3)
+                .filter_map(|id| fetch(id))
+                .map(|c| {
+                    let m = enrich::score_by_sound(&local, &c, &hits);
+                    (c, m)
+                })
+                .max_by(|a, b| (a.1.sure, a.1.score).partial_cmp(&(b.1.sure, b.1.score)).unwrap_or(std::cmp::Ordering::Equal));
+            if let Some((c, m)) = best.filter(|(_, m)| m.sure) {
+                println!("  ✔ {rel}\n      = {} (by sound, {:.0}%)", c.summary(), m.score * 100.0);
+                if !a.dry_run {
+                    let (genres, cover) = extras_for(&c);
+                    let done = enrich::apply(&local, &c, &m, &genres, cover.as_deref(), true);
+                    merge_backup(s, &rel, &done.record)?;
+                    for (f, e) in &done.failed {
+                        println!("      ✘ couldn't write {f}: {e}");
+                    }
+                    state.albums.insert(rel.clone(), json!({"status": if done.failed.is_empty() { "applied" } else { "partial" },
+                        "by": "sound", "release": c.release_id, "summary": c.summary(), "score": m.score, "when": today()}));
+                    state.save()?;
+                }
+                albums_done += 1;
+                continue;
+            }
+        }
+
+        // Song by song.
+        let mut written = 0;
+        for (t, th) in local.tracks.iter().zip(&hits) {
+            let Some(id) = enrich::song_release(th, &t.album) else { continue };
+            let Some(c) = fetch(&id) else { continue };
+            let one = enrich::LocalAlbum { tracks: vec![t.clone()], ..local.clone() };
+            let m = enrich::score_by_sound(&one, &c, std::slice::from_ref(th));
+            if !m.sure {
+                continue;
+            }
+            println!("  ♪ {rel}/{}\n      = {} — {}", t.path.file_name().unwrap_or_default().to_string_lossy(), c.tracks[m.mapping[0].unwrap()].title, c.summary());
+            if !a.dry_run {
+                let (genres, cover) = extras_for(&c);
+                let done = enrich::apply(&one, &c, &m, &genres, cover.as_deref(), false);
+                merge_backup(s, &rel, &done.record)?;
+                written += written_count(&done.record);
+            } else {
+                written += 1;
+            }
+        }
+        songs_done += written;
+        let status = if written == 0 {
+            none += 1;
+            println!("  ✘ {rel}: {known} of {} songs identified, but none confidently", local.tracks.len());
+            "sound_nomatch"
+        } else if written == local.tracks.len() {
+            "applied"
+        } else {
+            println!("      ({written} of {} songs written)", local.tracks.len());
+            "sound_partial"
+        };
+        if !a.dry_run || status == "sound_nomatch" {
+            state.albums.insert(rel.clone(), json!({"status": status, "by": "sound", "songs": written, "when": today()}));
+            state.save()?;
+        }
+    }
+    println!(
+        "Done: {albums_done} albums {w} whole, {songs_done} loose songs {w}, {none} folders not identified",
+        w = if a.dry_run { "would be written" } else { "written" }
     );
     Ok(true)
 }

@@ -22,6 +22,7 @@ use lofty::prelude::*;
 use lofty::tag::Tag;
 use serde_json::{Value, json};
 
+use crate::acoustid::{self, Hit};
 use crate::{audio_source, http, musicbrainz};
 
 // ---------------------------------------------------------------- local side
@@ -458,6 +459,100 @@ pub fn best<'a>(local: &LocalAlbum, cands: &'a [Candidate], country: Option<&str
     scored.into_iter().next()
 }
 
+// ---------------------------------------------------------------- by sound
+
+/// Hits below this aren't trusted at all; a sure match needs [`SURE_SOUND`].
+const MIN_SOUND: f64 = 0.85;
+const SURE_SOUND: f64 = 0.9;
+
+/// Fingerprints each track and looks it up on AcoustID (hits best first;
+/// empty if the song isn't known or the file can't be read).
+pub fn identify(local: &LocalAlbum, key: &str) -> Vec<Vec<Hit>> {
+    local
+        .tracks
+        .iter()
+        .map(|t| {
+            acoustid::fingerprint(&t.path)
+                .and_then(|(fp, secs)| acoustid::lookup(key, &fp, secs))
+                .map(|h| h.into_iter().filter(|h| h.score >= MIN_SOUND).collect())
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+/// Releases holding the folder's songs, best first: most of the folder's
+/// tracks on it, then studio albums, then earliest.
+pub fn releases_by_sound(hits: &[Vec<Hit>]) -> Vec<String> {
+    let mut count: BTreeMap<String, (usize, bool, u32)> = BTreeMap::new();
+    for track_hits in hits {
+        let mut seen = std::collections::BTreeSet::new();
+        for h in track_hits {
+            for r in &h.releases {
+                if seen.insert(r.id.clone()) {
+                    let e = count.entry(r.id.clone()).or_insert((0, r.is_plain_album(), r.year));
+                    e.0 += 1;
+                }
+            }
+        }
+    }
+    let mut v: Vec<(String, (usize, bool, u32))> = count.into_iter().collect();
+    v.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(b.1.1.cmp(&a.1.1)).then(a.1.2.cmp(&b.1.2)));
+    v.into_iter().map(|(id, _)| id).collect()
+}
+
+/// The release for one loose song: the one its ALBUM tag names if that has
+/// the song, else its original studio album (earliest), else the earliest.
+pub fn song_release(hits: &[Hit], album_tag: &str) -> Option<String> {
+    let best = hits.first().filter(|h| h.score >= SURE_SOUND)?;
+    let rels = &best.releases;
+    let earliest = |it: &mut dyn Iterator<Item = &acoustid::HitRelease>| it.min_by_key(|r| r.year).map(|r| r.id.clone());
+    if !norm(album_tag).is_empty() {
+        let named = earliest(&mut rels.iter().filter(|r| similarity(&r.group_title, album_tag) >= 0.8));
+        if named.is_some() {
+            return named;
+        }
+    }
+    earliest(&mut rels.iter().filter(|r| r.is_plain_album())).or_else(|| earliest(&mut rels.iter()))
+}
+
+/// Matches tracks to a release by the recordings their sound was identified
+/// as. Sure when every track maps to its own song on the release with a
+/// confident fingerprint (names don't matter: the sound proves it).
+pub fn score_by_sound(local: &LocalAlbum, c: &Candidate, hits: &[Vec<Hit>]) -> Match {
+    let mut used = vec![false; c.tracks.len()];
+    let mut mapping = Vec::new();
+    let mut total = 0.0;
+    let mut problems = Vec::new();
+    for (t, th) in local.tracks.iter().zip(hits) {
+        let found = th.iter().find_map(|h| {
+            c.tracks.iter().enumerate().find(|(i, ct)| !used[*i] && ct.recording_id == h.recording_id).map(|(i, _)| (i, h.score))
+        });
+        match found {
+            Some((i, score)) => {
+                used[i] = true;
+                mapping.push(Some(i));
+                total += score;
+                if score < SURE_SOUND {
+                    problems.push(format!("\"{}\" only {:.0}% sure", t.title, score * 100.0));
+                }
+            }
+            None => {
+                mapping.push(None);
+                problems.push(format!("\"{}\" not identified on this release", t.title));
+            }
+        }
+    }
+    let n = local.tracks.len().max(1) as f64;
+    Match {
+        mapping,
+        score: total / n,
+        album_similarity: similarity(&local.album, &c.title),
+        artist_similarity: similarity(&local.artist, &c.artist),
+        sure: problems.is_empty(),
+        why_not_sure: problems.join("; "),
+    }
+}
+
 // ---------------------------------------------------------------- writing
 
 /// The tags a match sets on one file (old values are saved before writing).
@@ -491,7 +586,9 @@ pub struct Applied {
 /// Writes the match into the files. A file that can't be written is listed
 /// in `failed` and the others still go ahead; the undo record always covers
 /// exactly the files that were written.
-pub fn apply(local: &LocalAlbum, c: &Candidate, m: &Match, genres: &[String], cover: Option<&[u8]>) -> Applied {
+/// `folder_cover`: also save the cover as cover.jpg (not for a folder of
+/// loose songs from different albums).
+pub fn apply(local: &LocalAlbum, c: &Candidate, m: &Match, genres: &[String], cover: Option<&[u8]>, folder_cover: bool) -> Applied {
     let mut undo = serde_json::Map::new();
     let mut failed = Vec::new();
     for (t, idx) in local.tracks.iter().zip(&m.mapping) {
@@ -503,7 +600,7 @@ pub fn apply(local: &LocalAlbum, c: &Candidate, m: &Match, genres: &[String], co
             Err(e) => failed.push((t.path.to_string_lossy().into_owned(), format!("{e:#}"))),
         }
     }
-    if let Some(img) = cover.filter(|_| !undo.is_empty()) {
+    if let Some(img) = cover.filter(|_| folder_cover && !undo.is_empty()) {
         let name = if img.starts_with(&[0x89, b'P', b'N', b'G']) { "cover.png" } else { "cover.jpg" };
         let p = local.dir.join(name);
         if !local.dir.join("cover.jpg").exists() && !local.dir.join("cover.png").exists() {

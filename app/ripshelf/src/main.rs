@@ -147,6 +147,13 @@ enum Command {
         /// Put back the tags of the matching written albums
         #[arg(long)]
         undo: bool,
+        /// Identify albums name search couldn't (not found, loose songs,
+        /// review) by sound, through AcoustID
+        #[arg(long)]
+        sound: bool,
+        /// Save your AcoustID application key (https://acoustid.org/new-application)
+        #[arg(long)]
+        acoustid_key: Option<String>,
     },
     /// Send a test notification to the phone (KDE Connect, same Wi-Fi)
     Notify {
@@ -201,8 +208,8 @@ fn main() -> ExitCode {
         Command::Sync { usb, wifi, to, add, remove, dry_run } => {
             sync_cmd::sync(sync_cmd::SyncArgs { to, usb, wifi, add, remove, dry_run })
         }
-        Command::Enrich { patterns, dry_run, limit, retry, undo } => {
-            enrich_cmd::enrich(enrich_cmd::EnrichArgs { patterns, dry_run, limit, retry, undo })
+        Command::Enrich { patterns, dry_run, limit, retry, undo, sound, acoustid_key } => {
+            enrich_cmd::enrich(enrich_cmd::EnrichArgs { patterns, dry_run, limit, retry, undo, sound, acoustid_key })
         }
         Command::Notify { message } => {
             let s = ripshelf_core::config::Settings::load();
