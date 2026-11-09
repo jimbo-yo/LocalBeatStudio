@@ -76,7 +76,7 @@ pub fn enrich(a: EnrichArgs) -> Result<bool> {
     if a.undo {
         let mut n = 0;
         for rel in state.albums.keys().cloned().collect::<Vec<_>>() {
-            if !wanted(&rel) || !matches!(state.status(&rel), Some("applied" | "partial")) {
+            if !wanted(&rel) || !matches!(state.status(&rel), Some("applied" | "partial" | "sound_partial")) {
                 continue;
             }
             let f = backup_file(&s, &rel);
@@ -263,7 +263,8 @@ fn sound_pass(s: &Settings, state: &mut State, a: &EnrichArgs, key: &str) -> Res
 
         // As one album, if the folder looks like one.
         let unnamed = |x: &str| matches!(enrich::norm(x).as_str(), "" | "unknown album" | "untitled" | "unknown");
-        let album_folder = rel.contains('/') && !local.mixed && !(unnamed(&local.album) && unnamed(&phone_sync::split_album(&rel).1));
+        let album_folder = (rel.contains('/') || rel.contains(" - ")) && !local.mixed && !(unnamed(&local.album) && unnamed(&phone_sync::split_album(&rel).1));
+        let local_count = local.tracks.len();
         if album_folder {
             let best = enrich::releases_by_sound(&hits)
                 .iter()
@@ -274,8 +275,29 @@ fn sound_pass(s: &Settings, state: &mut State, a: &EnrichArgs, key: &str) -> Res
                     (c, m)
                 })
                 .max_by(|a, b| (a.1.sure, a.1.score).partial_cmp(&(b.1.sure, b.1.score)).unwrap_or(std::cmp::Ordering::Equal));
-            if let Some((c, m)) = best.filter(|(_, m)| m.sure) {
-                println!("  ✔ {rel}\n      = {} (by sound, {:.0}%)", c.summary(), m.score * 100.0);
+            // Not every track fits (a bonus track, an alternate take, an
+            // edition difference): keep the folder one album anyway, writing
+            // the tracks that are surely on the best release and leaving the
+            // rest alone, rather than scattering songs over compilations.
+            let best = best.map(|(c, m)| {
+                if m.sure {
+                    return (c, m, local.clone());
+                }
+                let keep: Vec<usize> = (0..local.tracks.len())
+                    .filter(|&i| m.mapping[i].is_some() && hits[i].first().is_some_and(|h| h.score >= enrich::SURE_SOUND))
+                    .collect();
+                let sub = enrich::LocalAlbum { tracks: keep.iter().map(|&i| local.tracks[i].clone()).collect(), ..local.clone() };
+                let sub_hits: Vec<_> = keep.iter().map(|&i| hits[i].clone()).collect();
+                let sm = enrich::score_by_sound(&sub, &c, &sub_hits);
+                // Most of the folder must be on it, or it isn't this album.
+                let enough = keep.len() * 2 > local.tracks.len();
+                let sm = enrich::Match { sure: sm.sure && enough, ..sm };
+                (c, sm, sub)
+            });
+            if let Some((c, m, local)) = best.filter(|(_, m, _)| m.sure) {
+                let whole = local.tracks.len() == local_count;
+                println!("  ✔ {rel}\n      = {} (by sound, {:.0}%){}", c.summary(), m.score * 100.0,
+                    if whole { String::new() } else { format!(", {} of {local_count} tracks", local.tracks.len()) });
                 if !a.dry_run {
                     let (genres, cover) = extras_for(&c);
                     let done = enrich::apply(&local, &c, &m, &genres, cover.as_deref(), true);
@@ -283,13 +305,15 @@ fn sound_pass(s: &Settings, state: &mut State, a: &EnrichArgs, key: &str) -> Res
                     for (f, e) in &done.failed {
                         println!("      ✘ couldn't write {f}: {e}");
                     }
-                    state.albums.insert(rel.clone(), json!({"status": if done.failed.is_empty() { "applied" } else { "partial" },
+                    state.albums.insert(rel.clone(), json!({"status": if !done.failed.is_empty() { "partial" } else if whole { "applied" } else { "sound_partial" },
                         "by": "sound", "release": c.release_id, "summary": c.summary(), "score": m.score, "when": today()}));
                     state.save()?;
                 }
                 albums_done += 1;
                 continue;
             }
+            // No release holds most of its songs (a mix or playlist
+            // folder): song by song below.
         }
 
         // Song by song.

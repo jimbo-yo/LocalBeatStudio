@@ -468,7 +468,7 @@ pub fn best<'a>(local: &LocalAlbum, cands: &'a [Candidate], country: Option<&str
 
 /// Hits below this aren't trusted at all; a sure match needs [`SURE_SOUND`].
 const MIN_SOUND: f64 = 0.85;
-const SURE_SOUND: f64 = 0.9;
+pub const SURE_SOUND: f64 = 0.9;
 
 /// Fingerprints each track and looks it up on AcoustID (hits best first;
 /// empty if the song isn't known or the file can't be read).
