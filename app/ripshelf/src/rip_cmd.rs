@@ -215,6 +215,12 @@ pub fn phone_copies(src: &Path, dest: &Path, kbps: u32) -> Result<bool> {
         if stats.covers_copied > 0 { format!(", {} cover images copied", stats.covers_copied) } else { String::new() },
         dest.display()
     );
+    if !stats.protected.is_empty() {
+        println!("  {} DRM-protected iTunes files (.m4p) skipped: they can't be converted:", stats.protected.len());
+        for p in &stats.protected {
+            println!("        {}", p.display());
+        }
+    }
     Ok(stats.failed.is_empty())
 }
 

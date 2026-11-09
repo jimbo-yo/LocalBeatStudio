@@ -21,7 +21,7 @@ use libopusenc_static_sys as ope;
 // libopusenc calls into libopus; linking this crate pulls libopus in.
 use opus_static_sys as _;
 
-use crate::flacfile;
+use crate::{audio_source, flacfile};
 
 pub const DEFAULT_BITRATE_KBPS: u32 = 160;
 
@@ -36,9 +36,12 @@ pub struct Stats {
     pub up_to_date: usize,
     pub failed: Vec<(PathBuf, String)>,
     pub covers_copied: usize,
+    /// DRM-protected iTunes files (.m4p): skipped, can't be converted.
+    pub protected: Vec<PathBuf>,
 }
 
-/// Converts every .flac under `src` to `dest/<same relative path>.opus`.
+/// Converts every audio file under `src` (FLAC, AAC/ALAC .m4a, MP3, Ogg
+/// Vorbis; not files that are already Opus) to `dest/<same relative path>.opus`.
 /// `on_file(relative path, result)` is called as each one finishes
 /// (from worker threads).
 pub fn convert_tree(
@@ -52,21 +55,26 @@ pub fn convert_tree(
 
     let mut flacs = Vec::new();
     let mut covers = Vec::new();
+    let mut protected = Vec::new();
     // Skip the destination if it's inside the source.
     let walker = walkdir::WalkDir::new(&src).into_iter().filter_entry(|e| {
         e.path().canonicalize().map(|p| p != dest_abs && !dest_abs.starts_with(&p) || p == src).unwrap_or(true)
     });
     for e in walker.filter_map(|e| e.ok()).filter(|e| e.file_type().is_file()) {
         let name = e.file_name().to_string_lossy().to_lowercase();
-        if name.ends_with(".flac") {
+        let ext = name.rsplit_once('.').map(|(_, x)| x).unwrap_or("");
+        if ext != "opus" && audio_source::AUDIO_EXTENSIONS.contains(&ext) {
             flacs.push(e.into_path());
+        } else if audio_source::is_protected(e.path()) {
+            protected.push(e.path().strip_prefix(&src).unwrap_or(e.path()).to_path_buf());
         } else if COVER_FILES.contains(&name.as_str()) {
             covers.push(e.into_path());
         }
     }
     flacs.sort();
 
-    let mut stats = Stats::default();
+    let mut stats = Stats { protected, ..Default::default() };
+    stats.protected.sort();
     let mut todo = Vec::new();
     for f in &flacs {
         let rel = f.strip_prefix(&src).expect("under src");
@@ -130,15 +138,34 @@ fn skip_tag(name: &str) -> bool {
     n.starts_with("REPLAYGAIN_") || n.starts_with("R128_") || n == "METADATA_BLOCK_PICTURE"
 }
 
-/// Converts one FLAC to Opus at `out` (via `out.part`).
+fn is_flac(p: &Path) -> bool {
+    p.extension().is_some_and(|e| e.eq_ignore_ascii_case("flac"))
+}
+
+/// Lowest bitrate used for a lossy source.
+const MIN_LOSSY_KBPS: u32 = 64;
+
+/// Converts one audio file to Opus at `out` (via `out.part`). FLAC goes
+/// through the reference decoder; AAC, MP3 and others through Symphonia, and
+/// a lossy source is encoded at no more than its own bitrate (a 128 kbps MP3
+/// doesn't get bigger), but at least 64 kbps.
 pub fn convert_file(input: &Path, out: &Path, bitrate_kbps: u32) -> Result<()> {
-    let tags = flacfile::read_tags(input)?.tags;
-    let pictures = flacfile::read_pictures(input).unwrap_or_default();
-    let cover: Option<Vec<u8>> = pictures
-        .iter()
-        .find(|p| p.kind == 3)
-        .or(pictures.first())
-        .map(|p| p.data.clone())
+    let (tags, embedded, kbps) = if is_flac(input) {
+        let pictures = flacfile::read_pictures(input).unwrap_or_default();
+        let cover = pictures.iter().find(|p| p.kind == 3).or(pictures.first()).map(|p| p.data.clone());
+        (flacfile::read_tags(input)?.tags, cover, bitrate_kbps)
+    } else {
+        if audio_source::is_protected(input) {
+            bail!("{} is DRM-protected (iTunes .m4p) and can't be converted", input.display());
+        }
+        let info = audio_source::read_info(input)?;
+        let kbps = match info.bitrate_kbps {
+            Some(b) if !info.lossless => b.clamp(MIN_LOSSY_KBPS, bitrate_kbps.max(MIN_LOSSY_KBPS)),
+            _ => bitrate_kbps,
+        };
+        (info.tags, info.cover, kbps)
+    };
+    let cover: Option<Vec<u8>> = embedded
         .or_else(|| {
             let dir = input.parent()?;
             COVER_FILES.iter().find_map(|n| std::fs::read(dir.join(n)).ok())
@@ -149,7 +176,7 @@ pub fn convert_file(input: &Path, out: &Path, bitrate_kbps: u32) -> Result<()> {
     }
     let name = out.file_name().ok_or_else(|| anyhow!("bad output path"))?.to_string_lossy();
     let tmp = out.with_file_name(format!("{name}.part"));
-    let result = encode(input, &tmp, &tags, cover.as_deref(), bitrate_kbps);
+    let result = encode(input, &tmp, &tags, cover.as_deref(), kbps);
     match result {
         Ok(()) => std::fs::rename(&tmp, out).with_context(|| format!("renaming to {}", out.display())),
         Err(e) => {
@@ -239,7 +266,7 @@ fn encode(input: &Path, tmp: &Path, tags: &[(String, String)], cover: Option<&[u
         let mut enc: Option<Encoder> = None;
         let sink_ptr = &mut *sink as *mut Sink as *mut c_void;
 
-        flacfile::decode_float(input, |pcm, rate, channels| {
+        let on_block = |pcm: &[f32], rate: u32, channels: u32| -> Result<()> {
             if channels == 0 || channels > 2 {
                 bail!("{channels} channels: only mono/stereo supported");
             }
@@ -263,7 +290,8 @@ fn encode(input: &Path, tmp: &Path, tags: &[(String, String)], cover: Option<&[u
             }
             let e = enc.as_ref().unwrap().0;
             ope_check(ope::ope_encoder_write_float(e, pcm.as_ptr(), (pcm.len() / channels as usize) as c_int), "encoding")
-        })?;
+        };
+        if is_flac(input) { flacfile::decode_float(input, on_block)? } else { audio_source::decode_float(input, on_block)? }
 
         let enc = enc.ok_or_else(|| anyhow!("no audio in {}", input.display()))?;
         ope_check(ope::ope_encoder_drain(enc.0), "finishing")?;

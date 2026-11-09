@@ -9,6 +9,7 @@ license.workspace = true
 anyhow.workspace = true
 cdtoc.workspace = true
 claxon.workspace = true
+symphonia.workspace = true
 ureq.workspace = true
 serde_json.workspace = true
 crc32fast.workspace = true
