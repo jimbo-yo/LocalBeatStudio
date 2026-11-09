@@ -135,6 +135,77 @@ impl PhoneFs for FolderPhone {
     }
 }
 
+/// A connection that can be re-established (the phone slept, Wi-Fi dropped).
+pub trait Reconnect {
+    fn reconnect(&self) -> Result<()>;
+}
+
+/// Wraps a phone connection so a failed operation waits for the phone to come
+/// back (reconnecting every 5 s) for up to `wait`, then retries it. Every
+/// [`PhoneFs`] operation is safe to repeat, so retrying can't leave a mess.
+pub struct Patient<'a, P> {
+    pub phone: &'a P,
+    pub wait: std::time::Duration,
+    /// Told when the phone stops answering (to say "wake it up").
+    pub on_wait: &'a (dyn Fn(&str) + Sync),
+    pub cancelled: &'a (dyn Fn() -> bool + Sync),
+}
+
+impl<P: PhoneFs + Reconnect + Sync> Patient<'_, P> {
+    fn retry<T>(&self, mut op: impl FnMut() -> Result<T>) -> Result<T> {
+        let mut give_up = None;
+        loop {
+            match op() {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    let deadline = *give_up.get_or_insert_with(|| std::time::Instant::now() + self.wait);
+                    if std::time::Instant::now() >= deadline || (self.cancelled)() {
+                        return Err(e.context("the phone stopped responding; sync again when it's awake (it continues where it left off)"));
+                    }
+                    (self.on_wait)("The phone isn't responding (asleep?). Wake it up to continue...");
+                    for _ in 0..10 {
+                        if (self.cancelled)() {
+                            return Err(e);
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                    }
+                    let _ = self.phone.reconnect();
+                }
+            }
+        }
+    }
+}
+
+impl<P: PhoneFs + Reconnect + Sync> PhoneFs for Patient<'_, P> {
+    fn list(&self) -> Result<BTreeMap<String, u64>> {
+        self.retry(|| self.phone.list())
+    }
+    fn read(&self, rel: &str) -> Result<Option<Vec<u8>>> {
+        self.retry(|| self.phone.read(rel))
+    }
+    fn write(&self, rel: &str, data: &[u8]) -> Result<()> {
+        self.retry(|| self.phone.write(rel, data))
+    }
+    fn push(&self, local: &Path, rel: &str) -> Result<()> {
+        self.retry(|| self.phone.push(local, rel))
+    }
+    fn remove_file(&self, rel: &str) -> Result<()> {
+        self.retry(|| self.phone.remove_file(rel))
+    }
+    fn remove_dir(&self, rel: &str) -> Result<()> {
+        self.retry(|| self.phone.remove_dir(rel))
+    }
+    fn space(&self) -> Result<Option<(u64, u64)>> {
+        self.phone.space()
+    }
+}
+
+impl Reconnect for FolderPhone {
+    fn reconnect(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
 // ---------------------------------------------------------------- names
 
 /// Matching key for album folders: case, curly/straight quotes, `？`, and

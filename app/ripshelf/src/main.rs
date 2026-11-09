@@ -110,9 +110,15 @@ enum Command {
     /// Make the phone's music folder hold the chosen albums (as Opus, made from
     /// the FLAC and Miscellaneous libraries). Starts from what's there now.
     Sync {
-        /// The phone's music folder (for now a folder: a mounted phone or a test folder)
+        /// The phone over USB (adb, USB debugging on)
         #[arg(long)]
-        to: std::path::PathBuf,
+        usb: bool,
+        /// The phone over Wi-Fi (KDE Connect)
+        #[arg(long)]
+        wifi: bool,
+        /// A folder standing in for the phone's music folder (testing)
+        #[arg(long)]
+        to: Option<std::path::PathBuf>,
         /// Also put on albums whose folder name contains this (repeatable)
         #[arg(long)]
         add: Vec<String>,
@@ -173,7 +179,9 @@ fn main() -> ExitCode {
         Command::Offset { drive, action } => {
             rip_cmd::offset(drive.as_deref(), action.map(|OffsetAction::Set { value }| value))
         }
-        Command::Sync { to, add, remove, dry_run } => sync_cmd::sync(sync_cmd::SyncArgs { to, add, remove, dry_run }),
+        Command::Sync { usb, wifi, to, add, remove, dry_run } => {
+            sync_cmd::sync(sync_cmd::SyncArgs { to, usb, wifi, add, remove, dry_run })
+        }
         Command::Notify { message } => {
             let s = ripshelf_core::config::Settings::load();
             ripshelf_platform::phone_notify::notify(&s.config_dir, &message).map(|phone| {

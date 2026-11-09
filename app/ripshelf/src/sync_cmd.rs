@@ -1,15 +1,18 @@
-//! `ripshelf sync`: the phone sync from the command line. For now the phone is
-//! a folder (a mounted phone, or a test folder); USB/Wi-Fi come next.
+//! `ripshelf sync`: the phone sync from the command line, over USB (adb),
+//! Wi-Fi (KDE Connect) or to a folder (tests).
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use ripshelf_core::config::Settings;
-use ripshelf_core::phone_sync::{self, AlbumAction, FolderPhone, SyncEvent};
+use ripshelf_core::phone_sync::{self, AlbumAction, FolderPhone, Patient, PhoneFs, Reconnect, SyncEvent};
+use ripshelf_platform::phone::{self, AdbPhone, KdeConnectPhone};
 
 pub struct SyncArgs {
-    pub to: PathBuf,
+    pub to: Option<PathBuf>,
+    pub usb: bool,
+    pub wifi: bool,
     pub add: Vec<String>,
     pub remove: Vec<String>,
     pub dry_run: bool,
@@ -21,9 +24,32 @@ fn mb(b: u64) -> String {
 
 pub fn sync(a: SyncArgs) -> Result<bool> {
     let s = Settings::load();
+    match (&a.to, a.usb, a.wifi) {
+        (Some(dir), false, false) => {
+            let p = FolderPhone { root: dir.clone() };
+            run(&p, &format!("folder {}", dir.display()), &s, &a)
+        }
+        (None, true, false) => {
+            let p = AdbPhone::connect(phone::ADB_MUSIC)?;
+            run(&p, &p.describe(), &s, &a)
+        }
+        (None, false, true) => {
+            let p = KdeConnectPhone::connect(phone::preferred_kdeconnect_device(&s.config_dir).as_deref(), phone::KDECONNECT_MUSIC)?;
+            run(&p, &p.describe(), &s, &a)
+        }
+        _ => bail!("say where the phone is: --usb, --wifi, or --to <folder>"),
+    }
+}
+
+fn run<P: PhoneFs + Reconnect + Sync>(raw: &P, desc: &str, s: &Settings, a: &SyncArgs) -> Result<bool> {
+    let fs = Patient {
+        phone: raw,
+        wait: std::time::Duration::from_secs(600),
+        on_wait: &|msg| println!("  {msg}"),
+        cancelled: &|| false,
+    };
     println!("Library: {} + {}", s.flac_dir.display(), s.misc_dir.display());
     let lib = phone_sync::scan_library(&s.flac_dir, &s.misc_dir);
-    let fs = FolderPhone { root: a.to.clone() };
     let phone = phone_sync::read_phone(&fs)?;
     let flac = lib.iter().filter(|x| x.origin == phone_sync::Origin::Flac).count();
     let drm: usize = lib.iter().map(|x| x.protected.len()).sum();
@@ -33,7 +59,11 @@ pub fn sync(a: SyncArgs) -> Result<bool> {
         lib.len() - flac,
         drm
     );
-    println!("Phone folder {}: {} albums, {}", a.to.display(), phone.albums.len(), mb(phone.music_bytes()));
+    println!("Phone: {desc}: {} albums, {} of music", phone.albums.len(), mb(phone.music_bytes()));
+    match phone.space {
+        Some((total, free)) => println!("  {} free of {}", mb(free), mb(total)),
+        None => println!("  (free space unknown over this connection)"),
+    }
 
     let matches = |rel: &str, pats: &[String]| pats.iter().any(|p| rel.to_lowercase().contains(&p.to_lowercase()));
     let mut wanted: BTreeSet<String> = phone_sync::on_phone(&lib, &phone);

@@ -515,9 +515,18 @@ exit-code-52 errors) was removed.
 - `ripshelf sync --to DIR [--add TEXT] [--remove TEXT] [--dry-run]`. Dry run
   against ~/Music/phone (what Phone Sync put on the phone): all 27 albums
   adopted, nothing to send. 404 library albums scanned in 0.05 s
-- Next: step 2 = adb + KDE Connect PhoneFs (from phone-sync.py, incl. waiting
-  for a sleeping phone, space from adb), step 3 = Phone tab in the GUI; then
-  rip stops making phone copies and ~/Music/phone can go
+- Step 2 done (platform/src/phone.rs): `AdbPhone` (one `find|stat` listing,
+  `df -k` space, push to hidden `.<name>.part` then `mv`, `exec-out cat` to
+  read the record; reconnect = `adb get-state`, never `wait-for-device`, which
+  blocks forever) and `KdeConnectPhone` (qdbus mount -> FolderPhone; space
+  unknown; refuses an unmounted folder so it can't look empty). core
+  `Patient` wrapper: failed ops wait for the phone (reconnect every 5 s, up
+  to 10 min, "wake it up" message), safe because every op is idempotent.
+  `ripshelf sync --usb | --wifi | --to DIR`. Dry runs on the Pixel 9: same
+  plan both ways (16 albums, 15 adopt, Led Zeppelin +2 files); USB 0.8 s with
+  19.7 GB free of 117.5 GB, Wi-Fi 3.3 s
+- Next: step 3 = Phone tab in the GUI; then rip stops making phone copies and
+  ~/Music/phone can go
 
 ## Next steps (planned 2026-11-05)
 

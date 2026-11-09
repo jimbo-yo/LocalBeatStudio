@@ -2,6 +2,7 @@
 //! connections later (see docs/rust-app-design.md).
 
 pub mod drive;
+pub mod phone;
 pub mod phone_notify;
 
 #[cfg(windows)]
