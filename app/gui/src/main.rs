@@ -20,11 +20,13 @@ use ripshelf_engine::{self as engine, Event, Frontend, Options, ReleaseChoice, T
 use ripshelf_platform::phone_notify;
 
 mod phone_tab;
+mod review_tab;
 
 #[derive(PartialEq, Clone, Copy)]
 enum Tab {
     Rip,
     Phone,
+    Review,
 }
 
 /// Seconds before the best exact release is used if nobody answers.
@@ -146,6 +148,7 @@ struct App {
     notes: Receiver<String>,
     tab: Tab,
     phone: phone_tab::PhoneTab,
+    review: review_tab::ReviewTab,
 }
 
 impl App {
@@ -183,6 +186,7 @@ impl App {
             notes,
             tab: Tab::Rip,
             phone: phone_tab::PhoneTab::new(),
+            review: review_tab::ReviewTab::new(),
         };
         app.start();
         app
@@ -465,6 +469,9 @@ impl eframe::App for App {
         for line in self.phone.poll(&self.settings, &mut self.prefs, ctx) {
             self.log(line);
         }
+        for line in self.review.poll(ctx) {
+            self.log(line);
+        }
         if self.running || self.choice.is_some() {
             // Keep the countdown and progress moving.
             ctx.request_repaint_after(Duration::from_millis(500));
@@ -474,10 +481,11 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.tab, Tab::Rip, "💿 Rip");
                 ui.selectable_value(&mut self.tab, Tab::Phone, "📱 Phone");
+                ui.selectable_value(&mut self.tab, Tab::Review, "🏷 Review tags");
                 ui.separator();
                 // The rip loop's controls only on the Rip tab (on the Phone tab
                 // they looked like sync controls); there, just its status.
-                if self.tab == Tab::Phone {
+                if self.tab != Tab::Rip {
                     ui.weak(format!("Ripping: {}", if self.running { self.stage.as_str() } else { "stopped" }));
                 } else {
                     if self.running {
@@ -525,6 +533,17 @@ impl eframe::App for App {
             });
         });
 
+        if self.tab == Tab::Review {
+            let mut lines = Vec::new();
+            egui::CentralPanel::default().show(ui, |ui| {
+                lines = self.review.ui(ui, &self.settings);
+            });
+            for l in lines {
+                self.log(l);
+            }
+            self.choice_window(ctx);
+            return;
+        }
         if self.tab == Tab::Phone {
             egui::CentralPanel::default().show(ui, |ui| {
                 self.phone.ui(ui, &self.settings, &mut self.prefs);

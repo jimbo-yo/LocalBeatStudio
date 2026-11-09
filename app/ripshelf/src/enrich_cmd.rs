@@ -5,6 +5,7 @@
 use anyhow::Result;
 use ripshelf_core::config::{Prefs, Settings};
 use ripshelf_core::enrich::{self, State};
+use ripshelf_core::enrich_review;
 use ripshelf_core::musicbrainz::{self, Release};
 use ripshelf_core::phone_sync::{self, Origin};
 use serde_json::json;
@@ -20,38 +21,15 @@ pub struct EnrichArgs {
     pub acoustid_key: Option<String>,
 }
 
-/// Merges into the album's undo record: the first saved old values of a
-/// file are its original ones, so they're never replaced.
 fn merge_backup(s: &Settings, rel: &str, new: &serde_json::Value) -> Result<()> {
-    let f = backup_file(s, rel);
-    let mut record = std::fs::read(&f)
-        .ok()
-        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-        .and_then(|v| v.as_object().cloned())
-        .unwrap_or_default();
-    for (k, v) in new.as_object().cloned().unwrap_or_default() {
-        record.entry(k).or_insert(v);
-    }
-    if !record.is_empty() {
-        std::fs::create_dir_all(f.parent().unwrap())?;
-        std::fs::write(&f, serde_json::to_vec_pretty(&record)?)?;
-    }
-    Ok(())
-}
-
-fn written_count(record: &serde_json::Value) -> usize {
-    record.as_object().map(|o| o.keys().filter(|k| !k.starts_with('_')).count()).unwrap_or(0)
+    enrich_review::merge_backup(&s.config_dir, rel, new)
 }
 
 fn backup_file(s: &Settings, rel: &str) -> std::path::PathBuf {
-    s.config_dir.join("enrich").join("backups").join(format!("{}.json", rel.replace('/', "__")))
+    enrich_review::backup_file(&s.config_dir, rel)
 }
 
-fn today() -> String {
-    // Seconds since 1970 are enough to order runs; the date is for people.
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    format!("{secs}")
-}
+use enrich_review::{now_stamp as today, written_count};
 
 pub fn enrich(a: EnrichArgs) -> Result<bool> {
     let s = Settings::load();
@@ -97,6 +75,7 @@ pub fn enrich(a: EnrichArgs) -> Result<bool> {
         .filter(|x| x.origin == Origin::Misc && x.track_count() > 0)
         .map(|x| x.rel)
         .filter(|rel| wanted(rel))
+        .filter(|rel| state.status(rel) != Some("rejected"))
         .filter(|rel| a.retry || !matches!(state.status(rel), Some("applied" | "nomatch" | "mixed" | "review")))
         .take(a.limit.unwrap_or(usize::MAX))
         .collect();
