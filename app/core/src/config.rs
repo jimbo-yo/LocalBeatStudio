@@ -72,11 +72,18 @@ pub struct Prefs {
     /// Phone notification when a drive has waited this long for the next disc.
     pub notify_phone: bool,
     pub notify_after_secs: u64,
+    /// Phone sync: USB (adb) rather than Wi-Fi (KDE Connect).
+    pub phone_usb: bool,
+    /// Phone sync: always leave this much free on the phone.
+    pub reserve_gb: f64,
+    /// The last free-space reading over USB: (total, free, music bytes,
+    /// date), for estimating over Wi-Fi, which can't tell.
+    pub last_space: Option<(u64, u64, u64, String)>,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { notify_phone: false, notify_after_secs: 60 }
+        Prefs { notify_phone: false, notify_after_secs: 60, phone_usb: true, reserve_gb: 5.0, last_space: None }
     }
 }
 
@@ -94,6 +101,11 @@ impl Prefs {
         Prefs {
             notify_phone: v.get("notify_phone").and_then(|x| x.as_bool()).unwrap_or(d.notify_phone),
             notify_after_secs: v.get("notify_after_secs").and_then(|x| x.as_u64()).unwrap_or(d.notify_after_secs),
+            phone_usb: v.get("phone_usb").and_then(|x| x.as_bool()).unwrap_or(d.phone_usb),
+            reserve_gb: v.get("reserve_gb").and_then(|x| x.as_f64()).unwrap_or(d.reserve_gb),
+            last_space: v.get("last_space").and_then(|x| {
+                Some((x["total"].as_u64()?, x["free"].as_u64()?, x["music"].as_u64()?, x["date"].as_str()?.to_string()))
+            }),
         }
     }
 
@@ -107,6 +119,12 @@ impl Prefs {
             .unwrap_or_else(|| serde_json::json!({}));
         v["notify_phone"] = self.notify_phone.into();
         v["notify_after_secs"] = self.notify_after_secs.into();
+        v["phone_usb"] = self.phone_usb.into();
+        v["reserve_gb"] = self.reserve_gb.into();
+        v["last_space"] = match &self.last_space {
+            Some((total, free, music, date)) => serde_json::json!({"total": total, "free": free, "music": music, "date": date}),
+            None => serde_json::Value::Null,
+        };
         std::fs::create_dir_all(&s.config_dir).with_context(|| format!("creating {}", s.config_dir.display()))?;
         let tmp = f.with_extension("new");
         std::fs::write(&tmp, serde_json::to_string_pretty(&v)? + "\n").with_context(|| format!("writing {}", tmp.display()))?;
@@ -173,7 +191,13 @@ mod tests {
         assert_eq!(Prefs::load(&s), Prefs::default());
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("ripshelf.json"), "{\"other\": 1}").unwrap();
-        let p = Prefs { notify_phone: true, notify_after_secs: 90 };
+        let p = Prefs {
+            notify_phone: true,
+            notify_after_secs: 90,
+            phone_usb: false,
+            reserve_gb: 7.5,
+            last_space: Some((117, 19, 1, "2026-11-08".into())),
+        };
         p.save(&s).unwrap();
         assert_eq!(Prefs::load(&s), p);
         assert!(std::fs::read_to_string(dir.join("ripshelf.json")).unwrap().contains("\"other\": 1"));

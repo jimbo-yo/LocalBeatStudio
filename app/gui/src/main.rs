@@ -19,6 +19,14 @@ use ripshelf_engine::notify::Notifier;
 use ripshelf_engine::{self as engine, Event, Frontend, Options, ReleaseChoice, TrackInfo};
 use ripshelf_platform::phone_notify;
 
+mod phone_tab;
+
+#[derive(PartialEq, Clone, Copy)]
+enum Tab {
+    Rip,
+    Phone,
+}
+
 /// Seconds before the best exact release is used if nobody answers.
 const AUTO_CHOOSE_SECS: u64 = 30;
 
@@ -136,6 +144,8 @@ struct App {
     notifier: Arc<Notifier>,
     /// Results of phone notifications, for the log.
     notes: Receiver<String>,
+    tab: Tab,
+    phone: phone_tab::PhoneTab,
 }
 
 impl App {
@@ -171,6 +181,8 @@ impl App {
             prefs,
             notifier,
             notes,
+            tab: Tab::Rip,
+            phone: phone_tab::PhoneTab::new(),
         };
         app.start();
         app
@@ -450,6 +462,9 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = &ui.ctx().clone();
         self.poll();
+        for line in self.phone.poll(&self.settings, &mut self.prefs, ctx) {
+            self.log(line);
+        }
         if self.running || self.choice.is_some() {
             // Keep the countdown and progress moving.
             ctx.request_repaint_after(Duration::from_millis(500));
@@ -457,16 +472,25 @@ impl eframe::App for App {
 
         egui::Panel::top("top").show(ui, |ui| {
             ui.horizontal(|ui| {
-                if self.running {
-                    if ui.button("⏹ Stop").clicked() {
-                        self.stop();
-                    }
-                } else if ui.button("▶ Start").clicked() {
-                    self.start();
-                }
+                ui.selectable_value(&mut self.tab, Tab::Rip, "💿 Rip");
+                ui.selectable_value(&mut self.tab, Tab::Phone, "📱 Phone");
                 ui.separator();
-                ui.label(&self.stage);
-                if let Some((frac, eta)) = self.overall() {
+                // The rip loop's controls only on the Rip tab (on the Phone tab
+                // they looked like sync controls); there, just its status.
+                if self.tab == Tab::Phone {
+                    ui.weak(format!("Ripping: {}", if self.running { self.stage.as_str() } else { "stopped" }));
+                } else {
+                    if self.running {
+                        if ui.button("⏹ Stop ripping").clicked() {
+                            self.stop();
+                        }
+                    } else if ui.button("▶ Start ripping").clicked() {
+                        self.start();
+                    }
+                    ui.separator();
+                    ui.label(&self.stage);
+                }
+                if let (Tab::Rip, Some((frac, eta))) = (self.tab, self.overall()) {
                     ui.separator();
                     let text = match eta {
                         Some(e) => format!("{:.0}% · {} left", frac * 100.0, fmt_duration(e)),
@@ -500,6 +524,14 @@ impl eframe::App for App {
                 }
             });
         });
+
+        if self.tab == Tab::Phone {
+            egui::CentralPanel::default().show(ui, |ui| {
+                self.phone.ui(ui, &self.settings, &mut self.prefs);
+            });
+            self.choice_window(ctx);
+            return;
+        }
 
         egui::Panel::left("album").resizable(false).exact_size(300.0).show(ui, |ui| {
             ui.add_space(8.0);

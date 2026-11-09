@@ -59,7 +59,11 @@ impl AdbPhone {
                 Some((it.next()?, it.next()?))
             })
             .collect();
-        let Some((serial, _)) = devices.iter().find(|(_, state)| *state == "device") else {
+        // Prefer the cable when the phone is also on wireless debugging: it's
+        // faster, and adb otherwise uses whichever it lists first.
+        let wireless = |serial: &str| serial.contains("tls-connect") || serial.contains(':');
+        let ready = |(s, state): &&(&str, &str)| *state == "device" && !s.is_empty();
+        let Some((serial, _)) = devices.iter().filter(ready).find(|(s, _)| !wireless(s)).or_else(|| devices.iter().find(ready)) else {
             if devices.iter().any(|(_, s)| *s == "unauthorized") {
                 bail!("unlock the phone and tap Allow on the \"Allow USB debugging?\" prompt");
             }
@@ -86,7 +90,13 @@ impl AdbPhone {
     }
 
     pub fn describe(&self) -> String {
-        format!("{} over USB, folder {}", if self.model.is_empty() { &self.serial } else { &self.model }, self.root)
+        // Wireless debugging shows up as "adb-<serial>-<id>._adb-tls-connect._tcp" or ip:port.
+        let how = if self.serial.contains("tls-connect") || self.serial.contains(':') {
+            "over Wi-Fi (wireless debugging)"
+        } else {
+            "over USB"
+        };
+        format!("{} {how}, folder {}", if self.model.is_empty() { &self.serial } else { &self.model }, self.root)
     }
 }
 

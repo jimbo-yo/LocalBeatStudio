@@ -527,8 +527,23 @@ exit-code-52 errors) was removed.
   19.7 GB free of 117.5 GB, Wi-Fi 3.3 s. First real sync 2026-11-08 over USB: 2 Zeppelin
   tracks converted + sent in 16 s, 16 albums adopted, record written; re-run =
   nothing to do
-- Next: step 3 = Phone tab in the GUI; then rip stops making phone copies and
-  ~/Music/phone can go
+- Step 3 (2026-11-08): **Phone tab** in ripshelf-gui (gui/src/phone_tab.rs):
+  adb / KDE Connect choice, Connect/refresh, tiles (music on phone, free after
+  sync, room for more + "about N more albums"), "Always leave free" reserve,
+  search + Show filter, albums grouped by artist (collapsing, artist checkbox,
+  Misc / DRM tags, status from the plan), confirm window, progress + "Stop
+  sync", "wake it up" waits; refreshes after a sync. Prefs gain phone_usb,
+  reserve_gb, last_space (last adb reading, for KDE Connect estimates). Rip
+  tab's Start/Stop ripping only on the Rip tab (users read it as sync
+  controls); Phone tab shows "Ripping: <stage>"
+- Speed: `[profile.dev.package."*"] opt-level = 3` (unoptimised Symphonia made
+  debug-build syncs crawl: 2 songs 29 s -> 7 s); sync now sends each file as
+  soon as it's converted (workers convert, main thread pushes)
+- adb: wireless debugging shows as `adb-<serial>-…._adb-tls-connect._tcp`;
+  with it on, adb may not list the cable at all (seen: Pixel on USB in
+  "charging + debug" but only the TLS device listed) until `adb kill-server`.
+  AdbPhone prefers a non-wireless device and describe() says which route
+- Next: rip stops making phone copies; retire phone-sync.py and ~/Music/phone
 
 ## Next steps (planned 2026-11-05)
 

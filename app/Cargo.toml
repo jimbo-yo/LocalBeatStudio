@@ -26,6 +26,12 @@ clap = { version = "4", features = ["derive"] }
 # Build C dependencies optimized even in debug builds: cmake then compiles
 # libFLAC as Release, against the same C runtime as Rust (/MD, not /MDd), and
 # encoding/decoding isn't painfully slow while developing.
+# Every library optimised even in debug builds: unoptimised Symphonia made a
+# debug-build phone sync crawl (converting AAC/MP3 at a fraction of the
+# speed). Our own crates stay debuggable.
+[profile.dev.package."*"]
+opt-level = 3
+
 [profile.dev.package.libflac-sys]
 opt-level = 3
 debug = false

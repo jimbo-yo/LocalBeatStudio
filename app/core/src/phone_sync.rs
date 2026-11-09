@@ -143,7 +143,7 @@ pub trait Reconnect {
 /// Wraps a phone connection so a failed operation waits for the phone to come
 /// back (reconnecting every 5 s) for up to `wait`, then retries it. Every
 /// [`PhoneFs`] operation is safe to repeat, so retrying can't leave a mess.
-pub struct Patient<'a, P> {
+pub struct Patient<'a, P: ?Sized> {
     pub phone: &'a P,
     pub wait: std::time::Duration,
     /// Told when the phone stops answering (to say "wake it up").
@@ -151,7 +151,7 @@ pub struct Patient<'a, P> {
     pub cancelled: &'a (dyn Fn() -> bool + Sync),
 }
 
-impl<P: PhoneFs + Reconnect + Sync> Patient<'_, P> {
+impl<P: PhoneFs + Reconnect + Sync + ?Sized> Patient<'_, P> {
     fn retry<T>(&self, mut op: impl FnMut() -> Result<T>) -> Result<T> {
         let mut give_up = None;
         loop {
@@ -176,7 +176,7 @@ impl<P: PhoneFs + Reconnect + Sync> Patient<'_, P> {
     }
 }
 
-impl<P: PhoneFs + Reconnect + Sync> PhoneFs for Patient<'_, P> {
+impl<P: PhoneFs + Reconnect + Sync + ?Sized> PhoneFs for Patient<'_, P> {
     fn list(&self) -> Result<BTreeMap<String, u64>> {
         self.retry(|| self.phone.list())
     }
@@ -739,39 +739,79 @@ pub fn execute(
         let rec = manifest.albums.entry(dir.clone()).or_insert_with(|| ManifestAlbum { source: source.clone(), files: BTreeMap::new() });
         rec.source = source;
 
-        // Convert this album's tracks in parallel into the work folder.
+        // Convert this album's tracks on all cores; each one is sent as soon as
+        // it's ready, so converting and sending overlap.
         let tmp = work_dir.join("album");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp)?;
-        let converted = convert_all(&pushes, &tmp, kbps, cancelled);
-        for (push, result) in pushes.iter().zip(converted) {
-            let rel = format!("{dir}/{}", push.file.phone_name);
-            let local = match result {
-                Ok(p) => p,
-                Err(e) => {
-                    let e = format!("{e:#}");
-                    on(SyncEvent::Failed { file: rel.clone(), error: e.clone() });
-                    sum.failed.push((rel, e));
-                    continue;
-                }
-            };
-            if cancelled() {
-                sum.stopped = true;
-                break;
+        let (tx, rx) = std::sync::mpsc::channel::<(usize, Result<PathBuf>)>();
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let abort = std::sync::atomic::AtomicBool::new(false);
+        let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(pushes.len().max(1));
+        let mut failure: Option<anyhow::Error> = None;
+        std::thread::scope(|scope| {
+            for _ in 0..workers {
+                let tx = tx.clone();
+                let (next, abort, pushes, tmp) = (&next, &abort, &pushes, &tmp);
+                scope.spawn(move || {
+                    use std::sync::atomic::Ordering::Relaxed;
+                    loop {
+                        if abort.load(Relaxed) || cancelled() {
+                            break;
+                        }
+                        let i = next.fetch_add(1, Relaxed);
+                        let Some(push) = pushes.get(i) else { break };
+                        if tx.send((i, convert_one(push, tmp, i, kbps))).is_err() {
+                            break;
+                        }
+                    }
+                });
             }
-            on(SyncEvent::Sending { file: rel.clone(), done, total });
-            match fs.push(&local, &rel) {
-                Ok(()) => {
-                    manifest.albums.get_mut(&dir).unwrap().files.insert(push.file.phone_name.clone(), push.file.fingerprint.clone());
-                    sum.sent += 1;
+            drop(tx);
+            for (i, result) in rx {
+                let push = pushes[i];
+                let rel = format!("{dir}/{}", push.file.phone_name);
+                let local = match result {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let e = format!("{e:#}");
+                        on(SyncEvent::Failed { file: rel.clone(), error: e.clone() });
+                        sum.failed.push((rel, e));
+                        continue;
+                    }
+                };
+                if cancelled() {
+                    sum.stopped = true;
+                    abort.store(true, std::sync::atomic::Ordering::Relaxed);
+                    break;
                 }
-                Err(e) => {
-                    let _ = save(&manifest);
-                    let _ = std::fs::remove_dir_all(&tmp);
-                    return Err(e).with_context(|| format!("sending {rel}"));
+                on(SyncEvent::Sending { file: rel.clone(), done, total });
+                match fs.push(&local, &rel) {
+                    Ok(()) => {
+                        manifest
+                            .albums
+                            .get_mut(&dir)
+                            .unwrap()
+                            .files
+                            .insert(push.file.phone_name.clone(), push.file.fingerprint.clone());
+                        sum.sent += 1;
+                        if push.file.convert {
+                            let _ = std::fs::remove_file(&local);
+                        }
+                    }
+                    Err(e) => {
+                        failure = Some(e.context(format!("sending {rel}")));
+                        abort.store(true, std::sync::atomic::Ordering::Relaxed);
+                        break;
+                    }
                 }
+                done += push.file.est_bytes;
             }
-            done += push.file.est_bytes;
+        });
+        if let Some(e) = failure {
+            let _ = save(&manifest);
+            let _ = std::fs::remove_dir_all(&tmp);
+            return Err(e);
         }
         let _ = std::fs::remove_dir_all(&tmp);
         save(&manifest)?;
@@ -783,33 +823,14 @@ pub fn execute(
     Ok(sum)
 }
 
-/// Converts (or, for covers, points at) each file; results in order.
-fn convert_all(pushes: &[&Push], tmp: &Path, kbps: u32, cancelled: &(dyn Fn() -> bool + Sync)) -> Vec<Result<PathBuf>> {
-    use std::sync::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    let results: Mutex<Vec<Option<Result<PathBuf>>>> = Mutex::new((0..pushes.len()).map(|_| None).collect());
-    let next = AtomicUsize::new(0);
-    let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(pushes.len().max(1));
-    std::thread::scope(|scope| {
-        for _ in 0..workers {
-            scope.spawn(|| {
-                loop {
-                    let i = next.fetch_add(1, Ordering::Relaxed);
-                    let Some(push) = pushes.get(i) else { break };
-                    let r = if cancelled() {
-                        Err(anyhow!("stopped"))
-                    } else if push.file.convert {
-                        let out = tmp.join(format!("{i:04}.opus"));
-                        phone_copy::convert_file(&push.file.path, &out, kbps).map(|()| out)
-                    } else {
-                        Ok(push.file.path.clone())
-                    };
-                    results.lock().unwrap()[i] = Some(r);
-                }
-            });
-        }
-    });
-    results.into_inner().unwrap().into_iter().map(|r| r.unwrap_or_else(|| Err(anyhow!("not converted")))).collect()
+/// Converts one file into the work folder (covers are sent as they are).
+fn convert_one(push: &Push, tmp: &Path, i: usize, kbps: u32) -> Result<PathBuf> {
+    if push.file.convert {
+        let out = tmp.join(format!("{i:04}.opus"));
+        phone_copy::convert_file(&push.file.path, &out, kbps).map(|()| out)
+    } else {
+        Ok(push.file.path.clone())
+    }
 }
 
 #[cfg(test)]
