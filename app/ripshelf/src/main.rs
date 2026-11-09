@@ -155,6 +155,8 @@ enum Command {
         #[arg(long)]
         acoustid_key: Option<String>,
     },
+    /// Identify one song by sound (AcoustID) and show what it found
+    Fingerprint { file: std::path::PathBuf },
     /// Send a test notification to the phone (KDE Connect, same Wi-Fi)
     Notify {
         #[arg(default_value = "ripshelf test: phone notifications work.")]
@@ -211,6 +213,19 @@ fn main() -> ExitCode {
         Command::Enrich { patterns, dry_run, limit, retry, undo, sound, acoustid_key } => {
             enrich_cmd::enrich(enrich_cmd::EnrichArgs { patterns, dry_run, limit, retry, undo, sound, acoustid_key })
         }
+        Command::Fingerprint { file } => (|| -> anyhow::Result<bool> {
+            let s = ripshelf_core::config::Settings::load();
+            let key = ripshelf_core::config::Prefs::load(&s).acoustid_key;
+            let (fp, secs) = ripshelf_core::acoustid::fingerprint(&file)?;
+            println!("fingerprint: {} characters, {secs} s, starts {}", fp.len(), &fp[..fp.len().min(24)]);
+            let hits = ripshelf_core::acoustid::lookup(&key, &fp, secs)?;
+            println!("{} recordings found", hits.len());
+            for h in hits.iter().take(5) {
+                let rel = h.releases.first().map(|r| format!("{} ({})", r.group_title, r.year)).unwrap_or_default();
+                println!("  {:.0}%  {}  [{} releases, e.g. {rel}]", h.score * 100.0, h.title, h.releases.len());
+            }
+            Ok(true)
+        })(),
         Command::Notify { message } => {
             let s = ripshelf_core::config::Settings::load();
             ripshelf_platform::phone_notify::notify(&s.config_dir, &message).map(|phone| {

@@ -23,7 +23,7 @@ use lofty::tag::Tag;
 use serde_json::{Value, json};
 
 use crate::acoustid::{self, Hit};
-use crate::{audio_source, http, musicbrainz};
+use crate::{audio_source, http};
 
 // ---------------------------------------------------------------- local side
 
@@ -316,7 +316,12 @@ pub fn parse_candidate(r: &Value) -> Option<Candidate> {
     let media: Vec<&Value> = r["media"]
         .as_array()?
         .iter()
-        .filter(|m| musicbrainz::is_audio_cd(m["format"].as_str().unwrap_or("")) || m["format"].is_null())
+        // Any audio medium (CD, vinyl, digital...): a song's tags don't
+        // depend on the format. Not video discs.
+        .filter(|m| {
+            let f = m["format"].as_str().unwrap_or("").to_lowercase();
+            !(f.contains("dvd") || f.contains("blu-ray") || f.contains("vhs") || f.contains("video"))
+        })
         .collect();
     for (i, m) in media.iter().enumerate() {
         let list = m["tracks"].as_array().cloned().unwrap_or_default();
@@ -472,10 +477,18 @@ pub fn identify(local: &LocalAlbum, key: &str) -> Vec<Vec<Hit>> {
         .tracks
         .iter()
         .map(|t| {
-            acoustid::fingerprint(&t.path)
+            let mut hits: Vec<Hit> = acoustid::fingerprint(&t.path)
                 .and_then(|(fp, secs)| acoustid::lookup(key, &fp, secs))
                 .map(|h| h.into_iter().filter(|h| h.score >= MIN_SOUND).collect())
-                .unwrap_or_default()
+                .unwrap_or_default();
+            // AcoustID's data has bad links (Fernando's fingerprint also lists
+            // "Viva Forever" at the same score): among equally sure hits,
+            // prefer the file's own title, then the most-released recording.
+            hits.sort_by(|a, b| {
+                let key = |h: &Hit| ((h.score * 100.0).round() as i64, (similarity(&t.title, &h.title) * 100.0) as i64, h.releases.len());
+                key(b).cmp(&key(a))
+            });
+            hits
         })
         .collect()
 }
@@ -500,19 +513,20 @@ pub fn releases_by_sound(hits: &[Vec<Hit>]) -> Vec<String> {
     v.into_iter().map(|(id, _)| id).collect()
 }
 
-/// The release for one loose song: the one its ALBUM tag names if that has
-/// the song, else its original studio album (earliest), else the earliest.
-pub fn song_release(hits: &[Hit], album_tag: &str) -> Option<String> {
-    let best = hits.first().filter(|h| h.score >= SURE_SOUND)?;
-    let rels = &best.releases;
-    let earliest = |it: &mut dyn Iterator<Item = &acoustid::HitRelease>| it.min_by_key(|r| r.year).map(|r| r.id.clone());
-    if !norm(album_tag).is_empty() {
-        let named = earliest(&mut rels.iter().filter(|r| similarity(&r.group_title, album_tag) >= 0.8));
-        if named.is_some() {
-            return named;
+/// Releases for one loose song, best first: those its ALBUM tag names, then
+/// studio albums, then the rest; earliest first within each.
+pub fn song_releases(hits: &[Hit], album_tag: &str) -> Vec<String> {
+    let Some(best) = hits.first().filter(|h| h.score >= SURE_SOUND) else { return Vec::new() };
+    let named = |r: &acoustid::HitRelease| !norm(album_tag).is_empty() && similarity(&r.group_title, album_tag) >= 0.8;
+    let mut rels: Vec<&acoustid::HitRelease> = best.releases.iter().collect();
+    rels.sort_by_key(|r| (!named(r), !r.is_plain_album(), r.year));
+    let mut ids: Vec<String> = Vec::new();
+    for r in rels {
+        if !ids.contains(&r.id) {
+            ids.push(r.id.clone());
         }
     }
-    earliest(&mut rels.iter().filter(|r| r.is_plain_album())).or_else(|| earliest(&mut rels.iter()))
+    ids
 }
 
 /// Matches tracks to a release by the recordings their sound was identified

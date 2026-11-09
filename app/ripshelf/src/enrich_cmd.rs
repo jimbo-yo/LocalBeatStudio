@@ -295,13 +295,14 @@ fn sound_pass(s: &Settings, state: &mut State, a: &EnrichArgs, key: &str) -> Res
         // Song by song.
         let mut written = 0;
         for (t, th) in local.tracks.iter().zip(&hits) {
-            let Some(id) = enrich::song_release(th, &t.album) else { continue };
-            let Some(c) = fetch(&id) else { continue };
             let one = enrich::LocalAlbum { tracks: vec![t.clone()], ..local.clone() };
-            let m = enrich::score_by_sound(&one, &c, std::slice::from_ref(th));
-            if !m.sure {
-                continue;
-            }
+            // The first of its best few releases that really has the song.
+            let found = enrich::song_releases(th, &t.album).iter().take(3).find_map(|id| {
+                let c = fetch(id)?;
+                let m = enrich::score_by_sound(&one, &c, std::slice::from_ref(th));
+                m.sure.then_some((c, m))
+            });
+            let Some((c, m)) = found else { continue };
             println!("  ♪ {rel}/{}\n      = {} — {}", t.path.file_name().unwrap_or_default().to_string_lossy(), c.tracks[m.mapping[0].unwrap()].title, c.summary());
             if !a.dry_run {
                 let (genres, cover) = extras_for(&c);

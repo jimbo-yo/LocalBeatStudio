@@ -108,8 +108,13 @@ pub fn lookup(key: &str, fingerprint: &str, seconds: u32) -> Result<Vec<Hit>> {
     let body = format!(
         "client={key}&format=json&duration={seconds}&meta=recordings+releasegroups+releases&fingerprint={fingerprint}"
     );
+    // AcoustID explains errors (bad key, bad fingerprint) in a JSON body
+    // with a 4xx status: read it rather than stopping at the status.
     let mut resp = http::agent()
         .post("https://api.acoustid.org/v2/lookup")
+        .config()
+        .http_status_as_error(false)
+        .build()
         .header("Content-Type", "application/x-www-form-urlencoded")
         .send(body.as_bytes())
         .context("asking AcoustID")?;
