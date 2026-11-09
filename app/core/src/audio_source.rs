@@ -24,6 +24,8 @@ pub struct SourceInfo {
     /// Average bitrate, for not making a lossy file bigger than it was.
     pub bitrate_kbps: Option<u32>,
     pub lossless: bool,
+    /// Length in seconds, if the file says.
+    pub seconds: Option<f64>,
 }
 
 /// Audio file extensions the phone sync takes from the Miscellaneous library.
@@ -65,6 +67,7 @@ pub fn read_info(path: &Path) -> Result<SourceInfo> {
     ) || p.codec.to_string().starts_with("pcm");
     if let (Some(frames), Some(rate)) = (p.n_frames, p.sample_rate) {
         let secs = frames as f64 / rate as f64;
+        info.seconds = Some(secs);
         if secs > 1.0 {
             let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
             info.bitrate_kbps = Some((bytes as f64 * 8.0 / secs / 1000.0).round() as u32);

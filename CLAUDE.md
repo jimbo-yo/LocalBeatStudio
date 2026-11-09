@@ -544,6 +544,38 @@ exit-code-52 errors) was removed.
   "charging + debug" but only the TLS device listed) until `adb kill-server`.
   AdbPhone prefers a non-wireless device and describe() says which route
 - Next: rip stops making phone copies; retire phone-sync.py and ~/Music/phone
+- Install (Linux): `app/tools/install-linux.sh` builds release and installs
+  `~/.local/bin/ripshelf{,-gui}` + `~/.local/share/applications/ripshelf.desktop`
+  (re-run to update; ~13 min the first time)
+
+### ripshelf enrich: tags + covers for Miscellaneous (2026-11-09, step A done)
+- User's choices: write **into the files** (backup of old tags for undo),
+  match **by name, then by sound** (AcoustID, step B, needs a free key),
+  **auto-apply sure matches**, the rest to review (step C: GUI review tab)
+- core/enrich.rs: read_album (tags via Symphonia, title from file name if no
+  TITLE, length), MusicBrainz release search (Lucene `release:"x" AND
+  artist:"y"`, score >= 70; various/compilations: no artist) then the folder
+  names; top 3 candidates fetched (`inc=recordings+artist-credits+
+  release-groups`); score = per local track best title similarity (norm,
+  brackets stripped, Dice) x length factor; **sure** = every track maps with
+  title >= 0.9 and length within 5 s, album >= 0.8, artist >= 0.8 (or both
+  various), more than one track. Partial albums OK. best() ties: track count
+  fits, country, Official, earliest. Writes with **lofty 0.25** (title, artist,
+  album, album artist, date, original date, first genre, MB release/
+  recording/release-group/artist IDs, track/disc numbers) + front cover if the
+  file has no picture + cover.jpg. Undo: old values per file incl.
+  `pictures_before` (MP4 pictures have no type, so count, don't look for
+  "front"); removes added cover.jpg
+- `ripshelf enrich [TEXT...] [--dry-run] [--limit N] [--retry] [--undo]`.
+  State + backups in `~/.config/rip-cd/enrich/` (state.json, backups/
+  `Artist__Album.json`). Statuses: applied / review / nomatch / mixed
+  (several album tags, or "Unknown Album"/"Untitled": for sound matching)
+- First dry run (15 albums): 6 sure (all right), 1 review (AC/DC High
+  Voltage, 2 tracks not on the US edition), the rest Unknown Album / loose
+  single songs. Real write on 10,000 Maniacs "Blind Man's Zoo": audio
+  unchanged (ffmpeg md5), tags + cover written; undo -> exactly the original
+  (0 pictures, genre back to "Pop"); re-applied and left enriched
+- Writing tags changes mtime, so the phone sync re-sends enriched albums
 
 ## Next steps (planned 2026-11-05)
 

@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 ripshelf-core.workspace = true
+serde_json.workspace = true
 ripshelf-platform.workspace = true
 anyhow.workspace = true
 clap.workspace = true

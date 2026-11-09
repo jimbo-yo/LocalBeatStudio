@@ -6,6 +6,7 @@ pub mod album_check;
 pub mod audio_source;
 pub mod config;
 pub mod cover;
+pub mod enrich;
 pub mod flac_encode;
 pub mod flacfile;
 pub mod http;

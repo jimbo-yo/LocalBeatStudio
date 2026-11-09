@@ -1,5 +1,6 @@
 mod drive_cmds;
 mod rip_cmd;
+mod enrich_cmd;
 mod sync_cmd;
 
 use std::path::{Path, PathBuf};
@@ -129,6 +130,24 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Find tags and cover art on MusicBrainz for Miscellaneous albums (old
+    /// .m4a/.mp3): sure matches are written into the files, the rest listed
+    Enrich {
+        /// Only albums whose folder contains this (repeatable; default: all)
+        patterns: Vec<String>,
+        /// Only show what would be written
+        #[arg(long)]
+        dry_run: bool,
+        /// At most this many albums this run
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Look up again albums already done, not found or mixed
+        #[arg(long)]
+        retry: bool,
+        /// Put back the tags of the matching written albums
+        #[arg(long)]
+        undo: bool,
+    },
     /// Send a test notification to the phone (KDE Connect, same Wi-Fi)
     Notify {
         #[arg(default_value = "ripshelf test: phone notifications work.")]
@@ -181,6 +200,9 @@ fn main() -> ExitCode {
         }
         Command::Sync { usb, wifi, to, add, remove, dry_run } => {
             sync_cmd::sync(sync_cmd::SyncArgs { to, usb, wifi, add, remove, dry_run })
+        }
+        Command::Enrich { patterns, dry_run, limit, retry, undo } => {
+            enrich_cmd::enrich(enrich_cmd::EnrichArgs { patterns, dry_run, limit, retry, undo })
         }
         Command::Notify { message } => {
             let s = ripshelf_core::config::Settings::load();

@@ -227,7 +227,7 @@ fn parse_release(r: &Value, disc_id: &str, track_count: usize) -> Option<Release
 /// Whether a MusicBrainz medium format is an audio CD (CD, Enhanced CD,
 /// Copy Control CD, HDCD, SHM-CD, hybrid SACD, DualDisc...), not a DVD,
 /// Blu-ray, video CD or data disc. An unknown format counts as a CD.
-fn is_audio_cd(format: &str) -> bool {
+pub fn is_audio_cd(format: &str) -> bool {
     let f = format.to_ascii_uppercase();
     if f.is_empty() || f == "DUALDISC" {
         return true;
