@@ -78,6 +78,18 @@ exit-code-52 errors) was removed.
 
 ## Folders
 
+- **2026-11-08 layout (decided):** `~/Music/FLAC/` = master copies (ripped
+  with the pipeline); `~/Music/Miscellaneous/` = everything else, moved there
+  as is (old iTunes library: ~1,700 .m4a, ~1,200 .mp3, 316 DRM .m4p that can't
+  be converted, booklets/PDFs, .m4v, plus the 8 old fre:ac `Artist - Album`
+  folders); undo list in `Miscellaneous/.moved-from-Music.json`. No stored
+  Opus: the phone gets Opus made **at sync time** from FLAC or Miscellaneous
+  (lossy sources at min(160 kbps, source bitrate)); `~/Music/phone` goes once
+  ripshelf's phone sync replaces Phone Sync. A FLAC re-rip of a Miscellaneous
+  album wins everywhere (phone copy replaced); the old copy is only removed if
+  the user agrees. Paths below that say `~/Music/Artist - Album` are now under
+  `~/Music/Miscellaneous/`.
+
 - Scripts are edited in `~/development/CDRipPipeline`; `~/Applications/rip-cd.sh`
   and `flac2phone.sh` are **symlinks** to them (2026-11-05: the old separate copy
   in ~/Applications was stale, so the Artist/Album layout never took effect)
