@@ -20,12 +20,15 @@ use ripshelf_engine::notify::Notifier;
 use ripshelf_engine::{self as engine, Event, Frontend, Options, ReleaseChoice, TrackInfo};
 use ripshelf_platform::phone_notify;
 
+mod cover_cache;
+mod library_ui;
 mod phone_tab;
 mod review_tab;
 mod theme;
 
 #[derive(PartialEq, Clone, Copy)]
 enum Tab {
+    Library,
     Rip,
     Phone,
     Review,
@@ -212,6 +215,8 @@ struct App {
     review: review_tab::ReviewTab,
     /// Running Ejects: drive (None = every idle drive) and the result.
     eject: Vec<(Option<String>, Receiver<Vec<String>>)>,
+    /// The music library, the player and their pages.
+    library: library_ui::LibraryUi,
     drive_action: Option<(String, DriveAction)>,
 }
 
@@ -233,7 +238,9 @@ impl App {
                 repaint.request_repaint();
             }),
         );
+        let library = library_ui::LibraryUi::new(&settings, &ctx);
         let mut app = App {
+            library,
             ctx,
             settings,
             rx: None,
@@ -255,7 +262,7 @@ impl App {
             prefs,
             notifier,
             notes,
-            tab: Tab::Rip,
+            tab: Tab::Library,
             phone: phone_tab::PhoneTab::new(),
             review: review_tab::ReviewTab::new(),
             eject: Vec::new(),
@@ -290,11 +297,14 @@ impl App {
                     deadline: Some(Instant::now() + Duration::from_secs(AUTO_CHOOSE_SECS)),
                 });
             }
-            app.tab = match std::env::var("RIPSHELF_DEMO").as_deref() {
-                Ok("phone") => Tab::Phone,
-                Ok("review") => Tab::Review,
-                _ => Tab::Rip,
+            app.library.set_demo_volume();
+            app.tab = match demo.as_str() {
+                "phone" => Tab::Phone,
+                "review" => Tab::Review,
+                "1" | "sr2" | "choice" => Tab::Rip,
+                _ => Tab::Library,
             };
+            app.library.demo = Some(demo.clone());
             app.session = vec![(true, "Radiohead – OK Computer: 12/12".into()), (false, "Lenny Kravitz – Let Love Rule: 11/12".into())];
         } else {
             app.start();
@@ -449,7 +459,57 @@ impl App {
                 ui.add_space(9.0);
                 ui.label(egui::RichText::new("rip · verify · play · carry").small().color(p.faint));
             });
-            ui.add_space(22.0);
+            ui.add_space(16.0);
+            // Search: the library, as you type.
+            let search = egui::Frame::new()
+                .fill(p.card)
+                .stroke(egui::Stroke::new(1.0, p.line))
+                .corner_radius(10.0)
+                .inner_margin(egui::Margin { left: 10, right: 8, top: 5, bottom: 5 })
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let (r, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                        theme::paint_icon(ui.painter(), r, theme::Icon::Search, p.faint);
+                        let edit = egui::TextEdit::singleline(&mut self.library.search)
+                            .id(self.library.search_id)
+                            .hint_text("Search   Ctrl+F")
+                            .frame(egui::Frame::NONE)
+                            .desired_width(ui.available_width());
+                        ui.add(edit)
+                    })
+                    .inner
+                })
+                .inner;
+            if search.changed() && !self.library.search.is_empty() {
+                self.tab = Tab::Library;
+            }
+            if search.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.library.search.clear();
+            }
+            ui.add_space(16.0);
+
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                theme::section_label(ui, "Library");
+            });
+            let lib_counts = self.library.lib.as_ref().map(|l| (l.albums.len(), l.artists.len(), l.songs.len()));
+            for (page, icon, label, count) in [
+                (library_ui::Page::Albums, theme::Icon::Albums, "Albums", lib_counts.map(|c| c.0)),
+                (library_ui::Page::Recent, theme::Icon::Clock, "Recently added", None),
+                (library_ui::Page::Artists, theme::Icon::Artists, "Artists", lib_counts.map(|c| c.1)),
+                (library_ui::Page::Songs, theme::Icon::Songs, "Songs", lib_counts.map(|c| c.2)),
+            ] {
+                let selected = self.tab == Tab::Library && self.library.page == page && self.library.search.is_empty();
+                let n = count.map(|n| n.to_string()).unwrap_or_default();
+                let status = (!n.is_empty()).then_some((n.as_str(), p.faint));
+                if theme::nav_item(ui, icon, label, selected, status).clicked() {
+                    self.tab = Tab::Library;
+                    self.library.page = page;
+                    self.library.album = None;
+                    self.library.search.clear();
+                }
+            }
+            ui.add_space(16.0);
 
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
@@ -729,6 +789,8 @@ impl App {
                 }
             }
             Event::DiscDone { ok } => {
+                // New songs for the library.
+                self.library.rescan(&self.ctx.clone());
                 let label = self.disc_label();
                 let result = self.disc.as_ref().and_then(|d| d.result.clone()).unwrap_or_default();
                 self.session.push((ok, format!("{label}: {result}")));
@@ -838,6 +900,12 @@ impl App {
         for line in self.review.poll(ctx) {
             self.log(line);
         }
+        for line in self.library.poll(ctx) {
+            self.log(line);
+        }
+        if self.tab != Tab::Phone {
+            self.library.keyboard(ctx);
+        }
         let mut done = Vec::new();
         self.eject.retain(|(_, rx)| match rx.try_recv() {
             Ok(lines) => {
@@ -855,6 +923,16 @@ impl App {
             ctx.request_repaint_after(Duration::from_millis(500));
         }
 
+        let p = theme::pal(ui);
+        egui::Panel::bottom("player")
+            .exact_size(94.0)
+            .resizable(false)
+            .frame(egui::Frame::new().fill(p.base))
+            .show(ui, |ui| self.library.now_playing(ui));
+        // egui reserves a little less than a bottom panel draws (the panels
+        // drawn next overlap its top); the bar lays itself out below the
+        // point where they really end.
+        self.library.bar_top = Some(ui.available_rect_before_wrap().bottom());
         self.sidebar(ui);
 
         let p = theme::pal(ui);
@@ -873,6 +951,18 @@ impl App {
             });
 
         let page = egui::Frame::new().fill(p.content).inner_margin(egui::Margin { left: 28, right: 28, top: 22, bottom: 16 });
+        if self.tab == Tab::Library {
+            if self.library.queue_open {
+                egui::Panel::right("upnext")
+                    .resizable(false)
+                    .exact_size(330.0)
+                    .frame(egui::Frame::new().fill(p.base).inner_margin(egui::Margin::same(16)))
+                    .show(ui, |ui| self.library.queue_panel(ui));
+            }
+            egui::CentralPanel::default().frame(page).show(ui, |ui| self.library.page_ui(ui));
+            self.choice_window(ctx);
+            return;
+        }
         if self.tab == Tab::Review {
             let mut lines = Vec::new();
             egui::CentralPanel::default().frame(page).show(ui, |ui| {

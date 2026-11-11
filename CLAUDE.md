@@ -707,6 +707,17 @@ exit-code-52 errors) was removed.
   `ripshelf library [--covers] [--list]`. Fedora laptop 2026-11-11: 3995
   songs, 453 albums, 260 artists, 274 h; cold scan 11-15 s (disk), cached
   0.1 s; 415 covers in 21 s
+- Chunk 5 done: the window opens on the library. gui/library_ui.rs (pages:
+  Albums grid with sort, Recently added, Artists list + albums, Songs list,
+  search from the sidebar (Ctrl+F; artists/albums/songs), album page tinted
+  with the cover's accent; right-click Play next / Add to Up Next / Show in
+  folder; DRM songs locked), now-playing bar on every page (cover, names,
+  shuffle/prev/play/next/repeat, prism seek bar, format badge, volume, Up
+  Next panel), keys Space / arrows. gui/cover_cache.rs: 3 loader threads,
+  256 px grid / 512 px big, LRU-capped textures. Library rescans after each
+  ripped disc. Shuffle/repeat are UI-side (repeat = whole queue).
+  egui 0.37 quirk: a bottom Panel reserves ~10 px less than it draws, so the
+  bar is 94 px and lays out below `bar_top` (where the panels above end)
 
 ### In progress: CUETools DB repair (2026-11-11)
 - Sector voting (core/vote.rs, per sector then per sample, AR-verified only)

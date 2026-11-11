@@ -52,7 +52,7 @@ Dark-first (light variant kept), inspired by light on a CD's data side.
    `<cache>/rip-cd/library.json` (path, size, mtime, tags, duration, format),
    incremental rescans, rescan of an album after a rip; albums grouped by
    album artist + album tag; cover finder + thumbnail cache on disk.
-5. **Library UI + now-playing bar**: Albums grid, album page (tinted),
+5. ✅ (2026-11-11) **Library UI + now-playing bar**: Albums grid, album page (tinted),
    Artists, Songs table, search, Recently added; play / play next / add to
    queue; Up Next drawer; keyboard (space, arrows).
 6. **Desktop integration + polish**: MPRIS via souvlaki (KDE media widget,
@@ -62,7 +62,8 @@ Dark-first (light variant kept), inspired by light on a CD's data side.
 ## Checking the look
 
 `RIPSHELF_DEMO=1` (Rip page), `=phone` or `=review` opens that page with a
-made-up session (`=sr2` shows the second drive, `=choice` the release
+made-up session (`=albums|album|play|artists|songs|recent|search` use the
+real library at volume 0; `=sr2` shows the second drive, `=choice` the release
 dialog); e.g.
 `RIPSHELF_DEMO=1 target/debug/ripshelf-gui & sleep 4; spectacle -b -n -a -o shot.png`.
 

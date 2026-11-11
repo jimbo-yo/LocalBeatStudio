@@ -312,6 +312,18 @@ pub enum Icon {
     Cross,
     Folder,
     Refresh,
+    Shuffle,
+    Repeat,
+    Volume,
+    Mute,
+    Queue,
+    Search,
+    Albums,
+    Artists,
+    Songs,
+    Clock,
+    Plus,
+    Lock,
 }
 
 /// Draws `icon` centred in `rect`, in `color`.
@@ -405,6 +417,87 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
                 c + vec2(-0.8 * s, 0.65 * s),
                 c + vec2(-0.8 * s, -0.6 * s),
             ];
+            painter.add(Shape::line(pts, stroke));
+        }
+        Icon::Shuffle => {
+            let k = 0.62 * s;
+            painter.add(Shape::line(vec![c + vec2(-k, -0.42 * s), c + vec2(-0.2 * s, -0.42 * s), c + vec2(0.25 * s, 0.42 * s), c + vec2(k, 0.42 * s)], stroke));
+            painter.add(Shape::line(vec![c + vec2(-k, 0.42 * s), c + vec2(-0.2 * s, 0.42 * s), c + vec2(0.25 * s, -0.42 * s), c + vec2(k, -0.42 * s)], stroke));
+            for y in [-0.42, 0.42] {
+                let tip = c + vec2(k + 0.12 * s, y * s);
+                painter.add(tri(vec![tip, tip + vec2(-0.3 * s, -0.2 * s), tip + vec2(-0.3 * s, 0.2 * s)]));
+            }
+        }
+        Icon::Repeat => {
+            let r = Rect::from_center_size(c, vec2(1.3 * s, 0.9 * s));
+            painter.rect_stroke(r, 0.3 * s, stroke, StrokeKind::Middle);
+            let tip = pos2(r.center().x + 0.25 * s, r.top());
+            painter.add(tri(vec![tip + vec2(0.18 * s, 0.0), tip + vec2(-0.12 * s, -0.22 * s), tip + vec2(-0.12 * s, 0.22 * s)]));
+        }
+        Icon::Volume | Icon::Mute => {
+            painter.add(Shape::convex_polygon(
+                vec![c + vec2(-0.75 * s, -0.25 * s), c + vec2(-0.4 * s, -0.25 * s), c + vec2(0.05 * s, -0.65 * s), c + vec2(0.05 * s, 0.65 * s), c + vec2(-0.4 * s, 0.25 * s), c + vec2(-0.75 * s, 0.25 * s)],
+                color,
+                Stroke::NONE,
+            ));
+            if icon == Icon::Volume {
+                for (r, a) in [(0.38f32, 0.9f32), (0.7, 0.9)] {
+                    let pts: Vec<Pos2> = (0..=10).map(|i| {
+                        let t = -a + 2.0 * a * i as f32 / 10.0;
+                        c + vec2(0.1 * s, 0.0) + vec2(t.cos(), t.sin()) * r * s
+                    }).collect();
+                    painter.add(Shape::line(pts, stroke));
+                }
+            } else {
+                let o = c + vec2(0.5 * s, 0.0);
+                painter.line_segment([o + vec2(-0.25 * s, -0.25 * s), o + vec2(0.25 * s, 0.25 * s)], stroke);
+                painter.line_segment([o + vec2(-0.25 * s, 0.25 * s), o + vec2(0.25 * s, -0.25 * s)], stroke);
+            }
+        }
+        Icon::Queue => {
+            for (i, y) in [-0.5f32, 0.0, 0.5].iter().enumerate() {
+                let x0 = if i == 0 { -0.75 } else { -0.75 };
+                painter.line_segment([c + vec2(x0 * s, y * s), c + vec2(0.3 * s, y * s)], stroke);
+            }
+            painter.add(tri(vec![c + vec2(0.45 * s, 0.2 * s), c + vec2(0.85 * s, 0.5 * s), c + vec2(0.45 * s, 0.8 * s)]));
+        }
+        Icon::Search => {
+            painter.circle_stroke(c + vec2(-0.15 * s, -0.15 * s), 0.5 * s, stroke);
+            painter.line_segment([c + vec2(0.22 * s, 0.22 * s), c + vec2(0.72 * s, 0.72 * s)], Stroke::new(w * 1.3, color));
+        }
+        Icon::Albums => {
+            for (dx, dy) in [(-1.0f32, -1.0f32), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+                let r = Rect::from_center_size(c + vec2(dx * 0.4 * s, dy * 0.4 * s), Vec2::splat(0.62 * s));
+                painter.rect_stroke(r, 2.0, stroke, StrokeKind::Middle);
+            }
+        }
+        Icon::Artists => {
+            painter.circle_stroke(c + vec2(0.0, -0.35 * s), 0.32 * s, stroke);
+            let pts: Vec<Pos2> = (0..=12).map(|i| {
+                let t = std::f32::consts::PI * (1.0 + i as f32 / 12.0);
+                c + vec2(0.0, 0.75 * s) + vec2(t.cos() * 0.7, t.sin() * 0.62) * s
+            }).collect();
+            painter.add(Shape::line(pts, stroke));
+        }
+        Icon::Songs => {
+            painter.circle_filled(c + vec2(-0.3 * s, 0.45 * s), 0.25 * s, color);
+            painter.line_segment([c + vec2(-0.07 * s, 0.45 * s), c + vec2(-0.07 * s, -0.7 * s)], stroke);
+            painter.add(Shape::line(vec![c + vec2(-0.07 * s, -0.7 * s), c + vec2(0.55 * s, -0.45 * s), c + vec2(0.55 * s, -0.15 * s)], stroke));
+        }
+        Icon::Clock => {
+            painter.circle_stroke(c, 0.75 * s, stroke);
+            painter.add(Shape::line(vec![c + vec2(0.0, -0.45 * s), c, c + vec2(0.35 * s, 0.2 * s)], stroke));
+        }
+        Icon::Plus => {
+            painter.line_segment([c + vec2(-0.6 * s, 0.0), c + vec2(0.6 * s, 0.0)], Stroke::new(w * 1.2, color));
+            painter.line_segment([c + vec2(0.0, -0.6 * s), c + vec2(0.0, 0.6 * s)], Stroke::new(w * 1.2, color));
+        }
+        Icon::Lock => {
+            painter.rect_filled(Rect::from_min_max(c + vec2(-0.55 * s, -0.1 * s), c + vec2(0.55 * s, 0.7 * s)), 2.0, color);
+            let pts: Vec<Pos2> = (0..=10).map(|i| {
+                let t = std::f32::consts::PI * (1.0 + i as f32 / 10.0);
+                c + vec2(0.0, -0.1 * s) + vec2(t.cos() * 0.35, t.sin() * 0.5) * s
+            }).collect();
             painter.add(Shape::line(pts, stroke));
         }
         Icon::Refresh => {
@@ -717,5 +810,81 @@ pub fn spinner(painter: &egui::Painter, center: Pos2, r: f32, time: f64) {
             [center + vec2(a0.cos(), a0.sin()) * r, center + vec2(a1.cos(), a1.sin()) * r],
             Stroke::new(2.2, prism_at(t0)),
         );
+    }
+}
+
+/// `text` on one line, cut with "…" to fit `max_width`.
+pub fn one_line(ui: &Ui, text: &str, font: FontId, color: Color32, max_width: f32) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), font, color);
+    job.wrap = egui::text::TextWrapping { max_width: max_width.max(1.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+    ui.painter().layout_job(job)
+}
+
+/// A slim bar you can click or drag: the prism shows the part done. Returns
+/// the new fraction once the user lets go (or clicks). While dragging,
+/// `preview` holds where the knob is.
+pub fn seek_bar(ui: &mut Ui, width: f32, fraction: f32, preview: &mut Option<f32>) -> Option<f32> {
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 16.0), Sense::click_and_drag());
+    let p = pal(ui);
+    let at = |pos: Pos2| ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+    let mut result = None;
+    if resp.dragged() {
+        if let Some(pos) = resp.interact_pointer_pos() {
+            *preview = Some(at(pos));
+        }
+    }
+    if resp.drag_stopped() || resp.clicked() {
+        if let Some(pos) = resp.interact_pointer_pos() {
+            result = Some(at(pos));
+        }
+        *preview = None;
+    }
+    let f = preview.unwrap_or(fraction).clamp(0.0, 1.0);
+    let hot = resp.hovered() || resp.dragged();
+    let h = if hot { 6.0 } else { 4.0 };
+    let track = Rect::from_center_size(rect.center(), vec2(rect.width(), h));
+    ui.painter().rect_filled(track, h / 2.0, p.line);
+    if f > 0.0 {
+        let fill = Rect::from_min_size(track.min, vec2((track.width() * f).max(h), h));
+        gradient_rect(ui.painter(), fill, h / 2.0, |t| prism_at(t * f));
+    }
+    if hot {
+        ui.painter().circle_filled(pos2(track.left() + track.width() * f, track.center().y), 7.0, Color32::WHITE);
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    result
+}
+
+/// A small horizontal slider (volume); returns the new value while dragged.
+pub fn mini_slider(ui: &mut Ui, width: f32, value: f32) -> Option<f32> {
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 16.0), Sense::click_and_drag());
+    let p = pal(ui);
+    let mut v = value;
+    let mut changed = None;
+    if resp.dragged() || resp.clicked() {
+        if let Some(pos) = resp.interact_pointer_pos() {
+            v = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+            changed = Some(v);
+        }
+    }
+    let track = Rect::from_center_size(rect.center(), vec2(rect.width(), 4.0));
+    ui.painter().rect_filled(track, 2.0, p.line);
+    let fill = Rect::from_min_size(track.min, vec2(track.width() * v, 4.0));
+    ui.painter().rect_filled(fill, 2.0, if resp.hovered() || resp.dragged() { prism_at(0.3) } else { p.dim });
+    if resp.hovered() || resp.dragged() {
+        ui.painter().circle_filled(pos2(fill.right(), track.center().y), 6.0, Color32::WHITE);
+    }
+    changed
+}
+
+/// Three bouncing bars: "this one is playing" (still when paused).
+pub fn equalizer(painter: &egui::Painter, rect: Rect, time: f64, moving: bool) {
+    for i in 0..3 {
+        let phase = time * (5.0 + i as f64 * 1.7) + i as f64;
+        let h = if moving { 0.35 + 0.65 * (0.5 + 0.5 * phase.sin()) as f32 } else { 0.35 + 0.2 * i as f32 };
+        let w = rect.width() / 5.0;
+        let x = rect.left() + w * (2 * i) as f32;
+        let bar = Rect::from_min_max(pos2(x, rect.bottom() - rect.height() * h), pos2(x + w, rect.bottom()));
+        painter.rect_filled(bar, 1.0, prism_at(0.15 + 0.25 * i as f32));
     }
 }

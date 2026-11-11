@@ -3464,6 +3464,7 @@ dependencies = [
  "ripshelf-core",
  "ripshelf-engine",
  "ripshelf-platform",
+ "ripshelf-player",
 ]
 
 [[package]]
