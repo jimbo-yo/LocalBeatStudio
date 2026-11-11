@@ -620,7 +620,17 @@ exit-code-52 errors) was removed.
   The Standells' "Dirty Water". Unwritable: Fiona Apple "Extraordinary
   Machine.mp3" (zero padding after ID3: lofty finds no format), En Vogue
   "My Lovin'" (TDRC with "_")
-- Next: step C, GUI review tab (show summary/why, accept/reject)
+- Step C done: GUI tab "Review tags" (gui/review_tab.rs, core/enrich_review.rs):
+  Accept (proposed or pasted release link/ID; tracks mapped by title+length),
+  Leave as is (status "rejected", runs skip it), Open folder
+- Duplicates after enrich (2026-11-10): Miscellaneous copies of FLAC albums
+  under other folder names got the same album tags, so players merged them.
+  phone_sync now also matches by album artist + album tags (all songs must
+  agree; FLAC wins) and `alias_phone` re-keys their old phone folders so the
+  sync replaces them. `ripshelf superseded [--move]` lists them / moves them
+  to `~/Music/Superseded` (nothing deleted; pairs in
+  `~/.config/rip-cd/superseded.json`, which alias_phone also reads). 16
+  folders (1.3 GB) moved 2026-11-11
 
 ## Next steps (planned 2026-11-05)
 
