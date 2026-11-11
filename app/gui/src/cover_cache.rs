@@ -9,8 +9,8 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
 use eframe::egui::{self, Color32, ColorImage, TextureHandle};
-use ripshelf_core::covers;
-use ripshelf_core::library::Library;
+use localbeat_core::covers;
+use localbeat_core::library::Library;
 
 const MAX: usize = 260;
 

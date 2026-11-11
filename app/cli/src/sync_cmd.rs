@@ -1,13 +1,13 @@
-//! `ripshelf sync`: the phone sync from the command line, over USB (adb),
+//! `localbeat sync`: the phone sync from the command line, over USB (adb),
 //! Wi-Fi (KDE Connect) or to a folder (tests).
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
-use ripshelf_core::config::Settings;
-use ripshelf_core::phone_sync::{self, AlbumAction, FolderPhone, Patient, PhoneFs, Reconnect, SyncEvent};
-use ripshelf_platform::phone::{self, AdbPhone, KdeConnectPhone};
+use localbeat_core::config::Settings;
+use localbeat_core::phone_sync::{self, AlbumAction, FolderPhone, Patient, PhoneFs, Reconnect, SyncEvent};
+use localbeat_platform::phone::{self, AdbPhone, KdeConnectPhone};
 
 pub struct SyncArgs {
     pub to: Option<PathBuf>,

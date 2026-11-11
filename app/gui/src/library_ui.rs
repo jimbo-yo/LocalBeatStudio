@@ -1,6 +1,6 @@
 //! The music side of the app: the library (Albums, Recently added, Artists,
 //! Songs, search, album pages), the now-playing bar on every page, and the
-//! Up Next queue. Playback is ripshelf-player; the library comes from
+//! Up Next queue. Playback is localbeat-player; the library comes from
 //! core::library (scanned in the background, cached).
 
 use std::collections::HashMap;
@@ -11,9 +11,9 @@ use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 
 use eframe::egui::{self, Color32, Rect, Sense, Vec2, pos2, vec2};
-use ripshelf_core::config::Settings;
-use ripshelf_core::library::{Library, Origin, Song, norm};
-use ripshelf_player::{Player, State, Status};
+use localbeat_core::config::Settings;
+use localbeat_core::library::{Library, Origin, Song, norm};
+use localbeat_player::{Player, State, Status};
 
 use crate::cover_cache::CoverCache;
 use crate::media_keys::SharedLibrary;
@@ -57,7 +57,7 @@ struct Session {
     repeat: bool,
 }
 
-type ScanResult = Result<(Arc<Library>, ripshelf_core::library::ScanStats), String>;
+type ScanResult = Result<(Arc<Library>, localbeat_core::library::ScanStats), String>;
 
 pub struct LibraryUi {
     settings: Settings,
@@ -89,7 +89,7 @@ pub struct LibraryUi {
     last: Status,
     actions: Vec<Action>,
     log: Vec<String>,
-    /// RIPSHELF_DEMO value: "album", "play", "search", "artists"... (screenshots).
+    /// LOCALBEAT_DEMO value: "album", "play", "search", "artists"... (screenshots).
     pub demo: Option<String>,
     /// Where the page panels end (set by main.rs each frame): the bar's top.
     pub bar_top: Option<f32>,
@@ -396,8 +396,8 @@ impl LibraryUi {
                     let mut order: Vec<usize> = (0..lib.albums.len()).collect();
                     match self.sort {
                         AlbumSort::Artist => {}
-                        AlbumSort::Title => order.sort_by_key(|&i| ripshelf_core::library::sort_name(&lib.albums[i].title)),
-                        AlbumSort::Year => order.sort_by_key(|&i| (std::cmp::Reverse(lib.albums[i].year), ripshelf_core::library::sort_name(&lib.albums[i].artist))),
+                        AlbumSort::Title => order.sort_by_key(|&i| localbeat_core::library::sort_name(&lib.albums[i].title)),
+                        AlbumSort::Year => order.sort_by_key(|&i| (std::cmp::Reverse(lib.albums[i].year), localbeat_core::library::sort_name(&lib.albums[i].artist))),
                     }
                     let subtitle = format!("{} albums · {} songs", lib.albums.len(), lib.songs.len());
                     let mut sort = self.sort;
@@ -588,7 +588,7 @@ impl LibraryUi {
                 ui.add_space(26.0);
                 ui.horizontal(|ui| {
                     if album.origin == Origin::Flac {
-                        theme::badge(ui, "CD RIP", theme::OK).on_hover_text("Ripped and verified with ripshelf");
+                        theme::badge(ui, "CD RIP", theme::OK).on_hover_text("Ripped and verified with LocalBeat Studio");
                     }
                     if let Some(f) = format_label(&songs) {
                         theme::badge(ui, &f, if songs.iter().all(|s| s.lossless()) { theme::prism_at(0.1) } else { p.dim });

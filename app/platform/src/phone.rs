@@ -1,5 +1,5 @@
 //! Reaching the phone's music folder, for the phone sync
-//! (`ripshelf_core::phone_sync`): USB through adb, or Wi-Fi through KDE
+//! (`localbeat_core::phone_sync`): USB through adb, or Wi-Fi through KDE
 //! Connect's mount of the phone's storage. Ported from phone-sync.py.
 
 use std::collections::BTreeMap;
@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use anyhow::{Context, Result, anyhow, bail};
-use ripshelf_core::phone_sync::{FolderPhone, PhoneFs, Reconnect};
+use localbeat_core::phone_sync::{FolderPhone, PhoneFs, Reconnect};
 
 /// Default music folders: what LocalBeat/Musicolet read ("Internal storage/Music").
 pub const ADB_MUSIC: &str = "/sdcard/Music";
@@ -128,7 +128,7 @@ impl PhoneFs for AdbPhone {
     }
 
     fn write(&self, rel: &str, data: &[u8]) -> Result<()> {
-        let tmp = std::env::temp_dir().join(format!("ripshelf-adb-{}.tmp", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("localbeat-adb-{}.tmp", std::process::id()));
         std::fs::write(&tmp, data)?;
         let r = self.push(&tmp, rel);
         let _ = std::fs::remove_file(&tmp);

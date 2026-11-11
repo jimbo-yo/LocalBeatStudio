@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["core", "platform", "engine", "ripshelf", "gui", "player"]
+members = ["core", "platform", "engine", "cli", "gui", "player"]
 
 [workspace.package]
 edition = "2024"
@@ -8,9 +8,9 @@ version = "0.1.0"
 license = "MIT"
 
 [workspace.dependencies]
-ripshelf-core = { path = "core" }
-ripshelf-platform = { path = "platform" }
-ripshelf-engine = { path = "engine" }
+localbeat-core = { path = "core" }
+localbeat-platform = { path = "platform" }
+localbeat-engine = { path = "engine" }
 anyhow = "1"
 cdtoc = { version = "0.13", features = ["accuraterip", "musicbrainz"] }
 claxon = "0.4"

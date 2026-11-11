@@ -8,14 +8,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail};
-use ripshelf_core::accuraterip::{self, Verdict};
-use ripshelf_core::config::{self, Settings};
-use ripshelf_core::flac_encode::Picture;
-use ripshelf_core::musicbrainz::{self, Release};
-use ripshelf_core::rip::{self, Acceptance, Metadata, RipContext};
-use ripshelf_core::secure_read::SectorSource;
-use ripshelf_core::{cover, lock, phone_copy};
-use ripshelf_platform::drive::{self, Drive, DriveIdentity};
+use localbeat_core::accuraterip::{self, Verdict};
+use localbeat_core::config::{self, Settings};
+use localbeat_core::flac_encode::Picture;
+use localbeat_core::musicbrainz::{self, Release};
+use localbeat_core::rip::{self, Acceptance, Metadata, RipContext};
+use localbeat_core::secure_read::SectorSource;
+use localbeat_core::{cover, lock, phone_copy};
+use localbeat_platform::drive::{self, Drive, DriveIdentity};
 
 pub mod notify;
 
@@ -121,7 +121,7 @@ fn saved_offset(s: &Settings, id: Option<&DriveIdentity>) -> Option<i32> {
     config::lookup_offset(&s.offsets_file(), &id.key(), &id.serial)
 }
 
-/// The first drive with an audio CD that no other ripshelf is using.
+/// The first drive with an audio CD that no other localbeat is using.
 pub fn free_drive_with_audio(s: &Settings) -> Result<Option<String>> {
     for path in drive::drive_paths() {
         let free = lock::try_lock(&s.cache_dir, &lock::drive_lock_name(&path))?.is_some();
@@ -136,7 +136,7 @@ pub fn free_drive_with_audio(s: &Settings) -> Result<Option<String>> {
 #[derive(Debug, Default)]
 pub struct EjectReport {
     pub ejected: Vec<String>,
-    /// Being ripped (by this or another ripshelf): left alone.
+    /// Being ripped (by this or another LocalBeat Studio): left alone.
     pub busy: Vec<String>,
     pub failed: Vec<(String, String)>,
 }
@@ -160,7 +160,7 @@ pub fn eject_idle(s: &Settings) -> EjectReport {
 #[derive(Debug, PartialEq)]
 pub enum EjectOutcome {
     Ejected,
-    /// Being ripped (by this or another ripshelf): left alone.
+    /// Being ripped (by this or another LocalBeat Studio): left alone.
     Busy,
     NoDisc,
 }
@@ -199,7 +199,7 @@ pub fn rip_once(s: &Settings, opts: &Options, fe: &dyn Frontend) -> Result<bool>
         None => free_drive_with_audio(s)?.ok_or_else(|| anyhow!("no drive that isn't busy has an audio CD in it"))?,
     };
     let _lock = lock::try_lock(&s.cache_dir, &lock::drive_lock_name(&path))?
-        .ok_or_else(|| anyhow!("{path} is busy: another ripshelf is ripping from it"))?;
+        .ok_or_else(|| anyhow!("{path} is busy: another localbeat is ripping from it"))?;
     rip_disc(&path, s, opts, fe)
 }
 
@@ -294,7 +294,7 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
         Some(o) => o,
         None => bail!(
             "No read offset saved for this drive ({model}). Look up the model at \
-             https://www.accuraterip.com/driveoffsets.htm and save it with: ripshelf offset set <N>"
+             https://www.accuraterip.com/driveoffsets.htm and save it with: localbeat offset set <N>"
         ),
     };
     fe.event(Event::DiscStart { drive: drive.path().to_string(), model: model.clone(), offset });
@@ -395,7 +395,7 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
         fe.event(Event::AccurateRip { in_database: entries.is_some() });
 
         let mut header = format!(
-            "== ripshelf {} rip, {} ==\nDrive: {model} ({})\nDisc ID: {}  CDTOC: {toc}\n",
+            "== LocalBeat Studio {} rip, {} ==\nDrive: {model} ({})\nDisc ID: {}  CDTOC: {toc}\n",
             env!("CARGO_PKG_VERSION"),
             now.format("%Y-%m-%d %H:%M"),
             id.as_ref().map(|i| i.key()).unwrap_or_default(),

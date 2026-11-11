@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
-use ripshelf_core::accuraterip::{self, Verdict};
-use ripshelf_core::secure_read;
-use ripshelf_platform::drive::{self, Drive};
+use localbeat_core::accuraterip::{self, Verdict};
+use localbeat_core::secure_read;
+use localbeat_platform::drive::{self, Drive};
 
 fn open(path: Option<&str>) -> Result<Drive> {
     match path {
@@ -201,7 +201,7 @@ pub fn eject(path: Option<&str>) -> Result<bool> {
 /// Identifies the disc on MusicBrainz: candidate releases best first, and
 /// the tags track 1 would get.
 pub fn identify(path: Option<&str>, cdtoc: Option<&str>, country: Option<&str>) -> Result<bool> {
-    use ripshelf_core::musicbrainz;
+    use localbeat_core::musicbrainz;
     let toc = match cdtoc {
         Some(t) => cdtoc::Toc::from_cdtoc(t).map_err(|e| anyhow!("bad CDTOC: {e}"))?,
         None => open(path)?.read_toc()?,

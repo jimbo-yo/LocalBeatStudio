@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use ureq::Agent;
 
-pub const USER_AGENT: &str = concat!("ripshelf/", env!("CARGO_PKG_VERSION"));
+pub const USER_AGENT: &str = concat!("LocalBeatStudio/", env!("CARGO_PKG_VERSION"));
 
 pub fn agent() -> &'static Agent {
     static AGENT: OnceLock<Agent> = OnceLock::new();

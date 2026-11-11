@@ -13,7 +13,7 @@ pub struct Settings {
     pub flac_dir: PathBuf,
     /// Phone (Opus) copies.
     pub phone_dir: PathBuf,
-    /// Everything not ripped with ripshelf, as is (old AAC/MP3 libraries...):
+    /// Everything not ripped with LocalBeat Studio, as is (old AAC/MP3 libraries...):
     /// synced to the phone like the FLAC library, which wins for an album in both.
     pub misc_dir: PathBuf,
     /// Settings and the offsets file.
@@ -66,7 +66,8 @@ impl Settings {
     }
 }
 
-/// Choices made in the app (checkboxes), kept in `<config_dir>/ripshelf.json`.
+/// Choices made in the app (checkboxes), kept in `<config_dir>/localbeat.json`
+/// (`ripshelf.json` before the rename, still read if the new one is missing).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Prefs {
     /// Phone notification when a drive has waited this long for the next disc.
@@ -91,12 +92,18 @@ impl Default for Prefs {
 
 impl Prefs {
     fn file(s: &Settings) -> PathBuf {
-        s.config_dir.join("ripshelf.json")
+        s.config_dir.join("localbeat.json")
+    }
+
+    /// The file's text: the current name, else the name before the rename
+    /// to LocalBeat Studio (saving then writes the new one).
+    fn text(s: &Settings) -> Option<String> {
+        std::fs::read_to_string(Self::file(s)).ok().or_else(|| std::fs::read_to_string(s.config_dir.join("ripshelf.json")).ok())
     }
 
     pub fn load(s: &Settings) -> Self {
         let d = Prefs::default();
-        let Some(v) = std::fs::read_to_string(Self::file(s)).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        let Some(v) = Self::text(s).and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
         else {
             return d;
         };
@@ -115,8 +122,7 @@ impl Prefs {
     /// Saves these values, keeping any other keys already in the file.
     pub fn save(&self, s: &Settings) -> Result<()> {
         let f = Self::file(s);
-        let mut v = std::fs::read_to_string(&f)
-            .ok()
+        let mut v = Self::text(s)
             .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
             .filter(|v| v.is_object())
             .unwrap_or_else(|| serde_json::json!({}));
@@ -189,12 +195,12 @@ mod tests {
 
     #[test]
     fn prefs_round_trip_keeps_other_keys() {
-        let dir = std::env::temp_dir().join(format!("ripshelf-prefs-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("localbeat-prefs-{}", std::process::id()));
         let mut s = Settings::load();
         s.config_dir = dir.clone();
         assert_eq!(Prefs::load(&s), Prefs::default());
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("ripshelf.json"), "{\"other\": 1}").unwrap();
+        std::fs::write(dir.join("localbeat.json"), "{\"other\": 1}").unwrap();
         let p = Prefs {
             notify_phone: true,
             notify_after_secs: 90,
@@ -205,13 +211,29 @@ mod tests {
         };
         p.save(&s).unwrap();
         assert_eq!(Prefs::load(&s), p);
-        assert!(std::fs::read_to_string(dir.join("ripshelf.json")).unwrap().contains("\"other\": 1"));
+        assert!(std::fs::read_to_string(dir.join("localbeat.json")).unwrap().contains("\"other\": 1"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn prefs_from_before_the_rename_are_read_then_moved() {
+        let dir = std::env::temp_dir().join(format!("localbeat-oldprefs-{}", std::process::id()));
+        let mut s = Settings::load();
+        s.config_dir = dir.clone();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ripshelf.json"), "{\"notify_phone\": true, \"acoustid_key\": \"k\", \"other\": 2}").unwrap();
+        let p = Prefs::load(&s);
+        assert!(p.notify_phone);
+        assert_eq!(p.acoustid_key, "k");
+        p.save(&s).unwrap();
+        let new = std::fs::read_to_string(dir.join("localbeat.json")).unwrap();
+        assert!(new.contains("\"other\": 2") && new.contains("\"k\""));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn offsets_across_oses() {
-        let dir = std::env::temp_dir().join(format!("ripshelf-offsets-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("localbeat-offsets-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("offsets");
         std::fs::write(

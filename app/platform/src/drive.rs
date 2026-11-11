@@ -1,10 +1,10 @@
 //! CD drives: listing, TOC, identity, eject, and raw sector reads (via
-//! cd-da-reader) for `ripshelf_core::secure_read`.
+//! cd-da-reader) for `localbeat_core::secure_read`.
 
 use anyhow::{Context, Result, anyhow};
 use cd_da_reader::{CdReader, ReadOptions, ReadSpeed, RetryConfig};
 use cdtoc::Toc;
-use ripshelf_core::secure_read::SectorSource;
+use localbeat_core::secure_read::SectorSource;
 
 use crate::sys;
 

@@ -1,4 +1,4 @@
-//! Settling the albums `ripshelf enrich` left for review: accept the proposed
+//! Settling the albums `localbeat enrich` left for review: accept the proposed
 //! (or another) MusicBrainz release, or reject it so runs leave the album be.
 //! Shared by the CLI and the GUI's Review tab.
 

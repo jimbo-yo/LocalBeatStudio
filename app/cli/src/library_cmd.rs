@@ -1,13 +1,13 @@
-//! `ripshelf library`: scan the music library (as the player sees it) and
+//! `localbeat library`: scan the music library (as the player sees it) and
 //! report; `--covers` also makes every album's cover thumbnail.
 
 use std::collections::BTreeMap;
 use std::time::Instant;
 
 use anyhow::Result;
-use ripshelf_core::config::Settings;
-use ripshelf_core::covers;
-use ripshelf_core::library::{Library, Origin};
+use localbeat_core::config::Settings;
+use localbeat_core::covers;
+use localbeat_core::library::{Library, Origin};
 
 pub fn run(make_covers: bool, list: bool) -> Result<bool> {
     let s = Settings::load();

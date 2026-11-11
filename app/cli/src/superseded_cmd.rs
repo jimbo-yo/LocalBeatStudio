@@ -1,11 +1,11 @@
-//! `ripshelf superseded`: Miscellaneous folders that are now FLAC rips
+//! `localbeat superseded`: Miscellaneous folders that are now FLAC rips
 //! (same folder name, or same album artist + album tags). Lists them; with
 //! --move, moves them out of the library into `Music/Superseded` (nothing
 //! is deleted; the phone sync still replaces their old phone copies).
 
 use anyhow::{Context, Result};
-use ripshelf_core::config::Settings;
-use ripshelf_core::phone_sync::{self, Origin};
+use localbeat_core::config::Settings;
+use localbeat_core::phone_sync::{self, Origin};
 use serde_json::json;
 
 fn dir_size(dir: &std::path::Path) -> (u64, usize) {
@@ -38,7 +38,7 @@ pub fn run(move_them: bool) -> Result<bool> {
     }
     println!("{} folders, {:.1} GB", pairs.len(), total as f64 / 1e9);
     if !move_them {
-        println!("To move them out of the library (into {}): ripshelf superseded --move", dest_root.display());
+        println!("To move them out of the library (into {}): localbeat superseded --move", dest_root.display());
         return Ok(true);
     }
 

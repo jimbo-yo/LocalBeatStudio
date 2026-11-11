@@ -346,7 +346,21 @@ exit-code-52 errors) was removed.
 - Done 2026-11-06 for all 8 old albums in `~/Music/Artist - Album/` (covers
   checked by eye), then `flac2phone.sh "~/Music/X" "~/Music/phone/X"` per album
 
-## Rust app "ripshelf" (branch `rust-app`, started 2026-11-07)
+## Rust app "LocalBeat Studio" (was "ripshelf"; branch `rust-app`, started 2026-11-07)
+
+- **Renamed 2026-11-11 (user's choice): the suite is LocalBeat** = the phone
+  app (`~/development/LocalBeat`), **LocalBeatServer**
+  (`~/development/LocalBeatServer`) and this desktop app, **LocalBeat
+  Studio**. Commands: `localbeat-studio` (the app), `localbeat` (CLI:
+  `localbeat rip|sync|play|library|enrich...`); crates `localbeat-core/
+  -platform/-engine/-player`, `localbeat` (dir `app/cli`), `localbeat-studio`
+  (dir `app/gui`); menu entry `localbeat-studio.desktop`, app id
+  `localbeat-studio`, MPRIS `org.mpris.MediaPlayer2.localbeat`; env
+  `LOCALBEAT_DEMO`. Prefs file `localbeat.json` (old `ripshelf.json` still
+  read). **Unchanged on purpose:** `~/.config/rip-cd`, `~/.cache/rip-cd`
+  (shared with the scripts) and the phone's `Music/.ripshelf-sync.json` (the
+  LocalBeat phone app reads it: rename only together with that repo).
+  Notes below written before the rename say "ripshelf"
 
 - One app to replace all the scripts; Windows + Linux. Design and milestones:
   `docs/rust-app-design.md`. Developed on a Windows laptop (third machine,

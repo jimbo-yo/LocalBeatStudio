@@ -181,7 +181,7 @@ pub(crate) mod tests {
     }
 
     pub fn tmp(name: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("ripshelf-player-test-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("localbeat-player-test-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         d.join(name)
     }

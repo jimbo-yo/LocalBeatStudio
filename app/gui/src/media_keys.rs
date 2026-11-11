@@ -1,4 +1,4 @@
-//! The desktop's media controls: on Linux ripshelf appears over MPRIS
+//! The desktop's media controls: on Linux localbeat appears over MPRIS
 //! (D-Bus, via souvlaki's pure-Rust zbus backend) in Plasma's media widget
 //! and lock screen, and the keyboard's play/next/previous keys work.
 //!
@@ -12,8 +12,8 @@ use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use ripshelf_core::library::Library;
-use ripshelf_player::{Player, State};
+use localbeat_core::library::Library;
+use localbeat_player::{Player, State};
 use souvlaki::{MediaControlEvent as E, MediaControls, MediaMetadata, MediaPlayback, MediaPosition, PlatformConfig, SeekDirection};
 
 /// The library as last scanned, shared with the UI.
@@ -25,7 +25,7 @@ pub fn spawn(player: Arc<Player>, library: SharedLibrary, cache_dir: PathBuf, ct
         return Ok(());
     }
     let (tx, events) = channel();
-    let config = PlatformConfig { display_name: "ripshelf", dbus_name: "ripshelf", hwnd: None };
+    let config = PlatformConfig { display_name: "LocalBeat Studio", dbus_name: "localbeat", hwnd: None };
     let mut controls = MediaControls::new(config).map_err(|e| format!("media keys unavailable: {e:?}"))?;
     let repaint = ctx.clone();
     controls
@@ -87,7 +87,7 @@ pub fn spawn(player: Arc<Player>, library: SharedLibrary, cache_dir: PathBuf, ct
                                     .albums
                                     .iter()
                                     .find(|a| a.songs.contains(&i))
-                                    .and_then(|a| ripshelf_core::covers::thumbnail(a, &l.songs, &cache_dir, 512).ok().flatten())
+                                    .and_then(|a| localbeat_core::covers::thumbnail(a, &l.songs, &cache_dir, 512).ok().flatten())
                                     .map(|p| format!("file://{}", p.display()));
                                 let artist = if x.artist.is_empty() { &x.album_artist } else { &x.artist };
                                 let _ = controls.set_metadata(MediaMetadata {

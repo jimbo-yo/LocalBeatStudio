@@ -1,6 +1,6 @@
 //! The Phone tab: choose which albums are on the phone and sync them. The
 //! work (connecting, scanning, converting, sending) runs in background
-//! threads through `ripshelf_core::phone_sync`, like `ripshelf sync`.
+//! threads through `localbeat_core::phone_sync`, like `localbeat sync`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -9,11 +9,11 @@ use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 
 use eframe::egui::{self, Color32, RichText};
-use ripshelf_core::config::{Prefs, Settings};
-use ripshelf_core::phone_sync::{
+use localbeat_core::config::{Prefs, Settings};
+use localbeat_core::phone_sync::{
     self, Album, AlbumAction, Origin, Patient, PhoneFs, PhoneState, Plan, Reconnect, SyncEvent, SyncSummary,
 };
-use ripshelf_platform::phone::{self, AdbPhone, KdeConnectPhone};
+use localbeat_platform::phone::{self, AdbPhone, KdeConnectPhone};
 
 trait Conn: PhoneFs + Reconnect + Send + Sync {}
 impl<T: PhoneFs + Reconnect + Send + Sync> Conn for T {}

@@ -1,4 +1,4 @@
-//! `ripshelf rip`, `phone` and `offset`: the engine with a text front end.
+//! `localbeat rip`, `phone` and `offset`: the engine with a text front end.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -6,15 +6,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use ripshelf_core::accuraterip::Verdict;
-use ripshelf_core::config::{self, Settings};
-use ripshelf_core::musicbrainz::Release;
-use ripshelf_core::phone_copy;
-use ripshelf_core::rip::Acceptance;
-use ripshelf_engine::notify::Notifier;
-use ripshelf_engine::{self as engine, Event, Frontend, Options, ReleaseChoice};
-use ripshelf_platform::drive::Drive;
-use ripshelf_platform::phone_notify;
+use localbeat_core::accuraterip::Verdict;
+use localbeat_core::config::{self, Settings};
+use localbeat_core::musicbrainz::Release;
+use localbeat_core::phone_copy;
+use localbeat_core::rip::Acceptance;
+use localbeat_engine::notify::Notifier;
+use localbeat_engine::{self as engine, Event, Frontend, Options, ReleaseChoice};
+use localbeat_platform::drive::Drive;
+use localbeat_platform::phone_notify;
 
 pub struct RipArgs {
     pub drive: Option<String>,
@@ -190,7 +190,7 @@ impl Frontend for Printer {
     fn choose_release(&self, rs: &[Release]) -> ReleaseChoice {
         let list = || rs.iter().map(|r| format!("  {}  {}", r.id, r.summary())).collect::<Vec<_>>().join("\n");
         if rs.is_empty() {
-            println!("MusicBrainz doesn't know this disc. Rip it with generic names: ripshelf rip --unknown");
+            println!("MusicBrainz doesn't know this disc. Rip it with generic names: localbeat rip --unknown");
             return ReleaseChoice::Skip;
         }
         if rs[0].fuzzy {
@@ -232,13 +232,13 @@ pub fn phone_copies(src: &Path, dest: &Path, kbps: u32) -> Result<bool> {
     Ok(stats.failed.is_empty())
 }
 
-/// `ripshelf offset [set N]`: show or save the drive's read offset.
+/// `localbeat offset [set N]`: show or save the drive's read offset.
 pub fn offset(drive: Option<&str>, value: Option<i32>) -> Result<bool> {
     let s = Settings::load();
     let d = match drive {
         Some(p) => Drive::open(p)?,
         None => {
-            let paths = ripshelf_platform::drive::drive_paths();
+            let paths = localbeat_platform::drive::drive_paths();
             let first = paths.first().ok_or_else(|| anyhow!("no CD drives found"))?;
             Drive::open(first)?
         }

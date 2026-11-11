@@ -53,7 +53,7 @@ mod tests {
 
     #[test]
     fn second_lock_is_refused_until_released() {
-        let dir = std::env::temp_dir().join(format!("ripshelf-lock-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("localbeat-lock-{}", std::process::id()));
         let a = try_lock(&dir, "D").unwrap();
         assert!(a.is_some());
         assert!(try_lock(&dir, "D").unwrap().is_none());

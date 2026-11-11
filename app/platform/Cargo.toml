@@ -1,12 +1,12 @@
 [package]
-name = "ripshelf-platform"
+name = "localbeat-platform"
 description = "OS-specific parts: CD drives, disc detection, phone connections"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
 
 [dependencies]
-ripshelf-core.workspace = true
+localbeat-core.workspace = true
 anyhow.workspace = true
 cdtoc.workspace = true
 cd-da-reader = "1"

@@ -11,8 +11,8 @@ use std::process::ExitCode;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use ripshelf_core::accuraterip::Verdict;
-use ripshelf_core::album_check::{self, DiscInfo, Observer, TrackReport};
+use localbeat_core::accuraterip::Verdict;
+use localbeat_core::album_check::{self, DiscInfo, Observer, TrackReport};
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -188,7 +188,7 @@ enum Command {
     },
     /// Send a test notification to the phone (KDE Connect, same Wi-Fi)
     Notify {
-        #[arg(default_value = "ripshelf test: phone notifications work.")]
+        #[arg(default_value = "localbeat test: phone notifications work.")]
         message: String,
     },
     Phone {
@@ -243,11 +243,11 @@ fn main() -> ExitCode {
             enrich_cmd::enrich(enrich_cmd::EnrichArgs { patterns, dry_run, limit, retry, undo, sound, acoustid_key })
         }
         Command::Fingerprint { file } => (|| -> anyhow::Result<bool> {
-            let s = ripshelf_core::config::Settings::load();
-            let key = ripshelf_core::config::Prefs::load(&s).acoustid_key;
-            let (fp, secs) = ripshelf_core::acoustid::fingerprint(&file)?;
+            let s = localbeat_core::config::Settings::load();
+            let key = localbeat_core::config::Prefs::load(&s).acoustid_key;
+            let (fp, secs) = localbeat_core::acoustid::fingerprint(&file)?;
             println!("fingerprint: {} characters, {secs} s, starts {}", fp.len(), &fp[..fp.len().min(24)]);
-            let hits = ripshelf_core::acoustid::lookup(&key, &fp, secs)?;
+            let hits = localbeat_core::acoustid::lookup(&key, &fp, secs)?;
             println!("{} recordings found", hits.len());
             for h in hits.iter().take(5) {
                 let rel = h.releases.first().map(|r| format!("{} ({})", r.group_title, r.year)).unwrap_or_default();
@@ -259,14 +259,14 @@ fn main() -> ExitCode {
         Command::Play { paths, seek, volume } => play_cmd::run(paths, seek, volume),
         Command::Library { covers, list } => library_cmd::run(covers, list),
         Command::Notify { message } => {
-            let s = ripshelf_core::config::Settings::load();
-            ripshelf_platform::phone_notify::notify(&s.config_dir, &message).map(|phone| {
+            let s = localbeat_core::config::Settings::load();
+            localbeat_platform::phone_notify::notify(&s.config_dir, &message).map(|phone| {
                 println!("Sent to {phone}: {message}");
                 true
             })
         }
         Command::Phone { src, dest, bitrate } => {
-            let s = ripshelf_core::config::Settings::load();
+            let s = localbeat_core::config::Settings::load();
             let src = src.unwrap_or_else(|| s.flac_dir.clone());
             // An album inside the library maps to the same place under the phone folder.
             let dest = dest.unwrap_or_else(|| match std::path::absolute(&src).ok().and_then(|a| a.strip_prefix(&s.flac_dir).ok().map(|r| r.to_path_buf())) {
@@ -274,7 +274,7 @@ fn main() -> ExitCode {
                 None => s.phone_dir.clone(),
             });
             println!("{} -> {} (Opus {bitrate} kbps)", src.display(), dest.display());
-            match ripshelf_core::lock::lock(&s.cache_dir, "phone") {
+            match localbeat_core::lock::lock(&s.cache_dir, "phone") {
                 Ok(_phone) => rip_cmd::phone_copies(&src, &dest, bitrate),
                 Err(e) => Err(e),
             }

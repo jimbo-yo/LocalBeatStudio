@@ -246,7 +246,7 @@ mod tests {
     use crate::flacfile;
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("ripshelf-test-{name}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("localbeat-test-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         d
     }

@@ -1,5 +1,5 @@
 [package]
-name = "ripshelf-core"
+name = "localbeat-core"
 description = "Platform-independent logic: checksums, verification rules, metadata, naming, library"
 edition.workspace = true
 version.workspace = true

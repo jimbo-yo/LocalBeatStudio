@@ -362,7 +362,7 @@ fn album_tag_key(f: &SourceFile) -> Option<String> {
 /// has as FLAC under another name, so the sync replaces them with the FLAC
 /// copy (and the album list shows one album, not two).
 /// `moved`: (Miscellaneous folder, FLAC folder) pairs already moved out of
-/// the library by `ripshelf superseded` (see [`load_superseded`]).
+/// the library by `localbeat superseded` (see [`load_superseded`]).
 pub fn alias_phone(phone: &mut PhoneState, library: &[Album], moved: &[(String, String)]) {
     let mut alias: BTreeMap<String, String> = library
         .iter()
@@ -378,7 +378,7 @@ pub fn alias_phone(phone: &mut PhoneState, library: &[Album], moved: &[(String, 
     }
 }
 
-/// Where `ripshelf superseded` records the folders it moved aside.
+/// Where `localbeat superseded` records the folders it moved aside.
 pub fn superseded_file(config_dir: &Path) -> PathBuf {
     config_dir.join("superseded.json")
 }
@@ -505,7 +505,7 @@ impl Manifest {
             .map(|(d, a)| (d.clone(), json!({ "source": a.source, "files": a.files })))
             .collect();
         let v = json!({
-            "about": "Written by ripshelf's phone sync: what each album folder was made from. Safe to delete (the next sync then re-checks everything).",
+            "about": "Written by LocalBeat Studio's phone sync: what each album folder was made from. Safe to delete (the next sync then re-checks everything).",
             "version": 1,
             "albums": albums,
         });
@@ -938,7 +938,7 @@ mod tests {
 
     #[test]
     fn misc_copy_with_another_folder_name_is_replaced_by_flac() {
-        let root = std::env::temp_dir().join(format!("ripshelf-alias-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("localbeat-alias-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let (fl, misc, ph) = (root.join("FLAC"), root.join("Misc"), root.join("phone"));
         let tagged = |path: &Path, album: &str| {
@@ -980,7 +980,7 @@ mod tests {
 
     #[test]
     fn sync_adopts_replaces_updates_and_removes() {
-        let root = std::env::temp_dir().join(format!("ripshelf-sync-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("localbeat-sync-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let (fl, misc, ph, work) = (root.join("FLAC"), root.join("Misc"), root.join("phone"), root.join("work"));
 

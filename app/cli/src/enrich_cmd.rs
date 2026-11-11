@@ -1,13 +1,13 @@
-//! `ripshelf enrich`: tags and covers for the Miscellaneous library from
+//! `localbeat enrich`: tags and covers for the Miscellaneous library from
 //! MusicBrainz. Sure matches are written (old tags saved for --undo);
 //! the rest are listed for review.
 
 use anyhow::Result;
-use ripshelf_core::config::{Prefs, Settings};
-use ripshelf_core::enrich::{self, State};
-use ripshelf_core::enrich_review;
-use ripshelf_core::musicbrainz::{self, Release};
-use ripshelf_core::phone_sync::{self, Origin};
+use localbeat_core::config::{Prefs, Settings};
+use localbeat_core::enrich::{self, State};
+use localbeat_core::enrich_review;
+use localbeat_core::musicbrainz::{self, Release};
+use localbeat_core::phone_sync::{self, Origin};
 use serde_json::json;
 
 pub struct EnrichArgs {
@@ -37,7 +37,7 @@ pub fn enrich(a: EnrichArgs) -> Result<bool> {
     if let Some(k) = &a.acoustid_key {
         prefs.acoustid_key = k.trim().to_string();
         prefs.save(&s)?;
-        println!("AcoustID key saved in {}", s.config_dir.join("ripshelf.json").display());
+        println!("AcoustID key saved in {}", s.config_dir.join("localbeat.json").display());
         if !a.sound {
             return Ok(true);
         }
@@ -45,7 +45,7 @@ pub fn enrich(a: EnrichArgs) -> Result<bool> {
     let mut state = State::load(&s.config_dir);
     if a.sound {
         if prefs.acoustid_key.is_empty() {
-            anyhow::bail!("no AcoustID key yet: get one at https://acoustid.org/new-application, then: ripshelf enrich --acoustid-key KEY");
+            anyhow::bail!("no AcoustID key yet: get one at https://acoustid.org/new-application, then: localbeat enrich --acoustid-key KEY");
         }
         return sound_pass(&s, &mut state, &a, &prefs.acoustid_key);
     }
@@ -158,7 +158,7 @@ pub fn enrich(a: EnrichArgs) -> Result<bool> {
         let cover = if local.tracks.iter().all(|t| t.has_cover) {
             None
         } else {
-            ripshelf_core::cover::fetch_front(&release).ok().flatten().map(|p| p.data)
+            localbeat_core::cover::fetch_front(&release).ok().flatten().map(|p| p.data)
         };
         let done = enrich::apply(&local, &c, &m, &genres, cover.as_deref(), true);
         merge_backup(&s, &rel, &done.record)?;
@@ -236,7 +236,7 @@ fn sound_pass(s: &Settings, state: &mut State, a: &EnrichArgs, key: &str) -> Res
                 .entry(c.release_id.clone())
                 .or_insert_with(|| {
                     let r = Release { id: c.release_id.clone(), release_group_id: c.release_group_id.clone(), artist_ids: c.artist_ids.clone(), ..Default::default() };
-                    (musicbrainz::genres(&r).unwrap_or_default(), ripshelf_core::cover::fetch_front(&r).ok().flatten().map(|p| p.data))
+                    (musicbrainz::genres(&r).unwrap_or_default(), localbeat_core::cover::fetch_front(&r).ok().flatten().map(|p| p.data))
                 })
                 .clone()
         };

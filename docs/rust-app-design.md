@@ -4,7 +4,9 @@ One desktop app that replaces rip-cd.sh, rip-cd-gui.py, flac2phone.sh,
 mb-enrich.py, fetch-cover.py and phone-sync.py. Targets Windows and Linux
 (Fedora/KDE, Ubuntu/GNOME) from one codebase. Developed first on Windows.
 
-Working name: **ripshelf** (placeholder; rename freely).
+Name: **LocalBeat Studio** (renamed from the placeholder "ripshelf" on
+2026-11-11), the desktop part of the LocalBeat suite with the LocalBeat phone
+app and LocalBeatServer.
 
 ## Goals
 

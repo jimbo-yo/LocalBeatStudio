@@ -1,4 +1,4 @@
-//! Review tab: the Miscellaneous albums `ripshelf enrich` wasn't sure about.
+//! Review tab: the Miscellaneous albums `localbeat enrich` wasn't sure about.
 //! Each shows the proposed MusicBrainz release and why it wasn't written;
 //! accept it, give another release, or leave the album as it is.
 
@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use eframe::egui::{self, RichText};
-use ripshelf_core::config::Settings;
-use ripshelf_core::enrich_review::{self, ReviewItem};
+use localbeat_core::config::Settings;
+use localbeat_core::enrich_review::{self, ReviewItem};
 
 pub struct ReviewTab {
     items: Option<Vec<ReviewItem>>,
@@ -76,7 +76,7 @@ impl ReviewTab {
         });
         ui.weak(
             "Found on MusicBrainz but not written, because something didn't line up (shown under each). \
-             Accept writes the tags and cover into the files (undo: ripshelf enrich --undo NAME); \
+             Accept writes the tags and cover into the files (undo: localbeat enrich --undo NAME); \
              Leave as is stops future runs from asking.",
         );
         ui.separator();

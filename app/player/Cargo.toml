@@ -1,5 +1,5 @@
 [package]
-name = "ripshelf-player"
+name = "localbeat-player"
 description = "Music playback: decoding (Symphonia), gapless queue, seeking, audio output (cpal)"
 edition.workspace = true
 version.workspace = true

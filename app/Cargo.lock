@@ -2309,6 +2309,96 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4744e383959f0db86ede514b809b1c53251889093803c05267acc7d4e7030d70"
 
 [[package]]
+name = "localbeat"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cdtoc",
+ "chrono",
+ "clap",
+ "localbeat-core",
+ "localbeat-engine",
+ "localbeat-platform",
+ "localbeat-player",
+ "serde_json",
+ "walkdir",
+]
+
+[[package]]
+name = "localbeat-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cdtoc",
+ "claxon",
+ "crc32fast",
+ "dirs",
+ "image",
+ "imagesize",
+ "libflac-sys",
+ "libopusenc-static-sys",
+ "lofty",
+ "opus-static-sys",
+ "rusty-chromaprint",
+ "serde",
+ "serde_json",
+ "symphonia",
+ "unicode-normalization",
+ "ureq",
+ "walkdir",
+]
+
+[[package]]
+name = "localbeat-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cdtoc",
+ "chrono",
+ "localbeat-core",
+ "localbeat-platform",
+]
+
+[[package]]
+name = "localbeat-platform"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cd-da-reader",
+ "cdtoc",
+ "libc",
+ "localbeat-core",
+ "serde_json",
+ "windows-sys 0.60.2",
+]
+
+[[package]]
+name = "localbeat-player"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cpal",
+ "rtrb",
+ "symphonia",
+]
+
+[[package]]
+name = "localbeat-studio"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "eframe",
+ "image",
+ "localbeat-core",
+ "localbeat-engine",
+ "localbeat-platform",
+ "localbeat-player",
+ "serde",
+ "serde_json",
+ "souvlaki",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3465,96 +3555,6 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "ripshelf"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cdtoc",
- "chrono",
- "clap",
- "ripshelf-core",
- "ripshelf-engine",
- "ripshelf-platform",
- "ripshelf-player",
- "serde_json",
- "walkdir",
-]
-
-[[package]]
-name = "ripshelf-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cdtoc",
- "claxon",
- "crc32fast",
- "dirs",
- "image",
- "imagesize",
- "libflac-sys",
- "libopusenc-static-sys",
- "lofty",
- "opus-static-sys",
- "rusty-chromaprint",
- "serde",
- "serde_json",
- "symphonia",
- "unicode-normalization",
- "ureq",
- "walkdir",
-]
-
-[[package]]
-name = "ripshelf-engine"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cdtoc",
- "chrono",
- "ripshelf-core",
- "ripshelf-platform",
-]
-
-[[package]]
-name = "ripshelf-gui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "eframe",
- "image",
- "ripshelf-core",
- "ripshelf-engine",
- "ripshelf-platform",
- "ripshelf-player",
- "serde",
- "serde_json",
- "souvlaki",
-]
-
-[[package]]
-name = "ripshelf-platform"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cd-da-reader",
- "cdtoc",
- "libc",
- "ripshelf-core",
- "serde_json",
- "windows-sys 0.60.2",
-]
-
-[[package]]
-name = "ripshelf-player"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cpal",
- "rtrb",
- "symphonia",
 ]
 
 [[package]]

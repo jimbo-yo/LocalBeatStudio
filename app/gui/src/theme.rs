@@ -1,4 +1,4 @@
-//! "Prism": ripshelf's design language. Ink-dark surfaces (a light variant
+//! "Prism": LocalBeat Studio's design language. Ink-dark surfaces (a light variant
 //! follows the desktop's setting) and one signature accent, the prism
 //! gradient, like light on the data side of a CD. Also the shared pieces:
 //! fonts, gradient painting, vector icons, cards, badges, buttons, progress.

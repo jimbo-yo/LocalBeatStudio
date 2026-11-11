@@ -1,4 +1,4 @@
-//! ripshelf's window: runs the rip loop in the background (disc after disc)
+//! LocalBeat Studio's window: runs the rip loop in the background (disc after disc)
 //! and shows what it's doing.
 
 // No console window behind the app in release builds on Windows.
@@ -11,14 +11,14 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use ripshelf_core::accuraterip::Verdict;
-use ripshelf_core::config::{Prefs, Settings};
-use ripshelf_core::flac_encode::Picture;
-use ripshelf_core::musicbrainz::Release;
-use ripshelf_core::rip::Acceptance;
-use ripshelf_engine::notify::Notifier;
-use ripshelf_engine::{self as engine, Event, Frontend, Options, ReleaseChoice, TrackInfo};
-use ripshelf_platform::phone_notify;
+use localbeat_core::accuraterip::Verdict;
+use localbeat_core::config::{Prefs, Settings};
+use localbeat_core::flac_encode::Picture;
+use localbeat_core::musicbrainz::Release;
+use localbeat_core::rip::Acceptance;
+use localbeat_engine::notify::Notifier;
+use localbeat_engine::{self as engine, Event, Frontend, Options, ReleaseChoice, TrackInfo};
+use localbeat_platform::phone_notify;
 
 mod cover_cache;
 mod library_ui;
@@ -50,11 +50,11 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 820.0])
             .with_min_inner_size([900.0, 560.0])
-            .with_title("ripshelf")
-            .with_app_id("ripshelf"),
+            .with_title("LocalBeat Studio")
+            .with_app_id("localbeat-studio"),
         ..Default::default()
     };
-    eframe::run_native("ripshelf", options, Box::new(|cc| {
+    eframe::run_native("LocalBeat Studio", options, Box::new(|cc| {
         theme::apply(&cc.egui_ctx);
         Ok(Box::new(App::new(cc.egui_ctx.clone())))
     }))
@@ -269,7 +269,7 @@ impl App {
             eject: Vec::new(),
             drive_action: None,
         };
-        if std::env::var_os("RIPSHELF_DEMO").is_some() {
+        if std::env::var_os("LOCALBEAT_DEMO").is_some() {
             // Made-up disc for working on the layout without a CD.
             let mut d1 = demo_disc();
             d1.cover = Some(demo_cover(&app.ctx));
@@ -282,7 +282,7 @@ impl App {
             app.drives.insert("/dev/sr0".into(), DriveView { disc: None, stage: "Waiting for a disc".into(), stop_disc: Some(Default::default()) });
             app.drives.insert("/dev/sr1".into(), DriveView { disc: Some(d1), stage: "Ripping track 5".into(), stop_disc: Some(Default::default()) });
             app.drives.insert("/dev/sr2".into(), DriveView { disc: Some(d2), stage: "Ripping track 2".into(), stop_disc: Some(Default::default()) });
-            let demo = std::env::var("RIPSHELF_DEMO").unwrap_or_default();
+            let demo = std::env::var("LOCALBEAT_DEMO").unwrap_or_default();
             app.view = Some(if demo == "sr2" { "/dev/sr2" } else { "/dev/sr1" }.into());
             app.running = true;
             app.stage = "Ripping on 2 drives".into();
@@ -322,7 +322,7 @@ impl App {
         std::thread::spawn(move || {
             let mut started = std::collections::BTreeSet::new();
             while !stop.load(Ordering::Relaxed) {
-                for path in ripshelf_platform::drive::drive_paths() {
+                for path in localbeat_platform::drive::drive_paths() {
                     if !started.insert(path.clone()) {
                         continue;
                     }
@@ -452,9 +452,16 @@ impl App {
         egui::Panel::left("nav").resizable(false).exact_size(236.0).frame(frame).show_separator_line(false).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
-                let g = theme::prism_text(ui, "ripshelf", theme::bold(27.0));
-                let (rect, _) = ui.allocate_exact_size(g.size(), egui::Sense::hover());
+                // "LocalBeat" in the prism, "Studio" quieter, on one baseline.
+                let g = theme::prism_text(ui, "LocalBeat", theme::bold(26.0));
+                let studio = ui.painter().layout_no_wrap("Studio".into(), theme::medium(17.0), p.dim);
+                let size = egui::vec2(g.size().x + 7.0 + studio.size().x, g.size().y);
+                let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                // Bottoms lined up, nudged so the baselines meet.
+                let studio_y = rect.min.y + g.size().y - studio.size().y - 2.5;
+                let x = rect.min.x + g.size().x + 7.0;
                 ui.painter().galley(rect.min, g, p.text);
+                ui.painter().galley(egui::pos2(x, studio_y), studio, p.dim);
             });
             ui.horizontal(|ui| {
                 ui.add_space(9.0);
@@ -879,7 +886,7 @@ fn fmt_duration(d: Duration) -> String {
 
 impl eframe::App for App {
     fn on_exit(&mut self) {
-        if std::env::var_os("RIPSHELF_DEMO").is_none() {
+        if std::env::var_os("LOCALBEAT_DEMO").is_none() {
             self.library.save_session();
         }
     }
@@ -1541,7 +1548,7 @@ fn demo_cover(ctx: &egui::Context) -> egui::TextureHandle {
     ctx.load_texture("demo-cover", img, Default::default())
 }
 
-/// A made-up disc in every state, for RIPSHELF_DEMO=1.
+/// A made-up disc in every state, for LOCALBEAT_DEMO=1.
 fn demo_disc() -> Disc {
     let titles = [
         ("Airbag", 284), ("Paranoid Android", 383), ("Subterranean Homesick Alien", 267), ("Exit Music (For a Film)", 264),

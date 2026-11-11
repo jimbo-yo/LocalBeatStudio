@@ -1,4 +1,4 @@
-//! Platform-independent logic for ripshelf. No GUI and no OS-specific code
+//! Platform-independent logic for LocalBeat Studio. No GUI and no OS-specific code
 //! here, so everything builds and tests the same on Windows and Linux.
 
 pub mod accuraterip;

@@ -1,9 +1,9 @@
-//! ripshelf's music player engine (no UI): plays a queue of files, FLAC
+//! LocalBeat Studio's music player engine (no UI): plays a queue of files, FLAC
 //! first but also MP3, AAC/ALAC (.m4a), Ogg Vorbis, WAV and AIFF, without
 //! gaps between songs, with seeking, pause and volume.
 //!
 //! ```no_run
-//! let p = ripshelf_player::Player::new();
+//! let p = localbeat_player::Player::new();
 //! p.load(vec!["song.flac".into()], 0);
 //! let s = p.status(); // state, position, format...
 //! ```

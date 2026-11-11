@@ -521,7 +521,7 @@ mod tests {
     }
 
     fn setup(name: &str) -> (Settings, PathBuf) {
-        let root = std::env::temp_dir().join(format!("ripshelf-rip-{name}-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("localbeat-rip-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let s = Settings {
             flac_dir: root.join("FLAC"),

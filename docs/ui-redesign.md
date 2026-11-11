@@ -1,4 +1,4 @@
-# ripshelf redesign + music player (plan, 2026-11-11)
+# LocalBeat Studio (was ripshelf) redesign + music player (plan, 2026-11-11)
 
 Goal: turn ripshelf-gui into one polished app ("iTunes for 2025-2050"):
 library + player, CD ripping, phone sync, tag review, in one design language.
@@ -61,11 +61,11 @@ Dark-first (light variant kept), inspired by light on a CD's data side.
 
 ## Checking the look
 
-`RIPSHELF_DEMO=1` (Rip page), `=phone` or `=review` opens that page with a
+`LOCALBEAT_DEMO=1` (Rip page), `=phone` or `=review` opens that page with a
 made-up session (`=albums|album|play|artists|songs|recent|search` use the
 real library at volume 0; `=sr2` shows the second drive, `=choice` the release
 dialog); e.g.
-`RIPSHELF_DEMO=1 target/debug/ripshelf-gui & sleep 4; spectacle -b -n -a -o shot.png`.
+`LOCALBEAT_DEMO=1 target/debug/localbeat-studio & sleep 4; spectacle -b -n -a -o shot.png`.
 
-Screenshots of the real window (RIPSHELF_DEMO=1 for a made-up rip session)
+Screenshots of the real window (LOCALBEAT_DEMO=1 for a made-up rip session)
 with spectacle, then read the PNG.

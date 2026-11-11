@@ -311,7 +311,7 @@ mod tests {
 
     #[test]
     fn mirrors_tree_skips_gain_tags_and_up_to_date_files() {
-        let root = std::env::temp_dir().join(format!("ripshelf-phone-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("localbeat-phone-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let album = root.join("FLAC").join("Björk").join("Who？");
         std::fs::create_dir_all(&album).unwrap();

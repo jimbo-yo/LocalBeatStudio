@@ -1,4 +1,4 @@
-//! `ripshelf play`: the player engine from the command line (for testing it
+//! `localbeat play`: the player engine from the command line (for testing it
 //! on real files and speakers before the window has a player).
 
 use std::io::{BufRead, Write};
@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Result, bail};
-use ripshelf_player::{Player, State};
+use localbeat_player::{Player, State};
 
 const EXTS: [&str; 8] = ["flac", "mp3", "m4a", "ogg", "wav", "aif", "aiff", "m4p"];
 

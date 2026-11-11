@@ -140,7 +140,7 @@ mod tests {
     use crate::library::{Origin, ScanStats};
 
     fn tmpdir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ripshelf-covers-{}-{name}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("localbeat-covers-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
