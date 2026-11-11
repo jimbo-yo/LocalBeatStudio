@@ -502,6 +502,9 @@ impl App {
                     Acceptance::AccurateRip { confidence } => format!("✔ AccurateRip ({confidence})"),
                     Acceptance::OtherPressing { confidence, shift } => format!("✔ AccurateRip ({confidence}, other pressing {shift:+})"),
                     Acceptance::Repeat { reads } => format!("✔ identical reads ({reads})"),
+                    Acceptance::Voted { confidence, reads, sectors } => {
+                        format!("✔ AccurateRip ({confidence}) by sector vote ({sectors} damaged sectors, {reads} reads)")
+                    }
                     Acceptance::RepeatDiffers { reads } => {
                         self.log(format!(
                             "Track {position}: saved after {reads} reads, but it differs from AccurateRip's copy of this pressing: \

@@ -17,6 +17,7 @@ use anyhow::{Context, Result};
 use cdtoc::Toc;
 
 use crate::accuraterip::{self, DiscEntries, Verdict};
+use crate::vote;
 use crate::config::Settings;
 use crate::cover;
 use crate::flac_encode::{self, Picture};
@@ -128,6 +129,9 @@ pub enum Acceptance {
     OtherPressing { confidence: u8, shift: i64 },
     /// Two clean reads with the same CRC (`reads` = reads it took).
     Repeat { reads: u32 },
+    /// No two reads agreed, but voting sector by sector over `reads` reads
+    /// (`sectors` of them differing) rebuilt audio that matches AccurateRip.
+    Voted { confidence: u8, reads: u32, sectors: usize },
     /// Like `Repeat`, but AccurateRip has this pressing (its frame-450 sector
     /// matches) and the track still doesn't match: the audio differs
     /// somewhere, most likely a damaged spot read wrong the same way each
@@ -161,6 +165,22 @@ pub struct RipContext<'a> {
     pub cover: Option<&'a Picture>,
     /// First lines of the log (date, drive, release...), written by the caller.
     pub log_header: String,
+}
+
+/// Reads added for sector voting when a damaged track runs out of reads.
+pub const EXTRA_VOTE_READS: u32 = 4;
+
+/// Votes over the clean reads; the vote only counts if every differing sector
+/// has a clear majority and the result matches AccurateRip.
+fn try_vote(reads: &[Vec<u32>], t: &TrackPlan, db: &DiscEntries) -> Option<(u8, vote::Vote)> {
+    let v = vote::vote(reads);
+    if v.differing.is_empty() || !v.unresolved.is_empty() {
+        return None;
+    }
+    match db.verdict(t.position, accuraterip::checksums(&v.frames, t.first, t.last)) {
+        Verdict::Match { confidence, .. } => Some((confidence, v)),
+        _ => None,
+    }
 }
 
 /// A clean read that matched nothing: is it a pressing the database has at
@@ -226,7 +246,14 @@ pub fn rip(
         let mut accepted = None;
         let mut last: Option<TrackRead> = None;
         let mut reads_done = 0;
-        for read in 1..=s.reads.max(1) {
+        // Clean reads kept for sector voting, and the audio a vote produced.
+        let mut clean_reads: Vec<Vec<u32>> = Vec::new();
+        let mut voted: Option<Vec<u32>> = None;
+        let in_ar = ctx.accuraterip.is_some_and(|db| db.tracks.get(t.position - 1).is_some_and(|m| !m.is_empty()));
+        let mut limit = s.reads.max(1);
+        let mut read = 0;
+        while read < limit {
+            read += 1;
             if read > 1 && s.flush_sectors > 0 {
                 secure_read::flush_cache(src, t.sectors.clone(), plan.readable_end, s.flush_sectors);
             }
@@ -256,6 +283,9 @@ pub fn rip(
                 },
                 if clean { String::new() } else { format!(", {} unreadable sectors", r.unreadable.len()) }
             );
+            if clean && in_ar {
+                clean_reads.push(r.frames.clone());
+            }
             if clean {
                 if let Verdict::Match { confidence, .. } = verdict {
                     accepted = Some(Acceptance::AccurateRip { confidence });
@@ -266,6 +296,20 @@ pub fn rip(
                     let _ = writeln!(sum.log, "Track {:>2} read {read}: matches AccurateRip for another pressing (shifted {shift:+} frames, confidence {confidence})", t.position);
                     on(Event::Note(format!("track {}: matches AccurateRip for another pressing (shifted {shift:+} frames)", t.position)));
                     accepted = Some(Acceptance::OtherPressing { confidence, shift });
+                } else if let Some((confidence, v)) = (clean_reads.len() >= 3 && !repeat)
+                    .then(|| try_vote(&clean_reads, t, ctx.accuraterip?))
+                    .flatten()
+                {
+                    let _ = writeln!(
+                        sum.log,
+                        "Track {:>2}: sector vote over {} reads fixed {} — matches AccurateRip (confidence {confidence})",
+                        t.position,
+                        clean_reads.len(),
+                        vote::describe(&v.differing)
+                    );
+                    on(Event::Note(format!("track {}: rebuilt by sector vote ({}), AccurateRip match", t.position, vote::describe(&v.differing))));
+                    accepted = Some(Acceptance::Voted { confidence, reads: read, sectors: v.differing.len() });
+                    voted = Some(v.frames);
                 } else if repeat {
                     let right_pressing = verdict == Verdict::NoMatch && ctx.accuraterip.is_some_and(|db| db.frame450_matches(t.position, &r.frames));
                     accepted = Some(if right_pressing { Acceptance::RepeatDiffers { reads: read } } else { Acceptance::Repeat { reads: read } });
@@ -276,8 +320,26 @@ pub fn rip(
             if accepted.is_some() {
                 break;
             }
+            // Out of reads, but the reads differ only in a few places: a
+            // few more reads give the vote more to go on.
+            if read == limit && limit == s.reads.max(1) && clean_reads.len() >= 2 {
+                let v = vote::vote(&clean_reads);
+                let sectors = clean_reads[0].len().div_ceil(accuraterip::FRAMES_PER_SECTOR);
+                if !v.differing.is_empty() && v.differing.len() * 20 <= sectors {
+                    let _ = writeln!(sum.log, "Track {:>2}: reads differ in {}; reading up to {EXTRA_VOTE_READS} more times to vote", t.position, vote::describe(&v.differing));
+                    on(Event::Note(format!(
+                        "track {}: reads differ in {}; up to {EXTRA_VOTE_READS} more reads to vote on",
+                        t.position,
+                        vote::describe(&v.differing)
+                    )));
+                    limit += EXTRA_VOTE_READS;
+                }
+            }
         }
-        let r = last.expect("at least one read");
+        let mut r = last.expect("at least one read");
+        if let Some(frames) = voted {
+            r = TrackRead { frames, unreadable: Vec::new(), edge_fill: r.edge_fill };
+        }
 
         match accepted {
             Some(how) => {
@@ -337,6 +399,9 @@ fn describe(how: Acceptance) -> String {
         Acceptance::AccurateRip { confidence } => format!("AccurateRip, confidence {confidence}"),
         Acceptance::OtherPressing { confidence, shift } => format!("AccurateRip for another pressing ({shift:+} frames), confidence {confidence}"),
         Acceptance::Repeat { reads } => format!("two identical reads, {reads} reads"),
+        Acceptance::Voted { confidence, reads, sectors } => {
+            format!("sector vote over {reads} reads ({sectors} damaged sectors), AccurateRip confidence {confidence}")
+        }
         Acceptance::RepeatDiffers { reads } => {
             format!("two identical reads ({reads} reads), but it differs from AccurateRip's copy of this pressing: probably damaged, clean and re-rip")
         }
@@ -542,5 +607,51 @@ mod tests {
             assert_eq!(frames, ours.frames);
             std::fs::remove_dir_all(&root).ok();
         }
+    }
+
+    /// A disc whose track 2 reads wrong in a different sector on each pass.
+    struct Scratched {
+        disc: FakeDisc,
+        passes: u32,
+    }
+
+    impl SectorSource for Scratched {
+        fn read_sectors(&mut self, lba: u32, count: u32) -> Result<Vec<u8>, String> {
+            if lba == 40 {
+                self.passes += 1; // a new read of track 2 starts
+            }
+            let mut out = self.disc.read_sectors(lba, count)?;
+            let bad = 41 + self.passes * 5; // pass 1: sector 46, 2: 51, 3: 56...
+            if (lba..lba + count).contains(&bad) && self.passes <= 4 {
+                out[((bad - lba) as usize) * 2352 + 7] ^= 0x5A;
+            }
+            Ok(out)
+        }
+    }
+
+    #[test]
+    fn sector_vote_rebuilds_a_track_no_read_got_right() {
+        let (s, root) = setup("vote");
+        let toc = toc();
+        let meta = Metadata::Unknown { album: "Vote".into() };
+        let p = plan(&toc, &meta, &s.flac_dir);
+        let mut probe = FakeDisc { sectors: 120, flaky: vec![], bad: vec![], reads: 0 };
+        let good = secure_read::read_track(&mut probe, p.tracks[1].sectors.clone(), p.readable_end, 0, &mut |_, _| {});
+        let sums = accuraterip::checksums(&good.frames, false, false);
+        let entries = DiscEntries { tracks: vec![BTreeMap::new(), BTreeMap::from([(sums.v2, 30u8)]), BTreeMap::new()], ..Default::default() };
+
+        let mut disc = Scratched { disc: FakeDisc { sectors: 120, flaky: vec![], bad: vec![], reads: 0 }, passes: 0 };
+        let ctx = RipContext { settings: &s, offset: 0, accuraterip: Some(&entries), cover: None, log_header: String::new() };
+        let mut how = None;
+        rip(&mut disc, &p, &ctx, &mut |e| {
+            if let Event::Accepted { position: 2, how: h, .. } = e {
+                how = Some(h);
+            }
+        })
+        .unwrap();
+        assert_eq!(how, Some(Acceptance::Voted { confidence: 30, reads: 3, sectors: 3 }));
+        let (_, frames) = crate::flacfile::read_cd_audio(&p.tracks[1].dest).unwrap();
+        assert_eq!(frames, good.frames);
+        std::fs::remove_dir_all(&root).ok();
     }
 }
