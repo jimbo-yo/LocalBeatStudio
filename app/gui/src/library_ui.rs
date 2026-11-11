@@ -16,6 +16,7 @@ use ripshelf_core::library::{Library, Origin, Song, norm};
 use ripshelf_player::{Player, State, Status};
 
 use crate::cover_cache::CoverCache;
+use crate::media_keys::SharedLibrary;
 use crate::theme::{self, Icon, Kind};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -45,7 +46,18 @@ enum Action {
     OpenFolder(PathBuf),
 }
 
-type ScanResult = Result<(Library, ripshelf_core::library::ScanStats), String>;
+/// What's kept between runs (`<config>/player.json`).
+#[derive(serde::Serialize, serde::Deserialize, Default, PartialEq)]
+struct Session {
+    volume: f32,
+    queue: Vec<PathBuf>,
+    index: usize,
+    position: f64,
+    shuffle: bool,
+    repeat: bool,
+}
+
+type ScanResult = Result<(Arc<Library>, ripshelf_core::library::ScanStats), String>;
 
 pub struct LibraryUi {
     settings: Settings,
@@ -58,7 +70,9 @@ pub struct LibraryUi {
     scan_progress: Arc<(AtomicUsize, AtomicUsize)>,
     rescan_wanted: bool,
     pub covers: CoverCache,
-    pub player: Player,
+    pub player: Arc<Player>,
+    /// The library for the media-keys thread.
+    shared_lib: SharedLibrary,
     pub page: Page,
     /// Open album page.
     pub album: Option<usize>,
@@ -79,13 +93,26 @@ pub struct LibraryUi {
     pub demo: Option<String>,
     /// Where the page panels end (set by main.rs each frame): the bar's top.
     pub bar_top: Option<f32>,
+    saved: Option<Session>,
+    saved_at: std::time::Instant,
 }
 
 impl LibraryUi {
     pub fn new(settings: &Settings, ctx: &egui::Context) -> Self {
-        let player = Player::new();
-        let volume = 0.8;
+        let player = Arc::new(Player::new());
+        let session: Session = std::fs::read(settings.config_dir.join("player.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or(Session { volume: 0.8, ..Default::default() });
+        let volume = session.volume.clamp(0.0, 1.0);
         player.set_volume(volume * volume);
+        if !session.queue.is_empty() {
+            // Back where we were, paused.
+            player.cue(session.queue.clone(), session.index.min(session.queue.len() - 1), session.position);
+        }
+        player.set_repeat(session.repeat);
+        let shared_lib: SharedLibrary = Default::default();
+        let media_err = crate::media_keys::spawn(player.clone(), shared_lib.clone(), settings.cache_dir.clone(), ctx.clone()).err();
         let mut me = LibraryUi {
             settings: settings.clone(),
             lib: None,
@@ -97,22 +124,25 @@ impl LibraryUi {
             rescan_wanted: false,
             covers: CoverCache::new(settings.cache_dir.clone(), ctx.clone()),
             player,
+            shared_lib,
             page: Page::Albums,
             album: None,
             artist: None,
             search: String::new(),
             search_id: egui::Id::unique("library-search"),
             queue_open: false,
-            shuffle: false,
-            repeat: false,
+            shuffle: session.shuffle,
+            repeat: session.repeat,
             volume,
             seek_preview: None,
             sort: AlbumSort::Artist,
             last: Status::default(),
             actions: Vec::new(),
-            log: Vec::new(),
+            log: media_err.into_iter().collect(),
             demo: None,
             bar_top: None,
+            saved: Some(session),
+            saved_at: std::time::Instant::now(),
         };
         me.rescan(ctx);
         me
@@ -126,12 +156,18 @@ impl LibraryUi {
         }
         let (tx, rx) = channel();
         let (settings, progress, ctx) = (self.settings.clone(), self.scan_progress.clone(), ctx.clone());
+        let shared = self.shared_lib.clone();
         std::thread::spawn(move || {
             let r = Library::scan(&settings, &|done, total| {
                 progress.0.store(done, Ordering::Relaxed);
                 progress.1.store(total, Ordering::Relaxed);
             })
+            .map(|(lib, st)| (Arc::new(lib), st))
             .map_err(|e| format!("{e:#}"));
+            // The media-keys thread gets it now, even if the window is hidden.
+            if let Ok((lib, _)) = &r {
+                *shared.lock().unwrap() = Some(lib.clone());
+            }
             let _ = tx.send(r);
             ctx.request_repaint();
         });
@@ -141,6 +177,8 @@ impl LibraryUi {
     pub fn set_demo_volume(&mut self) {
         self.volume = 0.0;
         self.player.set_volume(0.0);
+        // A demo doesn't overwrite the real session.
+        self.saved_at = std::time::Instant::now() + Duration::from_secs(1_000_000);
     }
 
     /// Per frame: scan results, cover loads, repeat, repaint while playing.
@@ -168,7 +206,7 @@ impl LibraryUi {
                     self.album = open.and_then(|k| lib.albums.iter().position(|a| a.key == k));
                     let artist = self.artist.and_then(|i| old.as_ref()?.artists.get(i).map(|a| norm(&a.name)));
                     self.artist = artist.and_then(|n| lib.artists.iter().position(|a| norm(&a.name) == n));
-                    self.lib = Some(Arc::new(lib));
+                    self.lib = Some(lib);
                     self.covers.clear();
                     self.run_demo();
                 }
@@ -179,13 +217,10 @@ impl LibraryUi {
             }
         }
         let s = self.player.status();
-        // Repeat: the queue ran out by itself (not Stop) -> again from the top.
-        if self.repeat && s.state == State::Stopped && self.last.state == State::Playing {
-            let ended = self.last.index.is_some_and(|i| i + 1 >= self.last.queue_len)
-                && self.last.duration.is_some_and(|d| self.last.position >= d - 1.5);
-            if ended {
-                self.player.jump(0);
-            }
+        // Volume may have been changed from the desktop's media widget.
+        let v = self.player.volume().sqrt();
+        if (v - self.volume).abs() > 0.001 && self.volume > 0.0 {
+            self.volume = v;
         }
         if s.error != self.last.error {
             if let Some(e) = &s.error {
@@ -195,11 +230,40 @@ impl LibraryUi {
         if s.state == State::Playing {
             ctx.request_repaint_after(Duration::from_millis(200));
         }
+        if self.saved_at.elapsed() > Duration::from_secs(10) {
+            self.save_session();
+        }
         if self.scan.is_some() {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
         self.last = s;
         std::mem::take(&mut self.log)
+    }
+
+    /// Saves volume, queue and position (if they changed).
+    pub fn save_session(&mut self) {
+        self.saved_at = std::time::Instant::now();
+        let s = &self.last;
+        let session = Session {
+            volume: self.volume,
+            queue: self.player.queue(),
+            index: s.index.unwrap_or(0),
+            position: s.position,
+            shuffle: self.shuffle,
+            repeat: self.repeat,
+        };
+        if self.saved.as_ref() == Some(&session) {
+            return;
+        }
+        let path = self.settings.config_dir.join("player.json");
+        let tmp = path.with_extension("json.part");
+        let ok = serde_json::to_vec(&session)
+            .ok()
+            .and_then(|b| std::fs::create_dir_all(&self.settings.config_dir).and_then(|_| std::fs::write(&tmp, b)).ok())
+            .and_then(|_| std::fs::rename(&tmp, &path).ok());
+        if ok.is_some() {
+            self.saved = Some(session);
+        }
     }
 
     fn run_demo(&mut self) {
@@ -852,6 +916,7 @@ impl LibraryUi {
                 }
                 if rp.clicked() {
                     self.repeat = !self.repeat;
+                    self.player.set_repeat(self.repeat);
                 }
             });
             ui.horizontal(|ui| {

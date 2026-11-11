@@ -22,6 +22,8 @@ use crate::State;
 
 pub enum Cmd {
     Load(Vec<PathBuf>, usize),
+    /// Set the queue and the song/position to start from, without playing.
+    Cue(Vec<PathBuf>, usize, f64),
     Append(Vec<PathBuf>),
     InsertNext(Vec<PathBuf>),
     Jump(usize),
@@ -32,6 +34,8 @@ pub enum Cmd {
     Next,
     Prev,
     Seek(f64),
+    /// At the end of the queue, start again from the top (gapless).
+    Repeat(bool),
     Quit,
 }
 
@@ -64,6 +68,8 @@ pub struct Info {
     pub error: Option<String>,
     /// The song to resume from after Stop / the end of the queue.
     pub stopped_index: Option<usize>,
+    /// Where in it Play starts (a cued position; 0 otherwise).
+    pub resume_at: f64,
 }
 
 struct Out {
@@ -96,6 +102,7 @@ pub struct Engine {
     draining: bool,
     /// The next song needs another output rate: switch when the ring is empty.
     reopen_pending: Option<f64>,
+    repeat: bool,
 }
 
 impl Engine {
@@ -116,6 +123,7 @@ impl Engine {
             state: State::Stopped,
             draining: false,
             reopen_pending: None,
+            repeat: false,
         }
     }
 
@@ -189,11 +197,22 @@ impl Engine {
                     self.dec_index += n;
                 }
             }
+            Cmd::Cue(queue, i, at) => {
+                self.stop();
+                self.queue = queue;
+                let mut info = self.common.info.lock().unwrap();
+                info.stopped_index = Some(i);
+                info.resume_at = at.max(0.0);
+                info.error = None;
+            }
             Cmd::Jump(i) => self.play_from(i, 0.0),
             Cmd::Play => match self.state {
                 State::Stopped => {
-                    let i = self.common.info.lock().unwrap().stopped_index.unwrap_or(0);
-                    self.play_from(i, 0.0);
+                    let (i, at) = {
+                        let mut info = self.common.info.lock().unwrap();
+                        (info.stopped_index.unwrap_or(0), std::mem::take(&mut info.resume_at))
+                    };
+                    self.play_from(i, at);
                 }
                 _ => self.set_paused(false),
             },
@@ -223,6 +242,9 @@ impl Engine {
                     self.play_from(to, 0.0);
                 }
             }
+            Cmd::Seek(secs) if self.state == State::Stopped => {
+                self.common.info.lock().unwrap().resume_at = secs.max(0.0);
+            }
             Cmd::Seek(secs) => {
                 if let Some((i, _)) = self.current() {
                     if i == self.dec_index && self.src.is_some() && self.reopen_pending.is_none() {
@@ -245,6 +267,7 @@ impl Engine {
                     }
                 }
             }
+            Cmd::Repeat(on) => self.repeat = on,
             Cmd::Quit => {}
         }
         self.publish();
@@ -384,7 +407,10 @@ impl Engine {
         self.reopen_pending = None;
         self.shared.paused.store(false, Ordering::Relaxed);
         self.state = State::Stopped;
-        self.common.info.lock().unwrap().stopped_index = at;
+        let mut info = self.common.info.lock().unwrap();
+        info.stopped_index = at;
+        info.resume_at = 0.0;
+        drop(info);
         self.publish();
     }
 
@@ -437,7 +463,10 @@ impl Engine {
     }
 
     fn after_song(&mut self) {
-        let next = self.dec_index + 1;
+        let mut next = self.dec_index + 1;
+        if next >= self.queue.len() && self.repeat {
+            next = 0;
+        }
         if next < self.queue.len() {
             self.begin(next, 0.0, true);
         } else {

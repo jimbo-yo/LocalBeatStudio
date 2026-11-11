@@ -90,6 +90,11 @@ impl Player {
     pub fn load(&self, queue: Vec<PathBuf>, start: usize) {
         self.send(Cmd::Load(queue, start));
     }
+    /// Sets the queue with song `index` at `at` seconds ready to play
+    /// (paused, nothing opened): Play starts there. For restoring a session.
+    pub fn cue(&self, queue: Vec<PathBuf>, index: usize, at: f64) {
+        self.send(Cmd::Cue(queue, index, at));
+    }
     /// Adds songs to the end of the queue.
     pub fn append(&self, songs: Vec<PathBuf>) {
         self.send(Cmd::Append(songs));
@@ -124,9 +129,17 @@ impl Player {
     pub fn seek(&self, secs: f64) {
         self.send(Cmd::Seek(secs));
     }
+    /// Play the queue again from the top when it ends.
+    pub fn set_repeat(&self, on: bool) {
+        self.send(Cmd::Repeat(on));
+    }
     /// 0..1, applied as is (the UI picks the curve).
     pub fn set_volume(&self, v: f32) {
         self.shared.volume.store(v.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn volume(&self) -> f32 {
+        f32::from_bits(self.shared.volume.load(Ordering::Relaxed))
     }
 
     pub fn queue(&self) -> Vec<PathBuf> {
@@ -139,6 +152,7 @@ impl Player {
         let mut s = Status { state: info.state, queue_len: info.queue.len(), volume, error: info.error, ..Default::default() };
         if info.state == State::Stopped {
             s.index = info.stopped_index.filter(|&i| i < info.queue.len());
+            s.position = info.resume_at;
         } else {
             let segs = self.common.segments.lock().unwrap();
             let c = self.shared.consumed.load(Ordering::Acquire);
@@ -270,6 +284,48 @@ mod tests {
         wait(&p, "the end", |s| s.state == State::Stopped);
         let n = fake.played.lock().unwrap().len() / 2;
         assert!((n as i64 - 16000).abs() <= 2, "{n}");
+    }
+
+    #[test]
+    fn repeat_wraps_to_the_top() {
+        let (a, b) = (tmp("rep-a.wav"), tmp("rep-b.wav"));
+        write_wav(&a, 8000, 2, 400, |_| 5);
+        write_wav(&b, 8000, 2, 400, |_| 6);
+        let fake = FakeBackend::default();
+        let p = Player::with_backend(Box::new(fake.clone()));
+        p.set_repeat(true);
+        p.load(vec![a, b], 0);
+        let t = Instant::now();
+        while fake.played.lock().unwrap().len() < 2 * 2000 && t.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let got = left(&fake.played.lock().unwrap());
+        assert!(got.len() >= 2000, "kept playing: {}", got.len());
+        assert_eq!(&got[..1600], &[vec![5; 400], vec![6; 400], vec![5; 400], vec![6; 400]].concat()[..]);
+        assert_eq!(p.status().state, State::Playing);
+        p.set_repeat(false);
+    }
+
+    #[test]
+    fn cue_waits_then_plays_from_the_spot() {
+        let a = tmp("cue-a.wav");
+        let b = tmp("cue-b.wav");
+        write_wav(&a, 8000, 2, 8000, |_| 1);
+        write_wav(&b, 8000, 2, 80_000, |n| (n % 20_000) as i16);
+        let fake = FakeBackend::default();
+        let p = Player::with_backend(Box::new(fake.clone()));
+        p.cue(vec![a, b.clone()], 1, 2.0);
+        let s = wait(&p, "cued", |s| s.index == Some(1));
+        assert_eq!(s.state, State::Stopped);
+        assert_eq!(s.position, 2.0);
+        assert!(fake.opened.lock().unwrap().is_empty(), "no sound device until Play");
+        p.play();
+        wait(&p, "playing b", |s| s.state == State::Playing && s.index == Some(1));
+        let t = Instant::now();
+        while fake.played.lock().unwrap().is_empty() && t.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(left(&fake.played.lock().unwrap())[0], 16000);
     }
 
     #[test]

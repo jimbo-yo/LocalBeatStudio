@@ -26,12 +26,12 @@ that exist only on the other computer.
 Install (equivalents):
 
 - Fedora: `sudo dnf install flac opus-tools ffmpeg-free sg3_utils
-  python3-pyside6 android-tools qt6-qttools kde-connect` + cyanrip build deps
+  python3-pyside6 android-tools qt6-qttools kde-connect alsa-lib-devel` + cyanrip build deps
   `meson ffmpeg-devel` (negativo17, not ffmpeg-free-devel)
   `libcdio-paranoia-devel libmusicbrainz5-devel libcurl-devel`
 - Ubuntu: `sudo apt install flac opus-tools ffmpeg libnotify-bin
   python3-pyside6.qtcore python3-pyside6.qtgui python3-pyside6.qtwidgets
-  python3-pyside6.qtnetwork adb kdeconnect qdbus-qt6 sshfs` + cyanrip build
+  python3-pyside6.qtnetwork adb kdeconnect qdbus-qt6 sshfs libasound2-dev` + cyanrip build
   deps `meson ninja-build pkg-config libcdio-paranoia-dev libmusicbrainz5-dev
   libcurl4-openssl-dev libavcodec-dev libavformat-dev libavutil-dev
   libswresample-dev libavfilter-dev`. Ubuntu packages cyanrip 0.9.3.1, but
@@ -718,6 +718,19 @@ exit-code-52 errors) was removed.
   ripped disc. Shuffle/repeat are UI-side (repeat = whole queue).
   egui 0.37 quirk: a bottom Panel reserves ~10 px less than it draws, so the
   bar is 94 px and lays out below `bar_top` (where the panels above end)
+- Chunk 6 done: gui/media_keys.rs = MPRIS on its own thread (souvlaki 0.9,
+  feature use_zbus: no libdbus needed) talking to `Arc<Player>` directly,
+  because a hidden/minimised window gets NO frames on KDE Wayland (anything
+  per-frame stops: that's also why repeat moved into the engine,
+  `Player::set_repeat`). Library handed to it by the scan thread. Tested
+  with the window hidden: Paused + title/artist/cover from a restored
+  session, PlayPause/Next/Pause over D-Bus. Session (volume, queue, song,
+  position, shuffle, repeat) in `<config>/player.json`, saved every 10 s
+  when it changed and on exit; restored with `Player::cue` (nothing opened
+  until Play). Phone / Review pages use theme buttons and cards.
+  Test MPRIS: `qdbus-qt6 org.mpris.MediaPlayer2.ripshelf /org/mpris/MediaPlayer2
+  org.mpris.MediaPlayer2.Player.Metadata`; a scratch `XDG_CONFIG_HOME` with a
+  player.json keeps tests off the real session
 
 ### In progress: CUETools DB repair (2026-11-11)
 - Sector voting (core/vote.rs, per sector then per sample, AR-verified only)

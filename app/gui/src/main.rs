@@ -22,6 +22,7 @@ use ripshelf_platform::phone_notify;
 
 mod cover_cache;
 mod library_ui;
+mod media_keys;
 mod phone_tab;
 mod review_tab;
 mod theme;
@@ -877,6 +878,12 @@ fn fmt_duration(d: Duration) -> String {
 }
 
 impl eframe::App for App {
+    fn on_exit(&mut self) {
+        if std::env::var_os("RIPSHELF_DEMO").is_none() {
+            self.library.save_session();
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll();
         self.swap_view(true);

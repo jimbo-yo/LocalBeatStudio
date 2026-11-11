@@ -66,8 +66,8 @@ impl ReviewTab {
         }
         let total = self.items.as_ref().map_or(0, Vec::len);
         ui.horizontal(|ui| {
-            ui.heading(format!("{total} albums to review"));
-            if ui.button("⟳ Refresh").clicked() {
+            ui.label(RichText::new(format!("{total} albums to review")).font(crate::theme::bold(18.0)));
+            if crate::theme::button(ui, Some(crate::theme::Icon::Refresh), "Refresh", crate::theme::Kind::Secondary).clicked() {
                 self.items = None;
             }
             ui.separator();
@@ -93,10 +93,10 @@ impl ReviewTab {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             for item in items {
                 let busy = self.working.contains(&item.rel);
-                egui::Frame::group(ui.style()).show(ui, |ui| {
+                crate::theme::card(ui).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(&item.rel).strong());
+                        ui.label(RichText::new(&item.rel).font(crate::theme::medium(15.0)));
                         ui.weak(if item.by_sound { "· identified by sound" } else { "· found by name" });
                     });
                     ui.horizontal_wrapped(|ui| {
@@ -115,10 +115,10 @@ impl ReviewTab {
                             ui.label("Writing…");
                             return;
                         }
-                        if ui.add_enabled(!item.release_id.is_empty(), egui::Button::new("✔ Accept")).clicked() {
+                        if ui.add_enabled_ui(!item.release_id.is_empty(), |ui| crate::theme::button(ui, Some(crate::theme::Icon::Check), "Accept", crate::theme::Kind::Primary)).inner.clicked() {
                             self.accept(s, &item.rel, &item.release_id, &ctx);
                         }
-                        if ui.button("✘ Leave as is").clicked() {
+                        if crate::theme::button(ui, Some(crate::theme::Icon::Cross), "Leave as is", crate::theme::Kind::Secondary).clicked() {
                             match enrich_review::reject(s, &item.rel) {
                                 Ok(()) => {
                                     if let Some(items) = &mut self.items {
@@ -129,7 +129,7 @@ impl ReviewTab {
                                 Err(e) => lines.push(format!("Review: {}: {e:#}", item.rel)),
                             }
                         }
-                        if ui.button("📂 Open folder").clicked() {
+                        if crate::theme::icon_button(ui, crate::theme::Icon::Folder, 32.0, "Open folder").clicked() {
                             open_folder(&s.misc_dir.join(&item.rel));
                         }
                         ui.separator();
@@ -141,6 +141,7 @@ impl ReviewTab {
                         }
                     });
                 });
+                ui.add_space(6.0);
             }
         });
         lines

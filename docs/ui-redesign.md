@@ -55,7 +55,7 @@ Dark-first (light variant kept), inspired by light on a CD's data side.
 5. ✅ (2026-11-11) **Library UI + now-playing bar**: Albums grid, album page (tinted),
    Artists, Songs table, search, Recently added; play / play next / add to
    queue; Up Next drawer; keyboard (space, arrows).
-6. **Desktop integration + polish**: MPRIS via souvlaki (KDE media widget,
+6. ✅ (2026-11-11) **Desktop integration + polish**: MPRIS via souvlaki (KDE media widget,
    media keys; Windows SMTC later), remember queue/position/volume, phone and
    review pages restyled, notes in CLAUDE.md.
 

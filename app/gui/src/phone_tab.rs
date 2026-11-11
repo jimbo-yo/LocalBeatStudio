@@ -256,7 +256,7 @@ impl PhoneTab {
                 self.loaded = None;
                 self.connect(s, prefs.phone_usb, &ctx);
             }
-            if ui.add_enabled(!self.busy, egui::Button::new("🔄 Connect / refresh")).clicked() {
+            if ui.add_enabled_ui(!self.busy, |ui| crate::theme::button(ui, Some(crate::theme::Icon::Refresh), "Connect / refresh", crate::theme::Kind::Secondary)).inner.clicked() {
                 self.connect(s, prefs.phone_usb, &ctx);
             }
             if self.busy && !self.syncing {
@@ -309,7 +309,7 @@ impl PhoneTab {
                     ui.selectable_value(&mut self.show, Show::FromCd, "Ripped from CD (FLAC)");
                     ui.selectable_value(&mut self.show, Show::FromMisc, "Miscellaneous (MP3/AAC…)");
                 });
-            if ui.button("Undo changes").on_hover_text("Back to what's on the phone now").clicked() {
+            if crate::theme::button(ui, None, "Undo changes", crate::theme::Kind::Secondary).on_hover_text("Back to what's on the phone now").clicked() {
                 if let Some(l) = &self.loaded {
                     self.wanted = phone_sync::on_phone(&l.lib, &l.phone);
                     changed = true;
@@ -317,7 +317,7 @@ impl PhoneTab {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let ok = !self.plan.is_empty() && !self.over_capacity(prefs);
-                if ui.add_enabled(ok, egui::Button::new(RichText::new("⟳ Sync to phone").strong())).clicked() {
+                if ui.add_enabled_ui(ok, |ui| crate::theme::button(ui, Some(crate::theme::Icon::Phone), "Sync to phone", crate::theme::Kind::Primary)).inner.clicked() {
                     self.confirm = true;
                 }
             });
@@ -365,11 +365,11 @@ impl PhoneTab {
         };
         ui.horizontal(|ui| {
             let tile = |ui: &mut egui::Ui, title: &str, value: String, sub: String, colour: Option<Color32>| {
-                egui::Frame::group(ui.style()).show(ui, |ui| {
+                crate::theme::card(ui).show(ui, |ui| {
                     ui.set_min_width(220.0);
                     ui.vertical(|ui| {
-                        ui.label(title);
-                        let v = RichText::new(value).size(24.0).strong();
+                        crate::theme::section_label(ui, title);
+                        let v = RichText::new(value).font(crate::theme::bold(26.0));
                         ui.label(match colour {
                             Some(c) => v.color(c),
                             None => v,
@@ -558,7 +558,7 @@ impl PhoneTab {
         if let Some(w) = &self.waiting {
             ui.colored_label(AMBER, w);
         }
-        if ui.button("⏹ Stop sync").on_hover_text("Stops after the current file; what's sent stays on the phone").clicked() {
+        if crate::theme::button(ui, Some(crate::theme::Icon::Stop), "Stop sync", crate::theme::Kind::Danger).on_hover_text("Stops after the current file; what's sent stays on the phone").clicked() {
             self.cancel.store(true, Ordering::Relaxed);
         }
     }
@@ -615,10 +615,10 @@ impl PhoneTab {
                 });
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if ui.button(RichText::new("Sync").strong()).clicked() {
+                    if crate::theme::button(ui, Some(crate::theme::Icon::Check), "Sync", crate::theme::Kind::Primary).clicked() {
                         go = true;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if crate::theme::button(ui, None, "Cancel", crate::theme::Kind::Secondary).clicked() {
                         close = true;
                     }
                 });
