@@ -87,6 +87,10 @@ impl Notifier {
                     st.summary = Some(format!("{label} failed: {msg}"));
                     now_msg = Some(format!("{label} failed: {msg}"));
                 }
+                Event::DiscStopped => {
+                    let label = if st.label.is_empty() { "The disc".to_string() } else { st.label.clone() };
+                    st.summary = Some(format!("{label}: stopped and ejected"));
+                }
                 Event::Waiting { done } if *done > 0 => {
                     st.waiting_since = Some(Instant::now());
                     st.sent = false;

@@ -57,8 +57,8 @@ enum Msg {
     /// An event from the rip loop of a drive (path).
     Event(String, Event),
     Choose { drive: String, candidates: Vec<Release>, reply: Sender<ReleaseChoice> },
-    /// A drive's rip loop started / ended.
-    LoopStarted(String),
+    /// A drive's rip loop started (with its stop-this-disc flag) / ended.
+    LoopStarted(String, Arc<AtomicBool>),
     Stopped(String, Option<String>),
     /// The drive watcher ended (after Stop).
     WatcherDone,
@@ -68,12 +68,17 @@ struct GuiFrontend {
     drive: String,
     tx: Sender<Msg>,
     stop: Arc<AtomicBool>,
+    /// "Stop & eject" for this drive's current disc.
+    stop_disc: Arc<AtomicBool>,
     ctx: egui::Context,
     notifier: Arc<Notifier>,
 }
 
 impl Frontend for GuiFrontend {
     fn event(&self, e: Event) {
+        if matches!(e, Event::DiscStart { .. }) {
+            self.stop_disc.store(false, Ordering::Relaxed);
+        }
         self.notifier.observe(&e);
         let _ = self.tx.send(Msg::Event(self.drive.clone(), e));
         self.ctx.request_repaint();
@@ -86,7 +91,7 @@ impl Frontend for GuiFrontend {
         loop {
             match answer.recv_timeout(Duration::from_millis(200)) {
                 Ok(c) => return c,
-                Err(_) if self.cancelled() => return ReleaseChoice::Skip,
+                Err(_) if self.cancelled() || self.stop_disc() => return ReleaseChoice::Skip,
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return ReleaseChoice::Skip,
                 Err(_) => {}
             }
@@ -95,6 +100,10 @@ impl Frontend for GuiFrontend {
 
     fn cancelled(&self) -> bool {
         self.stop.load(Ordering::Relaxed)
+    }
+
+    fn stop_disc(&self) -> bool {
+        self.stop_disc.load(Ordering::Relaxed)
     }
 }
 
@@ -134,6 +143,10 @@ struct Disc {
     done_secs: u32,
     total_secs: u32,
     result: Option<String>,
+    /// The disc has left the drive (after ripping, or after Stop & eject).
+    ejected: bool,
+    /// Stop & eject was pressed.
+    stopping: bool,
 }
 
 /// One drive's part of the Rip tab.
@@ -141,6 +154,14 @@ struct Disc {
 struct DriveView {
     disc: Option<Disc>,
     stage: String,
+    /// While its rip loop runs: the flag that stops the current disc.
+    stop_disc: Option<Arc<AtomicBool>>,
+}
+
+/// A per-drive button pressed in the drive strip (done after drawing).
+enum DriveAction {
+    StopDisc,
+    Eject,
 }
 
 struct Choice {
@@ -185,8 +206,9 @@ struct App {
     tab: Tab,
     phone: phone_tab::PhoneTab,
     review: review_tab::ReviewTab,
-    /// Result of a running Eject (button off meanwhile).
-    eject: Option<Receiver<Vec<String>>>,
+    /// Running Ejects: drive (None = every idle drive) and the result.
+    eject: Vec<(Option<String>, Receiver<Vec<String>>)>,
+    drive_action: Option<(String, DriveAction)>,
 }
 
 impl App {
@@ -232,12 +254,13 @@ impl App {
             tab: Tab::Rip,
             phone: phone_tab::PhoneTab::new(),
             review: review_tab::ReviewTab::new(),
-            eject: None,
+            eject: Vec::new(),
+            drive_action: None,
         };
         if std::env::var_os("RIPSHELF_DEMO").is_some() {
             // Made-up disc for working on the layout without a CD.
-            app.drives.insert("/dev/sr1".into(), DriveView { disc: Some(demo_disc()), stage: "Ripping track 5 (demo)".into() });
-            app.drives.insert("/dev/sr2".into(), DriveView { disc: None, stage: "Waiting for a disc (demo)".into() });
+            app.drives.insert("/dev/sr1".into(), DriveView { disc: Some(demo_disc()), stage: "Ripping track 5 (demo)".into(), stop_disc: Some(Default::default()) });
+            app.drives.insert("/dev/sr2".into(), DriveView { disc: None, stage: "Waiting for a disc (demo)".into(), stop_disc: Some(Default::default()) });
             app.view = Some("/dev/sr1".into());
             app.session = vec![(true, "Radiohead – OK Computer: 12/12".into()), (false, "Lenny Kravitz – Let Love Rule: 11/12".into())];
         } else {
@@ -259,9 +282,17 @@ impl App {
                     if !started.insert(path.clone()) {
                         continue;
                     }
-                    let fe = GuiFrontend { drive: path.clone(), tx: tx.clone(), stop: stop.clone(), ctx: ctx.clone(), notifier: notifier.clone() };
+                    let stop_disc = Arc::new(AtomicBool::new(false));
+                    let fe = GuiFrontend {
+                        drive: path.clone(),
+                        tx: tx.clone(),
+                        stop: stop.clone(),
+                        stop_disc: stop_disc.clone(),
+                        ctx: ctx.clone(),
+                        notifier: notifier.clone(),
+                    };
                     let (settings, tx) = (settings.clone(), tx.clone());
-                    let _ = tx.send(Msg::LoopStarted(path.clone()));
+                    let _ = tx.send(Msg::LoopStarted(path.clone(), stop_disc));
                     std::thread::spawn(move || {
                         let opts = Options { drive: Some(path.clone()), ..Default::default() };
                         let r = engine::rip_loop(&settings, &opts, &fe);
@@ -327,6 +358,49 @@ impl App {
         }
     }
 
+    /// A per-drive button from the drive strip (views not swapped in).
+    fn drive_action(&mut self, drive: String, action: DriveAction) {
+        match action {
+            DriveAction::StopDisc => {
+                let Some(flag) = self.drives.get(&drive).and_then(|v| v.stop_disc.clone()) else { return };
+                flag.store(true, Ordering::Relaxed);
+                // Its release question, if any, goes away.
+                if self.choice.as_ref().is_some_and(|c| c.drive == drive) {
+                    if let Some(c) = self.choice.take() {
+                        let _ = c.reply.send(ReleaseChoice::Skip);
+                    }
+                }
+                let (theirs, rest): (Vec<_>, Vec<_>) = self.queued_choices.drain(..).partition(|c| c.drive == drive);
+                self.queued_choices = rest.into();
+                for c in theirs {
+                    let _ = c.reply.send(ReleaseChoice::Skip);
+                }
+                self.with_view(&drive, |a| {
+                    if let Some(d) = &mut a.disc {
+                        d.stopping = true;
+                    }
+                    a.stage = "Stopping…".into();
+                });
+                self.log(format!("{drive}: stopping this disc"));
+            }
+            DriveAction::Eject => {
+                let (tx, rx) = channel();
+                let (settings, ctx, path) = (self.settings.clone(), self.ctx.clone(), drive.clone());
+                std::thread::spawn(move || {
+                    let line = match engine::eject_one(&settings, &path, true) {
+                        Ok(engine::EjectOutcome::Ejected) => format!("Ejected {path}"),
+                        Ok(engine::EjectOutcome::Busy) => format!("{path} is busy (being ripped or making phone copies): try again in a moment"),
+                        Ok(engine::EjectOutcome::NoDisc) => format!("No CD in {path}"),
+                        Err(e) => format!("Couldn't eject {path}: {e:#}"),
+                    };
+                    let _ = tx.send(vec![line]);
+                    ctx.request_repaint();
+                });
+                self.eject.push((Some(drive), rx));
+            }
+        }
+    }
+
     fn log(&mut self, line: String) {
         self.log.push(line);
         if self.log.len() > 5000 {
@@ -358,9 +432,11 @@ impl App {
                         self.select_view(drive);
                     }
                 }
-                Msg::LoopStarted(drive) => {
+                Msg::LoopStarted(drive, stop_disc) => {
                     self.loops += 1;
-                    self.drives.entry(drive.clone()).or_default().stage = "Waiting for a disc".into();
+                    let v = self.drives.entry(drive.clone()).or_default();
+                    v.stage = "Waiting for a disc".into();
+                    v.stop_disc = Some(stop_disc);
                     if self.view.is_none() {
                         self.select_view(drive);
                     }
@@ -370,6 +446,9 @@ impl App {
                 }
                 Msg::Stopped(drive, err) => {
                     self.loops = self.loops.saturating_sub(1);
+                    if let Some(v) = self.drives.get_mut(&drive) {
+                        v.stop_disc = None;
+                    }
                     let line = match &err {
                         Some(e) => format!("{drive}: stopped with an error: {e}"),
                         None => format!("{drive}: stopped"),
@@ -535,6 +614,9 @@ impl App {
                 if !ok {
                     self.log("Couldn't eject the disc".into());
                 }
+                if let Some(d) = &mut self.disc {
+                    d.ejected = ok;
+                }
             }
             Event::PhoneFile { name, error } => match error {
                 None => self.log(format!("Phone copy: {name}")),
@@ -556,6 +638,20 @@ impl App {
                 self.session.push((false, format!("{label}: {e}")));
                 if let Some(d) = &mut self.disc {
                     d.result = Some(format!("Failed: {e}"));
+                }
+            }
+            Event::DiscStopped => {
+                let label = self.disc_label();
+                self.log(format!("Stopped {label}: ejecting it"));
+                self.session.push((false, format!("{label}: stopped")));
+                if let Some(d) = &mut self.disc {
+                    let saved = d.rows.iter().filter(|r| matches!(r.status, Status::Saved(_) | Status::SavedWarn(_))).count();
+                    d.result = Some(format!("Stopped ({saved} tracks saved; put it back in to rip the rest)"));
+                    for r in &mut d.rows {
+                        if matches!(r.status, Status::Reading { .. }) {
+                            r.status = Status::Pending;
+                        }
+                    }
                 }
             }
             Event::Note(n) => self.log(n),
@@ -626,6 +722,9 @@ impl eframe::App for App {
         if let Some(v) = self.pending_view.take() {
             self.select_view(v);
         }
+        if let Some((drive, action)) = self.drive_action.take() {
+            self.drive_action(drive, action);
+        }
     }
 }
 
@@ -638,11 +737,17 @@ impl App {
         for line in self.review.poll(ctx) {
             self.log(line);
         }
-        if let Some(lines) = self.eject.as_ref().and_then(|rx| rx.try_recv().ok()) {
-            self.eject = None;
-            for l in lines {
-                self.log(l);
+        let mut done = Vec::new();
+        self.eject.retain(|(_, rx)| match rx.try_recv() {
+            Ok(lines) => {
+                done.extend(lines);
+                false
             }
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Err(_) => false,
+        });
+        for l in done {
+            self.log(l);
         }
         if self.running || self.choice.is_some() {
             // Keep the countdown and progress moving.
@@ -670,8 +775,8 @@ impl App {
                     } else if ui.button("▶ Start ripping").clicked() {
                         self.start();
                     }
-                    let ejecting = self.eject.is_some();
-                    let hint = "Eject the CD from every drive that isn't being ripped. To eject a disc that's being ripped, stop ripping first.";
+                    let ejecting = !self.eject.is_empty();
+                    let hint = "Eject the CD from every drive that isn't being ripped. To eject a disc that's being ripped, use its drive's ⏹ Stop & eject below.";
                     if ui.add_enabled(!ejecting, egui::Button::new(if ejecting { "⏏ Ejecting…" } else { "⏏ Eject" })).on_hover_text(hint).clicked() {
                         let (tx, rx) = channel();
                         let (settings, ctx) = (self.settings.clone(), ctx.clone());
@@ -686,7 +791,7 @@ impl App {
                             let _ = tx.send(lines);
                             ctx.request_repaint();
                         });
-                        self.eject = Some(rx);
+                        self.eject.push((None, rx));
                         self.show_log = true;
                     }
                     ui.separator();
@@ -746,10 +851,11 @@ impl App {
             return;
         }
 
-        if self.drives.len() > 1 {
+        if !self.drives.is_empty() {
             egui::Panel::top("drives").show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.weak("Drives:");
+                    let all_ejecting = self.eject.iter().any(|(d, _)| d.is_none());
                     for (path, v) in &self.drives {
                         let shown = self.view.as_deref() == Some(path.as_str());
                         let (disc, stage) = if shown { (&self.disc, &self.stage) } else { (&v.disc, &v.stage) };
@@ -762,15 +868,36 @@ impl App {
                             _ => stage.clone(),
                         };
                         let model = disc.as_ref().map(|d| d.model.clone()).filter(|m| !m.is_empty());
-                        let label = egui::RichText::new(format!("{name}: {what}"));
-                        let r = ui.selectable_label(shown, label);
-                        let r = match model {
-                            Some(m) => r.on_hover_text(m),
-                            None => r,
-                        };
-                        if r.clicked() && !shown {
-                            self.pending_view = Some(path.clone());
-                        }
+                        // Ripping = its loop is on a disc that's still in the drive.
+                        let ripping = v.stop_disc.is_some() && disc.as_ref().is_some_and(|d| d.result.is_none() && !d.ejected);
+                        let stopping = disc.as_ref().is_some_and(|d| d.stopping) && ripping;
+                        egui::Frame::group(ui.style()).inner_margin(egui::Margin::symmetric(6, 3)).show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let r = ui.selectable_label(shown, egui::RichText::new(format!("{name}: {what}")));
+                                let r = match model {
+                                    Some(m) => r.on_hover_text(m),
+                                    None => r,
+                                };
+                                if r.clicked() && !shown {
+                                    self.pending_view = Some(path.clone());
+                                }
+                                if ripping {
+                                    let label = if stopping { "Stopping…" } else { "⏹ Stop & eject" };
+                                    let hint = "Stop ripping this disc and eject it. Tracks already saved stay in the library; \
+                                                put the disc back in later and only the missing tracks are ripped. \
+                                                This drive keeps watching for the next disc.";
+                                    if ui.add_enabled(!stopping, egui::Button::new(label).small()).on_hover_text(hint).clicked() {
+                                        self.drive_action = Some((path.clone(), DriveAction::StopDisc));
+                                    }
+                                } else {
+                                    let ejecting = all_ejecting || self.eject.iter().any(|(d, _)| d.as_deref() == Some(path.as_str()));
+                                    let label = if ejecting { "Ejecting…" } else { "⏏ Eject" };
+                                    if ui.add_enabled(!ejecting, egui::Button::new(label).small()).on_hover_text("Eject this drive's disc").clicked() {
+                                        self.drive_action = Some((path.clone(), DriveAction::Eject));
+                                    }
+                                }
+                            });
+                        });
                     }
                 });
             });

@@ -643,6 +643,11 @@ exit-code-52 errors) was removed.
   shows as idle. First parallel run 2026-11-11: HP (sr1) + SuperDrive (sr2)
   both ripping fine
 - ⏏ Eject button: engine::eject_idle ejects every drive no rip holds
+- Per-drive buttons in the Drives strip (2026-11-11): **⏹ Stop & eject**
+  while a drive rips (Frontend::stop_disc: that disc ends with
+  Event::DiscStopped, is ejected, saved tracks stay, the loop keeps watching;
+  flag cleared at the next DiscStart) and **⏏ Eject** when idle
+  (engine::eject_one). Not yet tried on a real rip
 - **Other pressings**: AccurateRip's per-pressing frame-450 checksums
   (own parser; cdtoc drops them) find a shift within ±10 sectors; the edge
   sectors are read and the whole track checked there (Acceptance::

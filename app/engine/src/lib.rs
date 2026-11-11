@@ -71,6 +71,9 @@ pub enum Event {
     DiscDone { ok: bool },
     /// The disc failed (it's ejected unless --no-eject).
     DiscFailed(String),
+    /// The disc was stopped on request ([`Frontend::stop_disc`]); it's
+    /// ejected next and the loop carries on.
+    DiscStopped,
     Note(String),
 }
 
@@ -91,6 +94,17 @@ pub trait Frontend: Sync {
     fn cancelled(&self) -> bool {
         false
     }
+
+    /// Give up on the disc being ripped (eject it) but keep watching the
+    /// drive. The front end clears its flag when the next disc starts.
+    fn stop_disc(&self) -> bool {
+        false
+    }
+}
+
+/// Whether the disc being ripped should end now.
+fn stopping(fe: &dyn Frontend) -> bool {
+    fe.cancelled() || fe.stop_disc()
 }
 
 #[derive(Debug)]
@@ -133,35 +147,43 @@ pub struct EjectReport {
 pub fn eject_idle(s: &Settings) -> EjectReport {
     let mut report = EjectReport::default();
     for path in drive::drive_paths() {
-        let mut lock = None;
-        for _ in 0..8 {
-            match lock::try_lock(&s.cache_dir, &lock::drive_lock_name(&path)) {
-                Ok(Some(l)) => {
-                    lock = Some(l);
-                    break;
-                }
-                Ok(None) => std::thread::sleep(Duration::from_millis(500)),
-                Err(e) => {
-                    report.failed.push((path.clone(), format!("{e:#}")));
-                    break;
-                }
-            }
-        }
-        let Some(_lock) = lock else {
-            if !report.failed.iter().any(|(p, _)| p == &path) {
-                report.busy.push(path);
-            }
-            continue;
-        };
-        if !drive::has_audio_cd(&path) {
-            continue;
-        }
-        match Drive::open(&path).and_then(|d| d.eject()) {
-            Ok(()) => report.ejected.push(path),
+        match eject_one(s, &path, false) {
+            Ok(EjectOutcome::Ejected) => report.ejected.push(path),
+            Ok(EjectOutcome::Busy) => report.busy.push(path),
+            Ok(EjectOutcome::NoDisc) => {}
             Err(e) => report.failed.push((path, format!("{e:#}"))),
         }
     }
     report
+}
+
+#[derive(Debug, PartialEq)]
+pub enum EjectOutcome {
+    Ejected,
+    /// Being ripped (by this or another ripshelf): left alone.
+    Busy,
+    NoDisc,
+}
+
+/// Ejects `path` if no rip is using it (see [`eject_idle`]). With `any`, a
+/// drive without an audio CD is opened too (a data disc, or an empty tray).
+pub fn eject_one(s: &Settings, path: &str, any: bool) -> Result<EjectOutcome> {
+    let mut lock = None;
+    for _ in 0..8 {
+        match lock::try_lock(&s.cache_dir, &lock::drive_lock_name(path))? {
+            Some(l) => {
+                lock = Some(l);
+                break;
+            }
+            None => std::thread::sleep(Duration::from_millis(500)),
+        }
+    }
+    let Some(_lock) = lock else { return Ok(EjectOutcome::Busy) };
+    if !any && !drive::has_audio_cd(path) {
+        return Ok(EjectOutcome::NoDisc);
+    }
+    Drive::open(path).and_then(|d| d.eject())?;
+    Ok(EjectOutcome::Ejected)
 }
 
 /// MusicBrainz disc ID of the disc in the drive, if any.
@@ -214,7 +236,14 @@ pub fn rip_loop(s: &Settings, opts: &Options, fe: &dyn Frontend) -> Result<()> {
                     std::thread::sleep(Duration::from_secs(3));
                     match rip_disc(&path, s, opts, fe) {
                         Ok(_) => {}
-                        Err(e) if e.is::<Cancelled>() => return Ok(()),
+                        Err(e) if e.is::<Cancelled>() && fe.cancelled() => return Ok(()),
+                        Err(e) if e.is::<Cancelled>() => {
+                            // Stopped on request: eject even with --no-eject
+                            // (that's what was asked for).
+                            fe.event(Event::DiscStopped);
+                            let ok = Drive::open(&path).and_then(|d| d.eject()).is_ok();
+                            fe.event(Event::Ejected { ok });
+                        }
                         Err(e) => {
                             fe.event(Event::DiscFailed(format!("{e:#}")));
                             if !opts.no_eject {
@@ -249,7 +278,7 @@ struct Cancellable<'a> {
 
 impl SectorSource for Cancellable<'_> {
     fn read_sectors(&mut self, lba: u32, count: u32) -> Result<Vec<u8>, String> {
-        if self.fe.cancelled() {
+        if stopping(self.fe) {
             return Err("stopped".into());
         }
         self.drive.read_sectors(lba, count)
@@ -292,9 +321,13 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
                 Some(r)
             }
             ReleaseChoice::Use(_) | ReleaseChoice::Unknown => None,
+            ReleaseChoice::Skip if stopping(fe) => return Err(Cancelled.into()),
             ReleaseChoice::Skip => bail!("skipped"),
         }
     };
+    if stopping(fe) {
+        return Err(Cancelled.into());
+    }
     let genres = match &release {
         Some(r) => musicbrainz::genres(r).unwrap_or_else(|e| {
             fe.event(Event::Note(format!("genre lookup failed: {e:#}")));
@@ -347,6 +380,9 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
             }
             None => None,
         };
+        if stopping(fe) {
+            return Err(Cancelled.into());
+        }
         let cover = cover.map(Arc::new);
         fe.event(Event::Cover(cover.clone()));
         let entries = match accuraterip::fetch(&toc) {
@@ -380,7 +416,7 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
         let mut src = Cancellable { drive: &mut drive, fe };
         let mut cancelled = false;
         let sum = rip::rip(&mut src, &plan, &ctx, &mut |e| {
-            if fe.cancelled() {
+            if stopping(fe) {
                 cancelled = true;
             }
             let ev = match e {
@@ -401,7 +437,7 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
                 fe.event(ev);
             }
         });
-        if cancelled || fe.cancelled() {
+        if cancelled || stopping(fe) {
             return Err(Cancelled.into());
         }
         let sum = sum?;

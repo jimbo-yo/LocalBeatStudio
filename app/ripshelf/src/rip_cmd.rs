@@ -182,6 +182,7 @@ impl Frontend for Printer {
             }
             Event::DiscDone { .. } => {}
             Event::DiscFailed(e) => println!("\nerror: {e}\nThat disc didn't finish; carrying on."),
+            Event::DiscStopped => println!("\nStopped that disc; ejecting it."),
             Event::Note(n) => println!("  note: {n}"),
         }
     }
