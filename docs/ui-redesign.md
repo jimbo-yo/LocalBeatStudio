@@ -35,7 +35,7 @@ Dark-first (light variant kept), inspired by light on a CD's data side.
 
 ## Chunks
 
-1. **Design system + app shell.** theme.rs rewritten (palette, fonts,
+1. ✅ (2026-11-11) **Design system + app shell.** theme.rs rewritten (palette, fonts,
    gradient painter, icon painter, card/badge/button helpers); sidebar
    navigation replaces the top tabs; Rip, Phone and Review pages moved into
    it unchanged in function. Install.
@@ -60,6 +60,10 @@ Dark-first (light variant kept), inspired by light on a CD's data side.
    review pages restyled, notes in CLAUDE.md.
 
 ## Checking the look
+
+`RIPSHELF_DEMO=1` (Rip page), `=phone` or `=review` opens that page with a
+made-up session; e.g.
+`RIPSHELF_DEMO=1 target/debug/ripshelf-gui & sleep 4; spectacle -b -n -a -o shot.png`.
 
 Screenshots of the real window (RIPSHELF_DEMO=1 for a made-up rip session)
 with spectacle, then read the PNG.

@@ -43,7 +43,11 @@ fn main() -> eframe::Result {
         unsafe { std::env::set_var("WGPU_BACKEND", "gl") };
     }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1100.0, 760.0]).with_min_inner_size([760.0, 480.0]).with_title("ripshelf"),
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1280.0, 820.0])
+            .with_min_inner_size([900.0, 560.0])
+            .with_title("ripshelf")
+            .with_app_id("ripshelf"),
         ..Default::default()
     };
     eframe::run_native("ripshelf", options, Box::new(|cc| {
@@ -262,6 +266,11 @@ impl App {
             app.drives.insert("/dev/sr1".into(), DriveView { disc: Some(demo_disc()), stage: "Ripping track 5 (demo)".into(), stop_disc: Some(Default::default()) });
             app.drives.insert("/dev/sr2".into(), DriveView { disc: None, stage: "Waiting for a disc (demo)".into(), stop_disc: Some(Default::default()) });
             app.view = Some("/dev/sr1".into());
+            app.tab = match std::env::var("RIPSHELF_DEMO").as_deref() {
+                Ok("phone") => Tab::Phone,
+                Ok("review") => Tab::Review,
+                _ => Tab::Rip,
+            };
             app.session = vec![(true, "Radiohead – OK Computer: 12/12".into()), (false, "Lenny Kravitz – Let Love Rule: 11/12".into())];
         } else {
             app.start();
@@ -399,6 +408,74 @@ impl App {
                 self.eject.push((Some(drive), rx));
             }
         }
+    }
+
+    /// The left navigation: wordmark, devices, tools, log.
+    fn sidebar(&mut self, ui: &mut egui::Ui) {
+        let p = theme::pal(ui);
+        let frame = egui::Frame::new().fill(p.base).inner_margin(egui::Margin { left: 14, right: 14, top: 20, bottom: 14 });
+        egui::Panel::left("nav").resizable(false).exact_size(236.0).frame(frame).show_separator_line(false).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                let g = theme::prism_text(ui, "ripshelf", theme::bold(27.0));
+                let (rect, _) = ui.allocate_exact_size(g.size(), egui::Sense::hover());
+                ui.painter().galley(rect.min, g, p.text);
+            });
+            ui.horizontal(|ui| {
+                ui.add_space(9.0);
+                ui.label(egui::RichText::new("rip · verify · play · carry").small().color(p.faint));
+            });
+            ui.add_space(22.0);
+
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                theme::section_label(ui, "Devices");
+            });
+            // The ripper's state at a glance.
+            let ripping: Vec<f32> = self
+                .drives
+                .iter()
+                .filter_map(|(path, v)| {
+                    let d = if self.swapped && self.view.as_deref() == Some(path.as_str()) { &self.disc } else { &v.disc };
+                    d.as_ref().filter(|d| d.result.is_none() && d.total_secs > 0).map(|d| d.done_secs as f32 / d.total_secs as f32)
+                })
+                .collect();
+            let status = if !ripping.is_empty() {
+                let pct = ripping.iter().sum::<f32>() / ripping.len() as f32 * 100.0;
+                (format!("{pct:.0}%"), theme::prism_at(0.25))
+            } else if self.running {
+                (String::new(), theme::OK)
+            } else {
+                (String::new(), p.faint)
+            };
+            let hint = if !ripping.is_empty() {
+                format!("{} disc(s) ripping", ripping.len())
+            } else if self.running {
+                "Waiting for a disc".to_string()
+            } else {
+                "Ripping is stopped".to_string()
+            };
+            if theme::nav_item(ui, theme::Icon::Disc, "CD Ripper", self.tab == Tab::Rip, Some((&status.0, status.1))).on_hover_text(hint).clicked() {
+                self.tab = Tab::Rip;
+            }
+            if theme::nav_item(ui, theme::Icon::Phone, "Phone", self.tab == Tab::Phone, None).clicked() {
+                self.tab = Tab::Phone;
+            }
+            ui.add_space(16.0);
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                theme::section_label(ui, "Tools");
+            });
+            if theme::nav_item(ui, theme::Icon::Tag, "Review tags", self.tab == Tab::Review, None).clicked() {
+                self.tab = Tab::Review;
+            }
+
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                if theme::nav_item(ui, theme::Icon::Log, "Activity log", self.show_log, None).clicked() {
+                    self.show_log = !self.show_log;
+                }
+            });
+        });
     }
 
     fn log(&mut self, line: String) {
@@ -754,87 +831,28 @@ impl App {
             ctx.request_repaint_after(Duration::from_millis(500));
         }
 
-        let header = egui::Frame::new().fill(ui.visuals().extreme_bg_color).inner_margin(egui::Margin::symmetric(14, 10));
-        egui::Panel::top("top").frame(header).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("ripshelf").size(20.0).strong().color(theme::ACCENT));
-                ui.add_space(12.0);
-                ui.selectable_value(&mut self.tab, Tab::Rip, theme::tab("💿 Rip"));
-                ui.selectable_value(&mut self.tab, Tab::Phone, theme::tab("📱 Phone"));
-                ui.selectable_value(&mut self.tab, Tab::Review, theme::tab("🏷 Review tags"));
-                ui.separator();
-                // The rip loop's controls only on the Rip tab (on the Phone tab
-                // they looked like sync controls); there, just its status.
-                if self.tab != Tab::Rip {
-                    ui.weak(format!("Ripping: {}", if self.running { self.stage.as_str() } else { "stopped" }));
-                } else {
-                    if self.running {
-                        if ui.button("⏹ Stop ripping").clicked() {
-                            self.stop();
-                        }
-                    } else if ui.button("▶ Start ripping").clicked() {
-                        self.start();
-                    }
-                    let ejecting = !self.eject.is_empty();
-                    let hint = "Eject the CD from every drive that isn't being ripped. To eject a disc that's being ripped, use its drive's ⏹ Stop & eject below.";
-                    if ui.add_enabled(!ejecting, egui::Button::new(if ejecting { "⏏ Ejecting…" } else { "⏏ Eject" })).on_hover_text(hint).clicked() {
-                        let (tx, rx) = channel();
-                        let (settings, ctx) = (self.settings.clone(), ctx.clone());
-                        std::thread::spawn(move || {
-                            let r = engine::eject_idle(&settings);
-                            let mut lines: Vec<String> = r.ejected.iter().map(|p| format!("Ejected {p}")).collect();
-                            lines.extend(r.busy.iter().map(|p| format!("{p} is being ripped: stop ripping first to eject it")));
-                            lines.extend(r.failed.iter().map(|(p, e)| format!("Couldn't eject {p}: {e}")));
-                            if lines.is_empty() {
-                                lines.push("No CD to eject".into());
-                            }
-                            let _ = tx.send(lines);
-                            ctx.request_repaint();
-                        });
-                        self.eject.push((None, rx));
-                        self.show_log = true;
-                    }
-                    ui.separator();
-                    ui.label(&self.stage);
-                }
-                if let (Tab::Rip, Some((frac, eta))) = (self.tab, self.overall()) {
-                    ui.separator();
-                    let text = match eta {
-                        Some(e) => format!("{:.0}% · {} left", frac * 100.0, fmt_duration(e)),
-                        None => format!("{:.0}%", frac * 100.0),
-                    };
-                    ui.add(egui::ProgressBar::new(frac).text(text).desired_width(170.0));
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.toggle_value(&mut self.show_log, "Log");
-                    let hint = format!(
-                        "Through KDE Connect (phone on the same Wi-Fi): once the drive has waited {} s for the \
-                         next disc, say how the last one went. Problems are sent straight away.",
-                        self.prefs.notify_after_secs
-                    );
-                    if ui.checkbox(&mut self.prefs.notify_phone, "Notify phone").on_hover_text(hint).changed() {
-                        self.notifier.set_enabled(self.prefs.notify_phone);
-                        let state = if self.prefs.notify_phone { "on" } else { "off" };
-                        match self.prefs.save(&self.settings) {
-                            Ok(()) => self.log(format!("Phone notifications {state}")),
-                            Err(e) => self.log(format!("Phone notifications {state} (couldn't save the setting: {e:#})")),
-                        }
+        self.sidebar(ui);
+
+        let p = theme::pal(ui);
+        egui::Panel::bottom("bottom")
+            .resizable(true)
+            .frame(egui::Frame::new().fill(p.base).inner_margin(egui::Margin::symmetric(16, 10)))
+            .show_collapsible(ui, &mut self.show_log, |ui| {
+                ui.horizontal(|ui| {
+                    theme::section_label(ui, "Activity log");
+                });
+                egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
+                    for l in &self.log {
+                        ui.label(egui::RichText::new(l).monospace().color(p.dim));
                     }
                 });
             });
-        });
 
-        egui::Panel::bottom("bottom").resizable(true).show_collapsible(ui, &mut self.show_log, |ui| {
-            egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
-                for l in &self.log {
-                    ui.monospace(l);
-                }
-            });
-        });
-
+        let page = egui::Frame::new().fill(p.content).inner_margin(egui::Margin { left: 28, right: 28, top: 22, bottom: 16 });
         if self.tab == Tab::Review {
             let mut lines = Vec::new();
-            egui::CentralPanel::default().show(ui, |ui| {
+            egui::CentralPanel::default().frame(page).show(ui, |ui| {
+                theme::page_header(ui, "Review tags", "Albums the tagger wasn't sure about: accept a match or leave them as they are", |_| {});
                 lines = self.review.ui(ui, &self.settings);
             });
             for l in lines {
@@ -844,15 +862,78 @@ impl App {
             return;
         }
         if self.tab == Tab::Phone {
-            egui::CentralPanel::default().show(ui, |ui| {
+            egui::CentralPanel::default().frame(page).show(ui, |ui| {
+                theme::page_header(ui, "Phone", "Pick the albums to keep on the phone, then sync", |_| {});
                 self.phone.ui(ui, &self.settings, &mut self.prefs);
             });
             self.choice_window(ctx);
             return;
         }
 
+        egui::Panel::top("riphead").show_separator_line(false).frame(page.inner_margin(egui::Margin { left: 28, right: 28, top: 22, bottom: 6 })).show(ui, |ui| {
+            let subtitle = if self.running { self.stage.clone() } else { "Ripping is stopped".to_string() };
+            theme::page_header(ui, "CD Ripper", &subtitle, |ui| {
+                // Right to left: the all-drive controls, grouped.
+                let hint = format!(
+                    "Through KDE Connect (phone on the same Wi-Fi): once a drive has waited {} s for the \
+                     next disc, say how the last one went. Problems are sent straight away.",
+                    self.prefs.notify_after_secs
+                );
+                if theme::toggle(ui, &mut self.prefs.notify_phone, "Notify phone").on_hover_text(hint).changed() {
+                    self.notifier.set_enabled(self.prefs.notify_phone);
+                    let state = if self.prefs.notify_phone { "on" } else { "off" };
+                    match self.prefs.save(&self.settings) {
+                        Ok(()) => self.log(format!("Phone notifications {state}")),
+                        Err(e) => self.log(format!("Phone notifications {state} (couldn't save the setting: {e:#})")),
+                    }
+                }
+                ui.add_space(12.0);
+                let ejecting = !self.eject.is_empty();
+                let hint = "Eject the CD from every drive that isn't being ripped. To eject a disc that's being ripped, use its drive's Stop & eject.";
+                let r = ui.add_enabled_ui(!ejecting, |ui| {
+                    theme::button(ui, Some(theme::Icon::Eject), if ejecting { "Ejecting…" } else { "Eject all" }, theme::Kind::Secondary)
+                });
+                if r.inner.on_hover_text(hint).clicked() {
+                    let (tx, rx) = channel();
+                    let (settings, ctx) = (self.settings.clone(), ctx.clone());
+                    std::thread::spawn(move || {
+                        let r = engine::eject_idle(&settings);
+                        let mut lines: Vec<String> = r.ejected.iter().map(|p| format!("Ejected {p}")).collect();
+                        lines.extend(r.busy.iter().map(|p| format!("{p} is being ripped: use its Stop & eject")));
+                        lines.extend(r.failed.iter().map(|(p, e)| format!("Couldn't eject {p}: {e}")));
+                        if lines.is_empty() {
+                            lines.push("No CD to eject".into());
+                        }
+                        let _ = tx.send(lines);
+                        ctx.request_repaint();
+                    });
+                    self.eject.push((None, rx));
+                    self.show_log = true;
+                }
+                if self.running {
+                    if theme::button(ui, Some(theme::Icon::Stop), "Stop all", theme::Kind::Danger)
+                        .on_hover_text("Stop every drive (discs stay in; saved tracks are kept)")
+                        .clicked()
+                    {
+                        self.stop();
+                    }
+                } else if theme::button(ui, Some(theme::Icon::Play), "Start ripping", theme::Kind::Primary).clicked() {
+                    self.start();
+                }
+            });
+            if let Some((frac, eta)) = self.overall() {
+                let text = match eta {
+                    Some(e) => format!("{:.0}% · {} left", frac * 100.0, fmt_duration(e)),
+                    None => format!("{:.0}%", frac * 100.0),
+                };
+                theme::progress(ui, frac, 260.0, Some(&text));
+                ui.add_space(4.0);
+            }
+        });
+
         if !self.drives.is_empty() {
-            egui::Panel::top("drives").show(ui, |ui| {
+            let f = egui::Frame::new().fill(p.content).inner_margin(egui::Margin { left: 28, right: 28, top: 4, bottom: 10 });
+            egui::Panel::top("drives").frame(f).show_separator_line(false).show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.weak("Drives:");
                     let all_ejecting = self.eject.iter().any(|(d, _)| d.is_none());
@@ -903,7 +984,8 @@ impl App {
             });
         }
 
-        egui::Panel::left("album").resizable(false).exact_size(300.0).show(ui, |ui| {
+        let f = egui::Frame::new().fill(p.content).inner_margin(egui::Margin { left: 28, right: 12, top: 6, bottom: 12 });
+        egui::Panel::left("album").resizable(false).exact_size(330.0).frame(f).show_separator_line(false).show(ui, |ui| {
             ui.add_space(8.0);
             match &self.disc {
                 None => {
@@ -972,7 +1054,8 @@ impl App {
             }
         });
 
-        egui::CentralPanel::default().show(ui, |ui| {
+        let f = egui::Frame::new().fill(p.content).inner_margin(egui::Margin { left: 12, right: 28, top: 6, bottom: 12 });
+        egui::CentralPanel::default().frame(f).show(ui, |ui| {
             let Some(d) = &self.disc else {
                 // Nothing to show yet: say what's happening, centred.
                 ui.vertical_centered(|ui| {
@@ -1091,26 +1174,22 @@ fn summary_line(d: &Disc) -> String {
 /// The disc's tracks: one card per track with a status mark, title, the
 /// result of each read, and a progress bar on the one being read.
 fn track_list(ui: &mut egui::Ui, d: &Disc) {
-    const GREEN: egui::Color32 = egui::Color32::from_rgb(70, 170, 95);
-    const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 170, 60);
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(summary_line(d)).strong());
-        if !d.album_dir.is_empty() {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.weak(&d.album_dir).on_hover_text("Where the FLAC files go");
-            });
-        }
-    });
+    const GREEN: egui::Color32 = theme::OK;
+    const AMBER: egui::Color32 = theme::WARN;
+    let p = theme::pal(ui);
+    ui.label(egui::RichText::new(summary_line(d)).font(theme::medium(15.0)).color(p.text));
+    if !d.album_dir.is_empty() {
+        ui.label(egui::RichText::new(&d.album_dir).small().color(p.faint)).on_hover_text("Where the FLAC files go");
+    }
     ui.add_space(6.0);
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         for r in &d.rows {
             let reading = matches!(r.status, Status::Reading { .. });
-            let v = ui.visuals();
             let frame = egui::Frame::new()
-                .fill(if reading { v.faint_bg_color } else { v.panel_fill })
-                .stroke(if reading { egui::Stroke::new(1.5, theme::ACCENT) } else { egui::Stroke::new(1.0, v.widgets.noninteractive.bg_stroke.color) })
-                .corner_radius(8.0)
-                .inner_margin(egui::Margin::symmetric(12, 8));
+                .fill(if reading { p.card_hover } else { p.card })
+                .stroke(if reading { egui::Stroke::new(1.5, theme::ACCENT) } else { egui::Stroke::new(1.0, p.line) })
+                .corner_radius(10.0)
+                .inner_margin(egui::Margin::symmetric(14, 9));
             frame.show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
@@ -1159,7 +1238,8 @@ fn track_list(ui: &mut egui::Ui, d: &Disc) {
                             });
                         });
                         if let Status::Reading { fraction, .. } = &r.status {
-                            ui.add(egui::ProgressBar::new(*fraction).desired_height(6.0).fill(theme::ACCENT));
+                            let w = ui.available_width();
+                            theme::progress(ui, *fraction, w, None);
                         }
                         for line in &r.reads {
                             ui.small(egui::RichText::new(line).weak());

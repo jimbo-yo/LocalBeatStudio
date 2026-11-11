@@ -667,6 +667,13 @@ exit-code-52 errors) was removed.
   ("right pressing"). Led Zeppelin box: 6 such tracks (disc 1: 1, 4, 5, 10;
   disc 2: 14; disc 3: 2) from the SuperDrive/cyanrip rip: to re-rip
 
+### Redesign "Prism" (2026-11-11, plan in `docs/ui-redesign.md`)
+- Chunk 1 done: gui/src/theme.rs = design system (palette, Noto Sans /
+  Segoe UI loaded at runtime, prism gradients via egui Mesh, vector icons,
+  button/badge/toggle/progress/nav_item/page_header); left sidebar replaces
+  the top tabs; Rip page header holds the all-drive controls.
+  `RIPSHELF_DEMO=1|phone|review` for screenshots
+
 ### In progress: CUETools DB repair (2026-11-11)
 - Sector voting (core/vote.rs, per sector then per sample, AR-verified only)
   couldn't save Grace's Hallelujah: the drive conceals some samples the same

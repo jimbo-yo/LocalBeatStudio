@@ -42,10 +42,10 @@ enum Show {
     FromMisc,
 }
 
-const AMBER: Color32 = Color32::from_rgb(230, 170, 60);
-const GREEN: Color32 = Color32::from_rgb(60, 160, 80);
-const BLUE: Color32 = Color32::from_rgb(70, 130, 220);
-const GREY: Color32 = Color32::from_rgb(140, 140, 140);
+const AMBER: Color32 = crate::theme::WARN;
+const GREEN: Color32 = crate::theme::OK;
+const BLUE: Color32 = Color32::from_rgb(91, 140, 255);
+const GREY: Color32 = crate::theme::DARK.faint;
 
 pub struct PhoneTab {
     loaded: Option<Loaded>,
@@ -521,10 +521,10 @@ impl PhoneTab {
                                     changed = true;
                                 }
                                 if r.misc {
-                                    ui.label(RichText::new(format!(" {} ", r.formats)).small().color(Color32::BLACK).background_color(AMBER))
+                                    crate::theme::badge(ui, &r.formats, AMBER)
                                         .on_hover_text("Miscellaneous library: an older copy, not a verified CD rip. Re-rip the CD to replace it.");
                                 } else if !r.phone_only {
-                                    ui.label(RichText::new(" CD ").small().color(Color32::BLACK).background_color(GREEN))
+                                    crate::theme::badge(ui, "CD", GREEN)
                                         .on_hover_text("Ripped from CD (verified FLAC)");
                                 }
                                 if r.drm > 0 {
@@ -552,10 +552,11 @@ impl PhoneTab {
         let (done, total, file) = &self.progress;
         let frac = if *total > 0 { *done as f32 / *total as f32 } else { 0.0 };
         ui.heading("Syncing…");
-        ui.add(egui::ProgressBar::new(frac).show_percentage());
+        let w = ui.available_width().min(520.0);
+        crate::theme::progress(ui, frac, w, Some(&format!("{:.0}%", frac * 100.0)));
         ui.label(file);
         if let Some(w) = &self.waiting {
-            ui.colored_label(Color32::from_rgb(210, 130, 30), w);
+            ui.colored_label(AMBER, w);
         }
         if ui.button("⏹ Stop sync").on_hover_text("Stops after the current file; what's sent stays on the phone").clicked() {
             self.cancel.store(true, Ordering::Relaxed);

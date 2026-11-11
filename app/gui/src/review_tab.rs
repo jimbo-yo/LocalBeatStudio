@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 use ripshelf_core::config::Settings;
 use ripshelf_core::enrich_review::{self, ReviewItem};
 
@@ -107,7 +107,7 @@ impl ReviewTab {
                         }
                     });
                     if !item.why.is_empty() {
-                        ui.label(RichText::new(format!("Why not sure: {}", item.why)).color(Color32::from_rgb(200, 140, 40)));
+                        ui.label(RichText::new(format!("Why not sure: {}", item.why)).color(crate::theme::WARN));
                     }
                     ui.horizontal(|ui| {
                         if busy {
