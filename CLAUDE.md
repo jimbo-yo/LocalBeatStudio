@@ -648,6 +648,15 @@ exit-code-52 errors) was removed.
   Event::DiscStopped, is ejected, saved tracks stay, the loop keeps watching;
   flag cleared at the next DiscStart) and **⏏ Eject** when idle
   (engine::eject_one). Not yet tried on a real rip
+- **Stalls on damaged spots** (2026-11-11, HP on a cleaned disc): each read
+  the drive can't finish takes cd-da-reader's 30 s READ CD timeout, then a
+  USB reset (`usb 2-1: reset` in journalctl -k); chunk + per-sector retries
+  made one track sit for many minutes per read. Now secure_read
+  `StallLimits` (slow 10 s, budget 90 s): after a stalled sector the rest of
+  its 26-sector chunk is marked unreadable untried; once stalls reach 90 s
+  the read gives up on the rest of the track (`TrackRead.gave_up`). rip.rs
+  rejects a track after 2 given-up reads (~4 min worst case instead of
+  hours), so the rest of the disc still gets ripped. Not yet seen on a disc
 - **Other pressings**: AccurateRip's per-pressing frame-450 checksums
   (own parser; cdtoc drops them) find a shift within ±10 sectors; the edge
   sectors are read and the whole track checked there (Acceptance::

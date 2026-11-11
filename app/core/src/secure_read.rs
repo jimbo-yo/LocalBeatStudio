@@ -6,6 +6,7 @@
 //! fake disc.
 
 use std::ops::Range;
+use std::time::{Duration, Instant};
 
 use crate::accuraterip::FRAMES_PER_SECTOR;
 
@@ -14,6 +15,23 @@ pub const SECTOR_BYTES: usize = 2352;
 /// Sectors per read command (cd-da-reader caps one transfer at 64 KiB = 27
 /// audio sectors).
 pub const CHUNK_SECTORS: u32 = 26;
+
+/// How long a damaged spot may hold up one read of a track. A failed read
+/// command that took `slow` or longer is a stall (on Linux a read the drive
+/// can't finish takes the 30 s SCSI timeout, then a USB reset). After the
+/// first stalled sector the rest of its chunk is marked unreadable untried,
+/// and once stalls add up to `budget` the rest of the track is too.
+#[derive(Debug, Clone, Copy)]
+pub struct StallLimits {
+    pub slow: Duration,
+    pub budget: Duration,
+}
+
+impl Default for StallLimits {
+    fn default() -> Self {
+        Self { slow: Duration::from_secs(10), budget: Duration::from_secs(90) }
+    }
+}
 
 /// Something that returns raw CD audio sectors (2352 bytes each).
 ///
@@ -33,6 +51,9 @@ pub struct TrackRead {
     /// reached because of the offset), filled with silence. Normal for the
     /// first/last track; AccurateRip doesn't count those frames.
     pub edge_fill: usize,
+    /// The read stopped trying after too many stalls ([`StallLimits`]); the
+    /// rest of the track is in `unreadable`.
+    pub gave_up: bool,
 }
 
 impl TrackRead {
@@ -66,6 +87,18 @@ pub fn read_track(
     offset: i32,
     progress: &mut dyn FnMut(u32, u32),
 ) -> TrackRead {
+    read_track_limited(src, track, readable_end, offset, StallLimits::default(), progress)
+}
+
+/// [`read_track`] with explicit [`StallLimits`].
+pub fn read_track_limited(
+    src: &mut dyn SectorSource,
+    track: Range<u32>,
+    readable_end: u32,
+    offset: i32,
+    limits: StallLimits,
+    progress: &mut dyn FnMut(u32, u32),
+) -> TrackRead {
     let fps = FRAMES_PER_SECTOR as i64;
     // A positive offset means the drive delivers audio early: the track's
     // audio sits `offset` frames later in what it returns.
@@ -79,20 +112,52 @@ pub fn read_track(
     let mut unreadable = Vec::new();
     let total = end_sector.saturating_sub(first_sector);
     let mut lba = first_sector;
+    let mut stalled = Duration::ZERO;
+    let mut gave_up = false;
+    let lost = |buf: &mut Vec<u8>, unreadable: &mut Vec<u32>, s: u32| {
+        buf.extend(std::iter::repeat_n(0u8, SECTOR_BYTES));
+        unreadable.push(s);
+    };
     while lba < end_sector {
         let count = CHUNK_SECTORS.min(end_sector - lba);
+        if gave_up {
+            for s in lba..lba + count {
+                lost(&mut buf, &mut unreadable, s);
+            }
+            lba += count;
+            progress(lba - first_sector, total);
+            continue;
+        }
+        let t = Instant::now();
         match src.read_sectors(lba, count) {
             Ok(data) if data.len() == count as usize * SECTOR_BYTES => buf.extend_from_slice(&data),
             _ => {
-                // Retry sector by sector so one bad spot doesn't lose the chunk.
+                if t.elapsed() >= limits.slow {
+                    stalled += t.elapsed();
+                }
+                // Retry sector by sector so one bad spot doesn't lose the
+                // chunk; but past a stalled sector the rest of the chunk is
+                // given up (each would likely stall too).
+                let mut skip = false;
                 for s in lba..lba + count {
+                    if skip {
+                        lost(&mut buf, &mut unreadable, s);
+                        continue;
+                    }
+                    let t = Instant::now();
                     match src.read_sectors(s, 1) {
                         Ok(data) if data.len() == SECTOR_BYTES => buf.extend_from_slice(&data),
                         _ => {
-                            buf.extend(std::iter::repeat_n(0u8, SECTOR_BYTES));
-                            unreadable.push(s);
+                            lost(&mut buf, &mut unreadable, s);
+                            if t.elapsed() >= limits.slow {
+                                stalled += t.elapsed();
+                                skip = true;
+                            }
                         }
                     }
+                }
+                if skip && stalled >= limits.budget {
+                    gave_up = true;
                 }
             }
         }
@@ -120,7 +185,7 @@ pub fn read_track(
         a < want_end && b > want_start
     });
 
-    TrackRead { frames, unreadable, edge_fill }
+    TrackRead { frames, unreadable, edge_fill, gave_up }
 }
 
 /// Reads `sectors` sectors far away from `target` and throws them away, so
@@ -160,6 +225,11 @@ mod tests {
         fn new(sectors: u32) -> Self {
             Self { sectors, bad: vec![], reads: vec![] }
         }
+    }
+
+    /// Every failure counts as a stall (the fake fails instantly).
+    fn stall_on_any_error(budget: Duration) -> StallLimits {
+        StallLimits { slow: Duration::ZERO, budget }
     }
 
     impl SectorSource for FakeDisc {
@@ -224,6 +294,42 @@ mod tests {
         assert_eq!(silent, FRAMES_PER_SECTOR);
         // Sector 34 (right after) was still read.
         assert_eq!(r.frames[(34 - 10) * 588], 34 * 588 + 1);
+    }
+
+    #[test]
+    fn stalled_sector_gives_up_rest_of_its_chunk() {
+        let mut d = FakeDisc::new(200);
+        d.bad = vec![33];
+        let lim = stall_on_any_error(Duration::from_secs(3600));
+        let r = read_track_limited(&mut d, 26..78, 200, 0, lim, &mut noop);
+        // Chunk 26..52: 26..33 read one by one, 33 stalls, 34..52 untried.
+        assert_eq!(r.unreadable, (33..52).collect::<Vec<_>>());
+        assert!(!d.reads.iter().any(|&(lba, n)| n == 1 && lba > 33 && lba < 52));
+        // The next chunk is read normally.
+        assert_eq!(r.frames[(52 - 26) * 588], 52 * 588 + 1);
+        assert!(!r.gave_up);
+    }
+
+    #[test]
+    fn stall_budget_gives_up_rest_of_track() {
+        let mut d = FakeDisc::new(200);
+        d.bad = vec![30];
+        let r = read_track_limited(&mut d, 26..130, 200, 0, stall_on_any_error(Duration::ZERO), &mut noop);
+        assert!(r.gave_up);
+        assert_eq!(r.unreadable, (30..130).collect::<Vec<_>>());
+        // Nothing after the stalled chunk was asked of the drive.
+        assert!(d.reads.iter().all(|&(lba, _)| lba < 52));
+        assert_eq!(r.frames.len(), 104 * 588);
+    }
+
+    #[test]
+    fn quick_failures_are_not_stalls() {
+        // Default limits: an instant error is a plain bad sector.
+        let mut d = FakeDisc::new(200);
+        d.bad = vec![30, 40];
+        let r = read_track(&mut d, 26..78, 200, 0, &mut noop);
+        assert_eq!(r.unreadable, vec![30, 40]);
+        assert!(!r.gave_up);
     }
 
     #[test]

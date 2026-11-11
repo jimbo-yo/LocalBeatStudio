@@ -270,6 +270,7 @@ pub fn rip(
         let in_ar = ctx.accuraterip.is_some_and(|db| db.tracks.get(t.position - 1).is_some_and(|m| !m.is_empty()));
         let mut limit = s.reads.max(1);
         let mut read = 0;
+        let mut gave_up = 0;
         while read < limit {
             read += 1;
             if read > 1 && s.flush_sectors > 0 {
@@ -341,8 +342,22 @@ pub fn rip(
                 }
                 clean_crcs.push(crc);
             }
+            if r.gave_up {
+                gave_up += 1;
+                let _ = writeln!(sum.log, "Track {:>2} read {read}: the drive stalled on a damaged spot; rest of the read skipped", t.position);
+            }
             last = Some(r);
             if accepted.is_some() {
+                break;
+            }
+            // A spot the drive can't get through twice: give up on the track
+            // so the rest of the disc gets ripped.
+            if gave_up >= 2 {
+                let _ = writeln!(sum.log, "Track {:>2}: the drive stalled on the same damage twice; giving up on this track", t.position);
+                on(Event::Note(format!(
+                    "track {}: the drive keeps stalling on a damaged spot; skipping the track (try another drive later)",
+                    t.position
+                )));
                 break;
             }
             // Out of reads, but the reads differ only in a few places: a
@@ -363,7 +378,7 @@ pub fn rip(
         }
         let mut r = last.expect("at least one read");
         if let Some(frames) = voted {
-            r = TrackRead { frames, unreadable: Vec::new(), edge_fill: r.edge_fill };
+            r = TrackRead { frames, unreadable: Vec::new(), edge_fill: r.edge_fill, gave_up: false };
         }
 
         match accepted {
