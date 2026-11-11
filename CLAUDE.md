@@ -632,6 +632,27 @@ exit-code-52 errors) was removed.
   `~/.config/rip-cd/superseded.json`, which alias_phone also reads). 16
   folders (1.3 GB) moved 2026-11-11
 
+### ripshelf GUI and verification updates (2026-11-11)
+- Theme pass (gui/theme.rs: larger type, spacing, accent, header), Rip tab
+  track cards + summary line, waiting screen; `RIPSHELF_DEMO=1` shows a
+  made-up two-drive session (for layout work without a disc). Phone tab:
+  CD / MP3 / AAC source badges + source filters
+- **Every drive rips at once**: a watcher starts one `rip_loop` per drive
+  (also drives plugged in later); events tagged by drive; Drives strip on
+  the Rip tab; release questions queued per drive. Built-in sr0 (broken)
+  shows as idle. First parallel run 2026-11-11: HP (sr1) + SuperDrive (sr2)
+  both ripping fine
+- ⏏ Eject button: engine::eject_idle ejects every drive no rip holds
+- **Other pressings**: AccurateRip's per-pressing frame-450 checksums
+  (own parser; cdtoc drops them) find a shift within ±10 sectors; the edge
+  sectors are read and the whole track checked there (Acceptance::
+  OtherPressing). Fake-disc tested; not yet seen on a real shifted disc
+- **RepeatDiffers**: identical reads, no AR match, but the frame-450 sector
+  matches unshifted = right pressing, audio differs (consistent misread):
+  saved, shown amber "clean & re-rip". `ripshelf check` reports the same
+  ("right pressing"). Led Zeppelin box: 6 such tracks (disc 1: 1, 4, 5, 10;
+  disc 2: 14; disc 3: 2) from the SuperDrive/cyanrip rip: to re-rip
+
 ## Next steps (planned 2026-11-05)
 
 1. Test a second (shorter) CD with the new Artist/Album layout
