@@ -657,6 +657,10 @@ exit-code-52 errors) was removed.
   the read gives up on the rest of the track (`TrackRead.gave_up`). rip.rs
   rejects a track after 2 given-up reads (~4 min worst case instead of
   hours), so the rest of the disc still gets ripped. Not yet seen on a disc
+- Operatica "'O' Volume 1" (2026-11-11): a track the HP drive stalled on
+  (30 s timeouts, USB resets, even after cleaning) ripped fine on the
+  **SuperDrive in 2 reads**. Drives differ a lot on damaged spots: when one
+  stalls or rejects, try the other drive before anything else
 - **Other pressings**: AccurateRip's per-pressing frame-450 checksums
   (own parser; cdtoc drops them) find a shift within ±10 sectors; the edge
   sectors are read and the whole track checked there (Acceptance::
