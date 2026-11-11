@@ -361,16 +361,38 @@ fn album_tag_key(f: &SourceFile) -> Option<String> {
 /// Re-keys phone folders that hold a Miscellaneous album the library now
 /// has as FLAC under another name, so the sync replaces them with the FLAC
 /// copy (and the album list shows one album, not two).
-pub fn alias_phone(phone: &mut PhoneState, library: &[Album]) {
-    let alias: BTreeMap<String, &str> = library
+/// `moved`: (Miscellaneous folder, FLAC folder) pairs already moved out of
+/// the library by `ripshelf superseded` (see [`load_superseded`]).
+pub fn alias_phone(phone: &mut PhoneState, library: &[Album], moved: &[(String, String)]) {
+    let mut alias: BTreeMap<String, String> = library
         .iter()
-        .flat_map(|a| a.also_in_misc.iter().map(move |m| (norm_key(m), a.key.as_str())))
+        .flat_map(|a| a.also_in_misc.iter().map(move |m| (norm_key(m), a.key.clone())))
         .collect();
+    for (misc, flac) in moved {
+        alias.entry(norm_key(misc)).or_insert_with(|| norm_key(flac));
+    }
     for pa in &mut phone.albums {
         if let Some(k) = alias.get(&pa.key) {
-            pa.key = k.to_string();
+            pa.key = k.clone();
         }
     }
+}
+
+/// Where `ripshelf superseded` records the folders it moved aside.
+pub fn superseded_file(config_dir: &Path) -> PathBuf {
+    config_dir.join("superseded.json")
+}
+
+/// (Miscellaneous folder, FLAC folder) pairs moved aside so far.
+pub fn load_superseded(config_dir: &Path) -> Vec<(String, String)> {
+    std::fs::read(superseded_file(config_dir))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v["moved"].as_array().cloned())
+        .into_iter()
+        .flatten()
+        .filter_map(|m| Some((m["misc"].as_str()?.to_string(), m["flac"].as_str()?.to_string())))
+        .collect()
 }
 
 fn scan_root(root: &Path, origin: Origin) -> Vec<Album> {
@@ -939,7 +961,7 @@ mod tests {
         assert_eq!(flac.also_in_misc.len(), 2);
 
         let mut phone = read_phone(&FolderPhone { root: ph.clone() }).unwrap();
-        alias_phone(&mut phone, &lib);
+        alias_phone(&mut phone, &lib, &[]);
         let wanted = on_phone(&lib, &phone);
         assert_eq!(wanted.len(), 1);
         let p = plan(&lib, &phone, &wanted);

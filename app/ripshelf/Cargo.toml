@@ -6,6 +6,7 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
+walkdir = "2.5.0"
 ripshelf-core.workspace = true
 serde_json.workspace = true
 ripshelf-platform.workspace = true

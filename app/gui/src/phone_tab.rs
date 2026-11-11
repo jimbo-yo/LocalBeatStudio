@@ -122,7 +122,7 @@ impl PhoneTab {
                 };
                 let lib = phone_sync::scan_library(&s.flac_dir, &s.misc_dir);
                 let mut phone = phone_sync::read_phone(&*conn)?;
-                phone_sync::alias_phone(&mut phone, &lib);
+                phone_sync::alias_phone(&mut phone, &lib, &phone_sync::load_superseded(&s.config_dir));
                 Ok(Loaded { conn, desc, lib, phone })
             })();
             let _ = tx.send(Msg::Loaded(r.map_err(|e| format!("{e:#}"))));

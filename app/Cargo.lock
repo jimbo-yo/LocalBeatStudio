@@ -3274,6 +3274,7 @@ dependencies = [
  "ripshelf-engine",
  "ripshelf-platform",
  "serde_json",
+ "walkdir",
 ]
 
 [[package]]

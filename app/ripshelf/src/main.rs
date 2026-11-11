@@ -2,6 +2,7 @@ mod drive_cmds;
 mod rip_cmd;
 mod enrich_cmd;
 mod sync_cmd;
+mod superseded_cmd;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -155,6 +156,12 @@ enum Command {
         #[arg(long)]
         acoustid_key: Option<String>,
     },
+    /// List Miscellaneous folders that are now FLAC rips; --move puts them
+    /// in Music/Superseded (nothing deleted)
+    Superseded {
+        #[arg(long = "move")]
+        move_them: bool,
+    },
     /// Identify one song by sound (AcoustID) and show what it found
     Fingerprint { file: std::path::PathBuf },
     /// Send a test notification to the phone (KDE Connect, same Wi-Fi)
@@ -226,6 +233,7 @@ fn main() -> ExitCode {
             }
             Ok(true)
         })(),
+        Command::Superseded { move_them } => superseded_cmd::run(move_them),
         Command::Notify { message } => {
             let s = ripshelf_core::config::Settings::load();
             ripshelf_platform::phone_notify::notify(&s.config_dir, &message).map(|phone| {
