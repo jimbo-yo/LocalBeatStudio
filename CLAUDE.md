@@ -683,6 +683,18 @@ exit-code-52 errors) was removed.
   badges, session list), track rows (status icons, badges, truncating
   titles), release dialog as cards with a countdown bar. Repaints at ~30
   fps only while a disc spins on the Rip page
+- Chunk 3 done: crate `app/player` (ripshelf-player, no UI). Symphonia
+  decode (workspace feature `flac` added; FLAC/MP3/AAC/ALAC/Vorbis/WAV/AIFF;
+  .m4p refused as DRM) -> stereo f32 -> rtrb ring -> cpal 0.18 (ALSA ->
+  PipeWire; needs `alsa-lib-devel` / `libasound2-dev` to build). Engine
+  thread: gapless queue at equal rates (rate change: drain, reopen),
+  accurate seek (frame-exact), software pause, volume, flush via an atomic
+  the callback honours; playback clock = callback's consumed-frame counter
+  + per-song Segments. Linear resampler only if the device refuses the
+  rate. `Player` API: load/append/insert_next/jump/toggle/next/prev/seek/
+  set_volume/status. Tests use a fake Backend (gapless, seek, rate change,
+  resample, bad files). `ripshelf play PATH... [--seek S] [--volume V]`
+  (keys p/n/b/f/r/q + Enter); tried on FLAC, MP3, AAC, m4p on the laptop
 
 ### In progress: CUETools DB repair (2026-11-11)
 - Sector voting (core/vote.rs, per sector then per sample, AR-verified only)

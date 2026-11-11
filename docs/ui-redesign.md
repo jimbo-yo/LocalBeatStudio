@@ -42,7 +42,7 @@ Dark-first (light variant kept), inspired by light on a CD's data side.
 2. ✅ (2026-11-11) **Rip page redesign.** Drive deck cards with grouped controls and the
    animated disc, header with all-drive controls, album/track layout,
    release-choice dialog, log drawer. Install.
-3. **Playback engine** (new crate `app/player`, no UI): Symphonia decode
+3. ✅ (2026-11-11) **Playback engine** (new crate `app/player`, no UI): Symphonia decode
    (add the `flac` feature; FLAC, MP3, AAC/ALAC, Ogg Vorbis, WAV; .m4p shown
    as DRM-locked), cpal output (ALSA -> PipeWire), gapless queue at the same
    sample rate, seek, pause, volume, position, events. CLI `ripshelf play

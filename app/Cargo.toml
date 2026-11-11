@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["core", "platform", "engine", "ripshelf", "gui"]
+members = ["core", "platform", "engine", "ripshelf", "gui", "player"]
 
 [workspace.package]
 edition = "2024"
@@ -16,7 +16,7 @@ cdtoc = { version = "0.13", features = ["accuraterip", "musicbrainz"] }
 claxon = "0.4"
 lofty = "0.25"
 unicode-normalization = "0.1"
-symphonia = { version = "0.5", default-features = false, features = ["aac", "alac", "isomp4", "mp3", "ogg", "vorbis", "wav", "pcm"] }
+symphonia = { version = "0.5", default-features = false, features = ["aac", "alac", "flac", "isomp4", "mp3", "ogg", "vorbis", "wav", "pcm", "aiff"] }
 ureq = { version = "3", features = ["json"] }
 serde_json = "1"
 crc32fast = "1"

@@ -1,0 +1,12 @@
+[package]
+name = "ripshelf-player"
+description = "Music playback: decoding (Symphonia), gapless queue, seeking, audio output (cpal)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+symphonia.workspace = true
+cpal = "0.18"
+rtrb = "0.4"

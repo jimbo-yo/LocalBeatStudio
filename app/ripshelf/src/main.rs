@@ -1,3 +1,4 @@
+mod play_cmd;
 mod drive_cmds;
 mod rip_cmd;
 mod enrich_cmd;
@@ -164,6 +165,17 @@ enum Command {
     },
     /// Identify one song by sound (AcoustID) and show what it found
     Fingerprint { file: std::path::PathBuf },
+    /// Play songs or album folders through the speakers (FLAC, MP3,
+    /// AAC/ALAC, Ogg Vorbis, WAV, AIFF)
+    Play {
+        paths: Vec<PathBuf>,
+        /// Start this many seconds into the first song
+        #[arg(long)]
+        seek: Option<f64>,
+        /// Volume 0..1
+        #[arg(long)]
+        volume: Option<f32>,
+    },
     /// Send a test notification to the phone (KDE Connect, same Wi-Fi)
     Notify {
         #[arg(default_value = "ripshelf test: phone notifications work.")]
@@ -234,6 +246,7 @@ fn main() -> ExitCode {
             Ok(true)
         })(),
         Command::Superseded { move_them } => superseded_cmd::run(move_them),
+        Command::Play { paths, seek, volume } => play_cmd::run(paths, seek, volume),
         Command::Notify { message } => {
             let s = ripshelf_core::config::Settings::load();
             ripshelf_platform::phone_notify::notify(&s.config_dir, &message).map(|phone| {
