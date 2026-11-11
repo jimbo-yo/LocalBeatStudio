@@ -888,3 +888,24 @@ pub fn equalizer(painter: &egui::Painter, rect: Rect, time: f64, moving: bool) {
         painter.rect_filled(bar, 1.0, prism_at(0.15 + 0.25 * i as f32));
     }
 }
+
+/// The LocalBeat mark, shared with the phone app's launcher icon: a gold
+/// disc with a navy eighth note, on a navy rounded square (`tile`).
+/// Geometry in the icon's 108-unit space (gui/assets/localbeat.svg).
+pub const BRAND_GOLD: Color32 = Color32::from_rgb(0xF2, 0xB3, 0x3D);
+pub const BRAND_NAVY: Color32 = Color32::from_rgb(0x1B, 0x2A, 0x3A);
+
+pub fn logo(painter: &egui::Painter, rect: Rect, tile: bool) {
+    // Map the 108-unit icon onto rect (the tile spans 4..104).
+    let (lo, span) = if tile { (4.0, 100.0) } else { (28.0, 52.0) };
+    let k = rect.width().min(rect.height()) / span;
+    let at = |x: f32, y: f32| rect.min + vec2((x - lo) * k, (y - lo) * k);
+    if tile {
+        painter.rect_filled(rect, 24.0 * k, BRAND_NAVY);
+    }
+    painter.circle_filled(at(54.0, 54.0), 26.0 * k, BRAND_GOLD);
+    painter.circle_filled(at(54.0, 54.0), 5.0 * k, BRAND_NAVY);
+    painter.rect_filled(Rect::from_min_max(at(58.0, 36.0), at(62.0, 64.0)), 0.0, BRAND_NAVY);
+    painter.rect_filled(Rect::from_min_max(at(58.0, 36.0), at(68.0, 42.0)), 0.0, BRAND_NAVY);
+    painter.circle_filled(at(55.0, 64.0), 7.0 * k, BRAND_NAVY);
+}

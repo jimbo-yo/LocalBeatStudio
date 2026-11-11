@@ -51,13 +51,23 @@ fn main() -> eframe::Result {
             .with_inner_size([1280.0, 820.0])
             .with_min_inner_size([900.0, 560.0])
             .with_title("LocalBeat Studio")
-            .with_app_id("localbeat-studio"),
+            .with_app_id("localbeat-studio")
+            .with_icon(window_icon()),
         ..Default::default()
     };
     eframe::run_native("LocalBeat Studio", options, Box::new(|cc| {
         theme::apply(&cc.egui_ctx);
         Ok(Box::new(App::new(cc.egui_ctx.clone())))
     }))
+}
+
+/// The LocalBeat mark for the window / task bar (the app menu uses the SVG).
+fn window_icon() -> std::sync::Arc<egui::IconData> {
+    let img = image::load_from_memory(include_bytes!("../assets/localbeat-256.png")).map(|i| i.to_rgba8());
+    std::sync::Arc::new(match img {
+        Ok(i) => egui::IconData { width: i.width(), height: i.height(), rgba: i.into_raw() },
+        Err(_) => egui::IconData::default(),
+    })
 }
 
 /// Messages from the engine thread.
@@ -452,9 +462,13 @@ impl App {
         egui::Panel::left("nav").resizable(false).exact_size(236.0).frame(frame).show_separator_line(false).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
-                // "LocalBeat" in the prism, "Studio" quieter, on one baseline.
-                let g = theme::prism_text(ui, "LocalBeat", theme::bold(26.0));
-                let studio = ui.painter().layout_no_wrap("Studio".into(), theme::medium(17.0), p.dim);
+                // The LocalBeat mark (as on the phone), then "LocalBeat" in
+                // the prism and "Studio" quieter, on one baseline.
+                let (mark, _) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
+                theme::logo(ui.painter(), mark, false);
+                ui.add_space(3.0);
+                let g = theme::prism_text(ui, "LocalBeat", theme::bold(22.0));
+                let studio = ui.painter().layout_no_wrap("Studio".into(), theme::medium(15.0), p.dim);
                 let size = egui::vec2(g.size().x + 7.0 + studio.size().x, g.size().y);
                 let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
                 // Bottoms lined up, nudged so the baselines meet.
@@ -465,6 +479,7 @@ impl App {
             });
             ui.horizontal(|ui| {
                 ui.add_space(9.0);
+                ui.add_space(38.0);
                 ui.label(egui::RichText::new("rip · verify · play · carry").small().color(p.faint));
             });
             ui.add_space(16.0);

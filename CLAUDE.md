@@ -361,6 +361,12 @@ exit-code-52 errors) was removed.
   (shared with the scripts) and the phone's `Music/.ripshelf-sync.json` (the
   LocalBeat phone app reads it: rename only together with that repo).
   Notes below written before the rename say "ripshelf"
+- **The LocalBeat mark** (gold disc #F2B33D + navy #1B2A3A eighth note, the
+  phone app's launcher icon) is Studio's app icon (`app/gui/assets/
+  localbeat.svg` + 256 px PNG, installed to ~/.local/share/icons as
+  `localbeat-studio`; window icon embedded) and the sidebar logo
+  (`theme::logo`, drawn without the navy tile at small sizes). Same SVG in
+  LocalBeat and LocalBeatServer `docs/brand/`; change all three together
 
 - One app to replace all the scripts; Windows + Linux. Design and milestones:
   `docs/rust-app-design.md`. Developed on a Windows laptop (third machine,

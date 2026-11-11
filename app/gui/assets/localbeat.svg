@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- LocalBeat mark (same as the phone app's launcher icon): a gold disc with
+     a navy eighth note, on navy. 108 x 108 like the Android adaptive icon. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="108" height="108" viewBox="0 0 108 108">
+  <rect x="4" y="4" width="100" height="100" rx="24" ry="24" fill="#1B2A3A"/>
+  <path fill="#F2B33D" fill-rule="evenodd"
+        d="M54,28a26,26 0,1 1,0 52a26,26 0,1 1,0 -52z M54,49a5,5 0,1 0,0 10a5,5 0,1 0,0 -10z"/>
+  <path fill="#1B2A3A" d="M58,36h10v6h-6v22a7,7 0,1 1,-4 -6.3z"/>
+</svg>
