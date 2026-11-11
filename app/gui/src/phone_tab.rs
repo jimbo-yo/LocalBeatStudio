@@ -38,8 +38,11 @@ enum Show {
     OnPhone,
     NotOnPhone,
     Changes,
+    FromCd,
+    FromMisc,
 }
 
+const AMBER: Color32 = Color32::from_rgb(230, 170, 60);
 const GREEN: Color32 = Color32::from_rgb(60, 160, 80);
 const BLUE: Color32 = Color32::from_rgb(70, 130, 220);
 const GREY: Color32 = Color32::from_rgb(140, 140, 140);
@@ -294,12 +297,17 @@ impl PhoneTab {
                     Show::OnPhone => "On the phone",
                     Show::NotOnPhone => "Not on the phone",
                     Show::Changes => "Changes only",
+                    Show::FromCd => "Ripped from CD (FLAC)",
+                    Show::FromMisc => "Miscellaneous (MP3/AAC…)",
                 })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut self.show, Show::All, "All albums");
                     ui.selectable_value(&mut self.show, Show::OnPhone, "On the phone");
                     ui.selectable_value(&mut self.show, Show::NotOnPhone, "Not on the phone");
                     ui.selectable_value(&mut self.show, Show::Changes, "Changes only");
+                    ui.separator();
+                    ui.selectable_value(&mut self.show, Show::FromCd, "Ripped from CD (FLAC)");
+                    ui.selectable_value(&mut self.show, Show::FromMisc, "Miscellaneous (MP3/AAC…)");
                 });
             if ui.button("Undo changes").on_hover_text("Back to what's on the phone now").clicked() {
                 if let Some(l) = &self.loaded {
@@ -415,6 +423,10 @@ impl PhoneTab {
             key: String,
             title: String,
             misc: bool,
+            /// Phone-only albums: neither badge.
+            phone_only: bool,
+            /// Source formats of a Miscellaneous album ("MP3", "AAC", "MP3 + AAC").
+            formats: String,
             bytes: u64,
             drm: usize,
         }
@@ -431,6 +443,8 @@ impl PhoneTab {
                 key: a.key.clone(),
                 title,
                 misc: a.origin == Origin::Misc,
+                phone_only: false,
+                formats: formats(a),
                 bytes,
                 drm: a.protected.len(),
             });
@@ -442,7 +456,7 @@ impl PhoneTab {
                     .entry("\u{10FFFF}".into())
                     .or_insert_with(|| ("On the phone, not in your library".into(), Vec::new()))
                     .1
-                    .push(Row { key: p.key.clone(), title: p.rel.clone(), misc: false, bytes: p.bytes(), drm: 0 });
+                    .push(Row { key: p.key.clone(), title: p.rel.clone(), misc: false, phone_only: true, formats: String::new(), bytes: p.bytes(), drm: 0 });
             }
         }
 
@@ -461,6 +475,8 @@ impl PhoneTab {
                             Show::OnPhone => on_phone.contains(r.key.as_str()),
                             Show::NotOnPhone => !on_phone.contains(r.key.as_str()),
                             Show::Changes => !matches!(action, AlbumAction::None | AlbumAction::Adopt),
+                            Show::FromCd => !r.misc && !r.phone_only,
+                            Show::FromMisc => r.misc,
                         }
                     })
                     .collect();
@@ -505,7 +521,11 @@ impl PhoneTab {
                                     changed = true;
                                 }
                                 if r.misc {
-                                    ui.small("Misc").on_hover_text("From the Miscellaneous library (converted from AAC/MP3/etc.)");
+                                    ui.label(RichText::new(format!(" {} ", r.formats)).small().color(Color32::BLACK).background_color(AMBER))
+                                        .on_hover_text("Miscellaneous library: an older copy, not a verified CD rip. Re-rip the CD to replace it.");
+                                } else if !r.phone_only {
+                                    ui.label(RichText::new(" CD ").small().color(Color32::BLACK).background_color(GREEN))
+                                        .on_hover_text("Ripped from CD (verified FLAC)");
                                 }
                                 if r.drm > 0 {
                                     ui.small(format!("{} DRM", r.drm)).on_hover_text("iTunes DRM-protected files: can't be converted, left out");
@@ -625,4 +645,24 @@ fn chrono_date() -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
     format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// "MP3", "AAC", "MP3 + AAC"...: the formats of an album's audio files.
+fn formats(a: &Album) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    for f in a.files.iter().filter(|f| f.convert) {
+        let ext = f.path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+        let name = match ext.as_str() {
+            "m4a" | "aac" => "AAC",
+            "mp3" => "MP3",
+            "flac" => "FLAC",
+            "ogg" => "Ogg",
+            "opus" => "Opus",
+            _ => "audio",
+        };
+        if !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    out.join(" + ")
 }
