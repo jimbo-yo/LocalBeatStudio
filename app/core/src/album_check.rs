@@ -16,6 +16,14 @@ pub struct TrackReport {
     pub track: usize,
     pub sums: Checksums,
     pub verdict: Verdict,
+    /// No match, but the frame-450 sector points at another pressing:
+    /// (shift in frames, confidence if the whole track matched at that shift;
+    /// None if it didn't or a neighbouring track's file is missing).
+    pub other_pressing: Option<(i64, Option<u8>)>,
+    /// No match, yet the frame-450 sector matches unshifted: the right
+    /// pressing, so the audio differs elsewhere (a read error, or a damaged
+    /// spot read the same way every time).
+    pub right_pressing: bool,
 }
 
 pub struct DiscInfo {
@@ -74,15 +82,51 @@ pub fn check_dir(dir: &Path, obs: &mut dyn Observer) -> Result<()> {
         });
         let entries = entries.unwrap_or_default();
 
-        for (track, path) in tracks {
+        // Decoded tracks, kept for neighbours of a shifted pressing.
+        let mut audio: BTreeMap<usize, Vec<u32>> = BTreeMap::new();
+        let decode = |track: usize, audio: &mut BTreeMap<usize, Vec<u32>>| -> Result<()> {
+            if !audio.contains_key(&track) {
+                if let Some((_, p)) = tracks.iter().find(|(t, _)| *t == track) {
+                    audio.insert(track, flacfile::read_cd_audio(p)?.1);
+                }
+            }
+            Ok(())
+        };
+        for (track, path) in tracks.clone() {
             if track == 0 || track > track_count {
                 obs.skipped(&path, &format!("track {track} is not on this disc's TOC"));
                 continue;
             }
-            let (_, frames) = flacfile::read_cd_audio(&path)?;
-            let sums = accuraterip::checksums(&frames, track == 1, track == track_count);
+            decode(track, &mut audio)?;
+            let frames = &audio[&track];
+            let (first, last) = (track == 1, track == track_count);
+            let sums = accuraterip::checksums(frames, first, last);
             let verdict = entries.verdict(track, sums);
-            obs.track(&TrackReport { path, track, sums, verdict });
+            let mut other_pressing = None;
+            if verdict == Verdict::NoMatch {
+                if let Some(shift) = entries.find_pressing_shift(track, frames) {
+                    let n = shift.unsigned_abs() as usize;
+                    let neighbour = if shift > 0 { track + 1 } else { track.wrapping_sub(1) };
+                    decode(neighbour, &mut audio)?;
+                    let frames = &audio[&track];
+                    let combined: Option<Vec<u32>> = match audio.get(&neighbour) {
+                        Some(next) if shift > 0 && next.len() >= n => Some(frames[n..].iter().chain(&next[..n]).copied().collect()),
+                        Some(prev) if shift < 0 && prev.len() >= n => {
+                            Some(prev[prev.len() - n..].iter().chain(&frames[..frames.len() - n]).copied().collect())
+                        }
+                        _ => None,
+                    };
+                    let confirmed = combined.and_then(|c| match entries.verdict(track, accuraterip::checksums(&c, first, last)) {
+                        Verdict::Match { confidence, .. } => Some(confidence),
+                        _ => None,
+                    });
+                    other_pressing = Some((shift, confirmed));
+                }
+            }
+            let right_pressing = verdict == Verdict::NoMatch && entries.frame450_matches(track, &audio[&track]);
+            obs.track(&TrackReport { path, track, sums, verdict, other_pressing, right_pressing });
+            // Neighbours behind us aren't needed any more.
+            audio.retain(|&t, _| t + 1 >= track);
         }
     }
     Ok(())

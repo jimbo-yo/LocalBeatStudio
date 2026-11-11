@@ -368,6 +368,7 @@ impl App {
             Event::Accepted { position, how } => {
                 let text = match how {
                     Acceptance::AccurateRip { confidence } => format!("✔ AccurateRip ({confidence})"),
+                    Acceptance::OtherPressing { confidence, shift } => format!("✔ AccurateRip ({confidence}, other pressing {shift:+})"),
                     Acceptance::Repeat { reads } => format!("✔ identical reads ({reads})"),
                 };
                 self.finish_track(position, Status::Saved(text));

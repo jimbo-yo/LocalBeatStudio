@@ -141,6 +141,7 @@ impl Frontend for Printer {
             }
             Event::Accepted { how, .. } => match how {
                 Acceptance::AccurateRip { .. } => println!("      saved (verified by AccurateRip)"),
+                Acceptance::OtherPressing { shift, .. } => println!("      saved (verified by AccurateRip: another pressing, shifted {shift:+} frames)"),
                 Acceptance::Repeat { reads } => println!("      saved (two identical reads, {reads} reads)"),
             },
             Event::Rejected { reads, kept, .. } => {

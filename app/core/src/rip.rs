@@ -123,6 +123,9 @@ pub fn plan(toc: &Toc, meta: &Metadata, flac_dir: &Path) -> DiscPlan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Acceptance {
     AccurateRip { confidence: u8 },
+    /// Matches AccurateRip for a pressing whose audio sits `shift` frames
+    /// later (negative: earlier) than this disc's; the audio is the same.
+    OtherPressing { confidence: u8, shift: i64 },
     /// Two clean reads with the same CRC (`reads` = reads it took).
     Repeat { reads: u32 },
 }
@@ -153,6 +156,47 @@ pub struct RipContext<'a> {
     pub cover: Option<&'a Picture>,
     /// First lines of the log (date, drive, release...), written by the caller.
     pub log_header: String,
+}
+
+/// A clean read that matched nothing: is it a pressing the database has at
+/// another position? The frame-450 sector points at a shift; then the few
+/// sectors past the track's edge are read and the whole track is checked at
+/// that shift. (confidence, shift) on a full match.
+fn check_other_pressing(
+    src: &mut dyn SectorSource,
+    t: &TrackPlan,
+    plan: &DiscPlan,
+    offset: i32,
+    frames: &[u32],
+    db: &DiscEntries,
+) -> Option<(u8, i64)> {
+    let shift = db.find_pressing_shift(t.position, frames)?;
+    let n = shift.unsigned_abs() as usize;
+    let fps = accuraterip::FRAMES_PER_SECTOR;
+    let sectors = (n / fps + 2) as u32;
+    let combined: Vec<u32> = if shift > 0 {
+        let edge = t.sectors.end..(t.sectors.end + sectors).min(plan.readable_end.max(t.sectors.end));
+        let after = secure_read::read_track(src, edge, plan.readable_end, offset, &mut |_, _| {});
+        if !after.unreadable.is_empty() {
+            return None;
+        }
+        let mut tail = after.frames;
+        tail.resize(n.max(tail.len()), 0); // past the lead-out: silence (not counted on the last track)
+        frames[n..].iter().chain(&tail[..n]).copied().collect()
+    } else {
+        let start = t.sectors.start.saturating_sub(sectors);
+        let before = secure_read::read_track(src, start..t.sectors.start, plan.readable_end, offset, &mut |_, _| {});
+        if !before.unreadable.is_empty() {
+            return None;
+        }
+        let mut head = vec![0u32; n.saturating_sub(before.frames.len())];
+        head.extend_from_slice(&before.frames[before.frames.len().saturating_sub(n)..]);
+        head.iter().chain(&frames[..frames.len() - n]).copied().collect()
+    };
+    match db.verdict(t.position, accuraterip::checksums(&combined, t.first, t.last)) {
+        Verdict::Match { confidence, .. } => Some((confidence, shift)),
+        _ => None,
+    }
 }
 
 pub fn rip(
@@ -210,6 +254,13 @@ pub fn rip(
             if clean {
                 if let Verdict::Match { confidence, .. } = verdict {
                     accepted = Some(Acceptance::AccurateRip { confidence });
+                } else if let Some((confidence, shift)) = (verdict == Verdict::NoMatch)
+                    .then(|| ctx.accuraterip.and_then(|db| check_other_pressing(src, t, plan, ctx.offset, &r.frames, db)))
+                    .flatten()
+                {
+                    let _ = writeln!(sum.log, "Track {:>2} read {read}: matches AccurateRip for another pressing (shifted {shift:+} frames, confidence {confidence})", t.position);
+                    on(Event::Note(format!("track {}: matches AccurateRip for another pressing (shifted {shift:+} frames)", t.position)));
+                    accepted = Some(Acceptance::OtherPressing { confidence, shift });
                 } else if repeat {
                     accepted = Some(Acceptance::Repeat { reads: read });
                 }
@@ -278,6 +329,7 @@ pub fn rip(
 fn describe(how: Acceptance) -> String {
     match how {
         Acceptance::AccurateRip { confidence } => format!("AccurateRip, confidence {confidence}"),
+        Acceptance::OtherPressing { confidence, shift } => format!("AccurateRip for another pressing ({shift:+} frames), confidence {confidence}"),
         Acceptance::Repeat { reads } => format!("two identical reads, {reads} reads"),
     }
 }
@@ -420,7 +472,7 @@ mod tests {
         let sums = accuraterip::checksums(&r.frames, true, false);
         let mut m = BTreeMap::new();
         m.insert(sums.v2, 9u8);
-        let entries = DiscEntries { tracks: vec![m, BTreeMap::new(), BTreeMap::new()] };
+        let entries = DiscEntries { tracks: vec![m, BTreeMap::new(), BTreeMap::new()], ..Default::default() };
 
         // Track 3 has a sector that always fails: identical (silent) reads
         // must not be accepted as a repeat.
@@ -437,5 +489,49 @@ mod tests {
         assert_eq!(sum.accepted, [1, 2]);
         assert_eq!(sum.rejected, [3]);
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn other_pressing_is_found_by_frame450_and_verified() {
+        for shift in [390i32, -390] {
+            let (s, root) = setup(&format!("pressing{shift}"));
+            // 3 tracks of 500 sectors (sector 450 must lie inside a track).
+            let toc = Toc::from_parts(vec![150, 650, 1150], None, 1650).unwrap();
+            let meta = Metadata::Unknown { album: "Pressing".into() };
+            let p = plan(&toc, &meta, &s.flac_dir);
+
+            // The database's pressing: the same audio, `shift` frames later.
+            let mut probe = FakeDisc { sectors: 1500, flaky: vec![], bad: vec![], reads: 0 };
+            let t2 = &p.tracks[1];
+            let theirs = secure_read::read_track(&mut probe, t2.sectors.clone(), p.readable_end, shift, &mut |_, _| {});
+            let sums = accuraterip::checksums(&theirs.frames, false, false);
+            let base = accuraterip::FRAME450_SECTOR * FRAMES_PER_SECTOR;
+            let crc450 = theirs.frames[base..base + FRAMES_PER_SECTOR]
+                .iter()
+                .enumerate()
+                .fold(0u32, |a, (j, &f)| a.wrapping_add(f.wrapping_mul(j as u32 + 1)));
+            let entries = DiscEntries {
+                tracks: vec![BTreeMap::new(), BTreeMap::from([(sums.v2, 12u8)]), BTreeMap::new()],
+                frame450: vec![BTreeMap::new(), BTreeMap::from([(crc450, 12u8)]), BTreeMap::new()],
+            };
+
+            let mut disc = FakeDisc { sectors: 1500, flaky: vec![], bad: vec![], reads: 0 };
+            let ctx = RipContext { settings: &s, offset: 0, accuraterip: Some(&entries), cover: None, log_header: String::new() };
+            let mut how = None;
+            let mut reads_of_2 = 0;
+            rip(&mut disc, &p, &ctx, &mut |e| match e {
+                Event::Accepted { position: 2, how: h, .. } => how = Some(h),
+                Event::ReadStart { position: 2, .. } => reads_of_2 += 1,
+                _ => {}
+            })
+            .unwrap();
+            assert_eq!(how, Some(Acceptance::OtherPressing { confidence: 12, shift: shift as i64 }), "shift {shift}");
+            assert_eq!(reads_of_2, 1);
+            // The file holds this disc's audio (offset 0), not the shifted one.
+            let (_, frames) = crate::flacfile::read_cd_audio(&p.tracks[1].dest).unwrap();
+            let ours = secure_read::read_track(&mut probe, t2.sectors.clone(), p.readable_end, 0, &mut |_, _| {});
+            assert_eq!(frames, ours.frames);
+            std::fs::remove_dir_all(&root).ok();
+        }
     }
 }

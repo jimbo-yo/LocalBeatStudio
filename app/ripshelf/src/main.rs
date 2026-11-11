@@ -293,16 +293,29 @@ impl Observer for Printer {
                 self.matched += 1;
                 format!("OK  v{version}, confidence {confidence}")
             }
-            Verdict::NoMatch => {
-                self.unmatched += 1;
-                "NO MATCH".to_string()
-            }
+            Verdict::NoMatch => match r.other_pressing {
+                Some((shift, Some(confidence))) => {
+                    self.matched += 1;
+                    format!("OK  other pressing {shift:+}, conf {confidence}")
+                }
+                Some((shift, None)) => {
+                    self.unmatched += 1;
+                    format!("NO MATCH (frame 450 at {shift:+})")
+                }
+                None => {
+                    self.unmatched += 1;
+                    "NO MATCH".to_string()
+                }
+            },
             Verdict::NotInDatabase => {
                 self.unknown += 1;
                 "not in database".to_string()
             }
         };
         println!("  {:>2}  v1 {:08X}  v2 {:08X}  {result:<24} {name}", r.track, r.sums.v1, r.sums.v2);
+        if r.right_pressing {
+            println!("        (right pressing: its frame-450 sector matches, so the audio differs elsewhere: a read error?)");
+        }
     }
 
     fn skipped(&mut self, path: &Path, why: &str) {
