@@ -273,8 +273,9 @@ pub struct Album {
     pub files: Vec<SourceFile>,
     /// DRM-protected files (names): never sent.
     pub protected: Vec<String>,
-    /// For a FLAC album: the same album's folder in Miscellaneous, if any.
-    pub also_in_misc: Option<String>,
+    /// For a FLAC album: the same album's folders in Miscellaneous (same
+    /// folder name, or the same album artist + album tags).
+    pub also_in_misc: Vec<String>,
 }
 
 impl Album {
@@ -303,7 +304,7 @@ pub fn scan_library(flac_dir: &Path, misc_dir: &Path) -> Vec<Album> {
             match by_key.get(&album.key) {
                 Some(old) if old.origin == Origin::Misc && origin == Origin::Flac => {
                     let misc = old.rel.clone();
-                    by_key.insert(album.key.clone(), Album { also_in_misc: Some(misc), ..album });
+                    by_key.insert(album.key.clone(), Album { also_in_misc: vec![misc], ..album });
                 }
                 Some(_) => {} // two folders with the same name in one library: first wins
                 None => {
@@ -312,7 +313,64 @@ pub fn scan_library(flac_dir: &Path, misc_dir: &Path) -> Vec<Album> {
             }
         }
     }
+    // Differently named folders holding the same album ("Compilations/
+    // Magnolia", "Biograph [Disc 1]"): matched by their tags, which enrich
+    // made reliable. The FLAC copy wins.
+    let flac_by_tags: BTreeMap<String, String> = by_key
+        .values()
+        .filter(|a| a.origin == Origin::Flac)
+        .filter_map(|a| Some((album_tag_key(a.files.iter().find(|f| f.convert)?)?, a.key.clone())))
+        .collect();
+    let misc_keys: Vec<String> = by_key.values().filter(|a| a.origin == Origin::Misc).map(|a| a.key.clone()).collect();
+    for mk in misc_keys {
+        let misc = &by_key[&mk];
+        let Some(tk) = misc.files.iter().find(|f| f.convert).and_then(album_tag_key) else { continue };
+        let Some(fk) = flac_by_tags.get(&tk) else { continue };
+        // Every song in the folder must be from that album (a folder of
+        // loose songs isn't the album).
+        if !misc.files.iter().filter(|f| f.convert).all(|f| album_tag_key(f).as_ref() == Some(&tk)) {
+            continue;
+        }
+        let misc = by_key.remove(&mk).unwrap();
+        if let Some(flac) = by_key.get_mut(fk) {
+            flac.also_in_misc.push(misc.rel);
+        }
+    }
     by_key.into_values().collect()
+}
+
+/// "artist|album" from a file's album artist (else artist) and album tags,
+/// disc labels dropped; None for files without them or "Unknown Album".
+fn album_tag_key(f: &SourceFile) -> Option<String> {
+    let is_flac = f.path.extension().is_some_and(|e| e.eq_ignore_ascii_case("flac"));
+    let (artist, album) = if is_flac {
+        let t = crate::flacfile::read_tags(&f.path).ok()?;
+        (t.tag("ALBUMARTIST").or(t.tag("ARTIST"))?.to_string(), t.tag("ALBUM")?.to_string())
+    } else {
+        let i = audio_source::read_info(&f.path).ok()?;
+        let g = |k: &str| i.tags.iter().find(|(x, _)| x == k).map(|(_, v)| v.clone());
+        (g("ALBUMARTIST").or(g("ARTIST"))?, g("ALBUM")?)
+    };
+    let album = crate::enrich::norm(&crate::enrich::clean_album(&album));
+    if matches!(album.as_str(), "" | "unknown album" | "untitled") {
+        return None;
+    }
+    Some(format!("{}|{album}", crate::enrich::norm(&artist)))
+}
+
+/// Re-keys phone folders that hold a Miscellaneous album the library now
+/// has as FLAC under another name, so the sync replaces them with the FLAC
+/// copy (and the album list shows one album, not two).
+pub fn alias_phone(phone: &mut PhoneState, library: &[Album]) {
+    let alias: BTreeMap<String, &str> = library
+        .iter()
+        .flat_map(|a| a.also_in_misc.iter().map(move |m| (norm_key(m), a.key.as_str())))
+        .collect();
+    for pa in &mut phone.albums {
+        if let Some(k) = alias.get(&pa.key) {
+            pa.key = k.to_string();
+        }
+    }
 }
 
 fn scan_root(root: &Path, origin: Origin) -> Vec<Album> {
@@ -381,7 +439,7 @@ fn scan_root(root: &Path, origin: Origin) -> Vec<Album> {
             files.extend(cover);
         }
         let (artist, title) = split_album(&rel);
-        albums.push(Album { key: norm_key(&rel), origin, rel, artist, title, files, protected, also_in_misc: None });
+        albums.push(Album { key: norm_key(&rel), origin, rel, artist, title, files, protected, also_in_misc: Vec::new() });
     }
     albums
 }
@@ -557,7 +615,14 @@ pub fn plan(library: &[Album], phone: &PhoneState, wanted: &BTreeSet<String>) ->
     let lib_keys: BTreeSet<&str> = library.iter().map(|a| a.key.as_str()).collect();
 
     for album in library {
-        let on = phone.album(&album.key);
+        // Several phone folders can hold the album (old Miscellaneous disc
+        // folders re-keyed by alias_phone): use the one in the album's own
+        // place if there, and remove the others.
+        let ons: Vec<&PhoneAlbum> = phone.albums.iter().filter(|a| a.key == album.key).collect();
+        let on = ons.iter().find(|a| a.rel == album.rel).or(ons.first()).copied();
+        for extra in ons.iter().filter(|a| Some(a.rel.as_str()) != on.map(|o| o.rel.as_str())) {
+            p.remove_dirs.push((extra.rel.clone(), extra.bytes()));
+        }
         let want = wanted.contains(&album.key);
         let action = match (want, on) {
             (false, None) => AlbumAction::None,
@@ -850,6 +915,41 @@ mod tests {
     }
 
     #[test]
+    fn misc_copy_with_another_folder_name_is_replaced_by_flac() {
+        let root = std::env::temp_dir().join(format!("ripshelf-alias-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (fl, misc, ph) = (root.join("FLAC"), root.join("Misc"), root.join("phone"));
+        let tagged = |path: &Path, album: &str| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let frames: Vec<u32> = (0..4410).map(|_| 0).collect();
+            let tags = [("ALBUMARTIST".to_string(), "Aimee Mann".to_string()), ("ALBUM".to_string(), album.to_string())];
+            flac_encode::write_flac(path, &frames, &tags, None, 0).unwrap();
+        };
+        tagged(&fl.join("Aimee Mann/Magnolia/01. Aimee Mann - One.flac"), "Magnolia: Music From the Motion Picture");
+        tagged(&misc.join("Compilations/Magnolia/01 One.flac"), "Magnolia: Music From the Motion Picture");
+        tagged(&misc.join("Compilations/Magnolia [Disc 2]/01 Two.flac"), "Magnolia: Music From the Motion Picture [Disc 2]");
+        tagged(&misc.join("Aimee Mann/Bachelor No. 2/01 Red Vines.flac"), "Bachelor No. 2");
+        for rel in ["Aimee Mann/Magnolia/01. Aimee Mann - One.opus", "Compilations/Magnolia/01 One.opus", "Compilations/Magnolia [Disc 2]/01 Two.opus"] {
+            std::fs::create_dir_all(ph.join(rel).parent().unwrap()).unwrap();
+            std::fs::write(ph.join(rel), b"opus").unwrap();
+        }
+        let lib = scan_library(&fl, &misc);
+        assert_eq!(lib.len(), 2, "{:?}", lib.iter().map(|a| &a.rel).collect::<Vec<_>>());
+        let flac = lib.iter().find(|a| a.origin == Origin::Flac).unwrap();
+        assert_eq!(flac.also_in_misc.len(), 2);
+
+        let mut phone = read_phone(&FolderPhone { root: ph.clone() }).unwrap();
+        alias_phone(&mut phone, &lib);
+        let wanted = on_phone(&lib, &phone);
+        assert_eq!(wanted.len(), 1);
+        let p = plan(&lib, &phone, &wanted);
+        let mut removed: Vec<&str> = p.remove_dirs.iter().map(|(d, _)| d.as_str()).collect();
+        removed.sort();
+        assert_eq!(removed, ["Compilations/Magnolia", "Compilations/Magnolia [Disc 2]"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn keys_match_old_and_new_folder_styles() {
         assert_eq!(norm_key("Guns N’ Roses/Use Your Illusion I"), norm_key("Guns N' Roses - Use Your Illusion I"));
         assert_eq!(norm_key("Radiohead/I Might Be Wrong∶ Live"), "radiohead - i might be wrong: live");
@@ -886,7 +986,7 @@ mod tests {
 
         let lib = scan_library(&fl, &misc);
         let hole = lib.iter().find(|a| a.key == norm_key("Hole/Celebrity Skin")).unwrap();
-        assert_eq!((hole.origin, hole.also_in_misc.as_deref()), (Origin::Flac, Some("Hole - Celebrity Skin")));
+        assert_eq!((hole.origin, hole.also_in_misc.first().map(String::as_str)), (Origin::Flac, Some("Hole - Celebrity Skin")));
         assert_eq!(lib.iter().find(|a| a.rel == "Chant/Meditation").unwrap().protected.len(), 1);
 
         let fs = FolderPhone { root: ph.clone() };

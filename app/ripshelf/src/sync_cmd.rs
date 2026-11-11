@@ -50,7 +50,15 @@ fn run<P: PhoneFs + Reconnect + Sync>(raw: &P, desc: &str, s: &Settings, a: &Syn
     };
     println!("Library: {} + {}", s.flac_dir.display(), s.misc_dir.display());
     let lib = phone_sync::scan_library(&s.flac_dir, &s.misc_dir);
-    let phone = phone_sync::read_phone(&fs)?;
+    let dups: Vec<String> = lib.iter().flat_map(|a| a.also_in_misc.iter().map(move |m| format!("{m} -> {}", a.rel))).collect();
+    if !dups.is_empty() {
+        println!("  {} Miscellaneous folders are FLAC albums now (FLAC copy used):", dups.len());
+        for d in &dups {
+            println!("    {d}");
+        }
+    }
+    let mut phone = phone_sync::read_phone(&fs)?;
+    phone_sync::alias_phone(&mut phone, &lib);
     let flac = lib.iter().filter(|x| x.origin == phone_sync::Origin::Flac).count();
     let drm: usize = lib.iter().map(|x| x.protected.len()).sum();
     println!(
