@@ -4,6 +4,7 @@
 // No console window behind the app in release builds on Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -53,12 +54,18 @@ fn main() -> eframe::Result {
 
 /// Messages from the engine thread.
 enum Msg {
-    Event(Event),
-    Choose { candidates: Vec<Release>, reply: Sender<ReleaseChoice> },
-    Stopped(Option<String>),
+    /// An event from the rip loop of a drive (path).
+    Event(String, Event),
+    Choose { drive: String, candidates: Vec<Release>, reply: Sender<ReleaseChoice> },
+    /// A drive's rip loop started / ended.
+    LoopStarted(String),
+    Stopped(String, Option<String>),
+    /// The drive watcher ended (after Stop).
+    WatcherDone,
 }
 
 struct GuiFrontend {
+    drive: String,
     tx: Sender<Msg>,
     stop: Arc<AtomicBool>,
     ctx: egui::Context,
@@ -68,13 +75,13 @@ struct GuiFrontend {
 impl Frontend for GuiFrontend {
     fn event(&self, e: Event) {
         self.notifier.observe(&e);
-        let _ = self.tx.send(Msg::Event(e));
+        let _ = self.tx.send(Msg::Event(self.drive.clone(), e));
         self.ctx.request_repaint();
     }
 
     fn choose_release(&self, candidates: &[Release]) -> ReleaseChoice {
         let (reply, answer) = channel();
-        let _ = self.tx.send(Msg::Choose { candidates: candidates.to_vec(), reply });
+        let _ = self.tx.send(Msg::Choose { drive: self.drive.clone(), candidates: candidates.to_vec(), reply });
         self.ctx.request_repaint();
         loop {
             match answer.recv_timeout(Duration::from_millis(200)) {
@@ -129,7 +136,15 @@ struct Disc {
     result: Option<String>,
 }
 
+/// One drive's part of the Rip tab.
+#[derive(Default)]
+struct DriveView {
+    disc: Option<Disc>,
+    stage: String,
+}
+
 struct Choice {
+    drive: String,
     candidates: Vec<Release>,
     reply: Sender<ReleaseChoice>,
     selected: usize,
@@ -143,8 +158,23 @@ struct App {
     stop: Arc<AtomicBool>,
     running: bool,
     stage: String,
+    /// The selected drive's disc and stage (swapped in from `drives` while
+    /// its events are handled or the Rip tab is drawn).
     disc: Option<Disc>,
     choice: Option<Choice>,
+    /// Release questions from other drives, asked one at a time.
+    queued_choices: std::collections::VecDeque<Choice>,
+    /// Per drive (path): its disc and stage, when not swapped in.
+    drives: BTreeMap<String, DriveView>,
+    /// The drive the Rip tab shows.
+    view: Option<String>,
+    /// Rip loops running, and whether the drive watcher is.
+    loops: usize,
+    watcher: bool,
+    /// Whether the selected drive's view is in `self.disc`/`self.stage`.
+    swapped: bool,
+    /// A drive clicked in the drive strip (switched to after drawing).
+    pending_view: Option<String>,
     session: Vec<(bool, String)>,
     log: Vec<String>,
     show_log: bool,
@@ -186,6 +216,13 @@ impl App {
             stage: String::new(),
             disc: None,
             choice: None,
+            queued_choices: Default::default(),
+            drives: BTreeMap::new(),
+            view: None,
+            loops: 0,
+            watcher: false,
+            swapped: false,
+            pending_view: None,
             session: Vec::new(),
             log: Vec::new(),
             show_log: false,
@@ -199,8 +236,9 @@ impl App {
         };
         if std::env::var_os("RIPSHELF_DEMO").is_some() {
             // Made-up disc for working on the layout without a CD.
-            app.disc = Some(demo_disc());
-            app.stage = "Ripping track 5 (demo)".into();
+            app.drives.insert("/dev/sr1".into(), DriveView { disc: Some(demo_disc()), stage: "Ripping track 5 (demo)".into() });
+            app.drives.insert("/dev/sr2".into(), DriveView { disc: None, stage: "Waiting for a disc (demo)".into() });
+            app.view = Some("/dev/sr1".into());
             app.session = vec![(true, "Radiohead – OK Computer: 12/12".into()), (false, "Lenny Kravitz – Let Love Rule: 11/12".into())];
         } else {
             app.start();
@@ -208,26 +246,83 @@ impl App {
         app
     }
 
+    /// Starts a watcher that runs one rip loop per drive (drives plugged in
+    /// later get one too), so several drives rip at the same time.
     fn start(&mut self) {
         let (tx, rx) = channel();
         self.stop = Arc::new(AtomicBool::new(false));
-        let fe = GuiFrontend { tx: tx.clone(), stop: self.stop.clone(), ctx: self.ctx.clone(), notifier: self.notifier.clone() };
-        let settings = self.settings.clone();
+        let (stop, ctx, notifier, settings) = (self.stop.clone(), self.ctx.clone(), self.notifier.clone(), self.settings.clone());
         std::thread::spawn(move || {
-            let r = engine::rip_loop(&settings, &Options::default(), &fe);
-            let _ = tx.send(Msg::Stopped(r.err().map(|e| format!("{e:#}"))));
-            fe.ctx.request_repaint();
+            let mut started = std::collections::BTreeSet::new();
+            while !stop.load(Ordering::Relaxed) {
+                for path in ripshelf_platform::drive::drive_paths() {
+                    if !started.insert(path.clone()) {
+                        continue;
+                    }
+                    let fe = GuiFrontend { drive: path.clone(), tx: tx.clone(), stop: stop.clone(), ctx: ctx.clone(), notifier: notifier.clone() };
+                    let (settings, tx) = (settings.clone(), tx.clone());
+                    let _ = tx.send(Msg::LoopStarted(path.clone()));
+                    std::thread::spawn(move || {
+                        let opts = Options { drive: Some(path.clone()), ..Default::default() };
+                        let r = engine::rip_loop(&settings, &opts, &fe);
+                        let _ = tx.send(Msg::Stopped(path, r.err().map(|e| format!("{e:#}"))));
+                        fe.ctx.request_repaint();
+                    });
+                }
+                ctx.request_repaint();
+                for _ in 0..15 {
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+            }
+            let _ = tx.send(Msg::WatcherDone);
+            ctx.request_repaint();
         });
         self.rx = Some(rx);
         self.running = true;
+        self.watcher = true;
         self.stage = "Starting".into();
         self.log("Started: waiting for discs".into());
+    }
+
+    /// Runs `f` with `drive`'s view swapped into `self.disc`/`self.stage`.
+    fn with_view<R>(&mut self, drive: &str, f: impl FnOnce(&mut Self) -> R) -> R {
+        if self.swapped && self.view.as_deref() == Some(drive) {
+            return f(self); // already swapped in (while drawing)
+        }
+        let mut v = self.drives.remove(drive).unwrap_or_default();
+        std::mem::swap(&mut self.disc, &mut v.disc);
+        std::mem::swap(&mut self.stage, &mut v.stage);
+        let r = f(self);
+        std::mem::swap(&mut self.disc, &mut v.disc);
+        std::mem::swap(&mut self.stage, &mut v.stage);
+        self.drives.insert(drive.to_string(), v);
+        r
+    }
+
+    /// Moves the selected drive's view into `self.disc`/`self.stage` for
+    /// drawing (`true`), or back into `drives` (`false`).
+    fn swap_view(&mut self, into_self: bool) {
+        if self.swapped == into_self {
+            return;
+        }
+        if let Some(d) = self.view.clone() {
+            let v = self.drives.entry(d).or_default();
+            std::mem::swap(&mut self.disc, &mut v.disc);
+            std::mem::swap(&mut self.stage, &mut v.stage);
+        }
+        self.swapped = into_self;
     }
 
     fn stop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         self.stage = "Stopping...".into();
         if let Some(c) = self.choice.take() {
+            let _ = c.reply.send(ReleaseChoice::Skip);
+        }
+        for c in self.queued_choices.drain(..) {
             let _ = c.reply.send(ReleaseChoice::Skip);
         }
     }
@@ -248,33 +343,65 @@ impl App {
         let msgs: Vec<Msg> = rx.try_iter().collect();
         for m in msgs {
             match m {
-                Msg::Event(e) => self.on_event(e),
-                Msg::Choose { candidates, reply } => {
-                    let auto = candidates.first().is_some_and(|r| !r.fuzzy);
-                    self.choice = Some(Choice {
-                        candidates,
-                        reply,
-                        selected: 0,
-                        deadline: auto.then(|| Instant::now() + Duration::from_secs(AUTO_CHOOSE_SECS)),
-                    });
-                }
-                Msg::Stopped(err) => {
-                    self.running = false;
-                    self.rx = None;
-                    match err {
-                        Some(e) => {
-                            self.stage = format!("Stopped: {e}");
-                            self.log(format!("Stopped with an error: {e}"));
-                        }
-                        None => {
-                            self.stage = "Stopped".into();
-                            self.log("Stopped".into());
-                        }
+                Msg::Event(drive, e) => {
+                    let starts = matches!(e, Event::DiscStart { .. });
+                    self.with_view(&drive, |a| a.on_event(e));
+                    // Show a drive when a disc starts there, unless the one
+                    // shown is in the middle of a disc.
+                    let busy = |v: &DriveView| v.disc.as_ref().is_some_and(|d| d.result.is_none());
+                    let shown_busy = match &self.view {
+                        Some(v) if self.swapped => self.disc.as_ref().is_some_and(|d| d.result.is_none()) && v != &drive,
+                        Some(v) => v != &drive && self.drives.get(v).is_some_and(busy),
+                        None => false,
+                    };
+                    if starts && !shown_busy {
+                        self.select_view(drive);
                     }
-                    break;
                 }
+                Msg::LoopStarted(drive) => {
+                    self.loops += 1;
+                    self.drives.entry(drive.clone()).or_default().stage = "Waiting for a disc".into();
+                    if self.view.is_none() {
+                        self.select_view(drive);
+                    }
+                }
+                Msg::Choose { drive, candidates, reply } => {
+                    self.queued_choices.push_back(Choice { drive, candidates, reply, selected: 0, deadline: None });
+                }
+                Msg::Stopped(drive, err) => {
+                    self.loops = self.loops.saturating_sub(1);
+                    let line = match &err {
+                        Some(e) => format!("{drive}: stopped with an error: {e}"),
+                        None => format!("{drive}: stopped"),
+                    };
+                    self.log(line);
+                    self.with_view(&drive, |a| a.stage = err.map(|e| format!("Stopped: {e}")).unwrap_or_else(|| "Stopped".into()));
+                }
+                Msg::WatcherDone => self.watcher = false,
             }
         }
+        if !self.watcher && self.loops == 0 && self.running {
+            self.running = false;
+            self.rx = None;
+            self.log("Stopped".into());
+        }
+        // Ask the next release question once the previous one is answered.
+        if self.choice.is_none() {
+            if let Some(mut c) = self.queued_choices.pop_front() {
+                if c.candidates.first().is_some_and(|r| !r.fuzzy) {
+                    c.deadline = Some(Instant::now() + Duration::from_secs(AUTO_CHOOSE_SECS));
+                }
+                self.choice = Some(c);
+            }
+        }
+    }
+
+    /// Shows `drive` on the Rip tab.
+    fn select_view(&mut self, drive: String) {
+        let was = self.swapped;
+        self.swap_view(false);
+        self.view = Some(drive);
+        self.swap_view(was);
     }
 
     fn row(&mut self, position: usize) -> Option<&mut Row> {
@@ -489,8 +616,19 @@ fn fmt_duration(d: Duration) -> String {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = &ui.ctx().clone();
         self.poll();
+        self.swap_view(true);
+        self.draw(ui);
+        self.swap_view(false);
+        if let Some(v) = self.pending_view.take() {
+            self.select_view(v);
+        }
+    }
+}
+
+impl App {
+    fn draw(&mut self, ui: &mut egui::Ui) {
+        let ctx = &ui.ctx().clone();
         for line in self.phone.poll(&self.settings, &mut self.prefs, ctx) {
             self.log(line);
         }
@@ -605,6 +743,36 @@ impl eframe::App for App {
             return;
         }
 
+        if self.drives.len() > 1 {
+            egui::Panel::top("drives").show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.weak("Drives:");
+                    for (path, v) in &self.drives {
+                        let shown = self.view.as_deref() == Some(path.as_str());
+                        let (disc, stage) = if shown { (&self.disc, &self.stage) } else { (&v.disc, &v.stage) };
+                        let name = path.trim_start_matches(r"\\.\").trim_start_matches("/dev/");
+                        let what = match disc {
+                            Some(d) if d.result.is_none() => {
+                                let album = d.release.as_ref().map(|r| r.title.clone()).or(d.unknown_album.clone()).unwrap_or_else(|| "new disc".into());
+                                format!("{album} · {stage}")
+                            }
+                            _ => stage.clone(),
+                        };
+                        let model = disc.as_ref().map(|d| d.model.clone()).filter(|m| !m.is_empty());
+                        let label = egui::RichText::new(format!("{name}: {what}"));
+                        let r = ui.selectable_label(shown, label);
+                        let r = match model {
+                            Some(m) => r.on_hover_text(m),
+                            None => r,
+                        };
+                        if r.clicked() && !shown {
+                            self.pending_view = Some(path.clone());
+                        }
+                    }
+                });
+            });
+        }
+
         egui::Panel::left("album").resizable(false).exact_size(300.0).show(ui, |ui| {
             ui.add_space(8.0);
             match &self.disc {
@@ -707,7 +875,8 @@ impl App {
                 answer = Some(ReleaseChoice::Use(c.selected));
             }
         }
-        egui::Window::new("Which release is this?")
+        egui::Window::new(format!("Which release is this? ({})", c.drive))
+            .id(egui::Id::unique("release-choice"))
             .collapsible(false)
             .resizable(true)
             .default_width(560.0)
