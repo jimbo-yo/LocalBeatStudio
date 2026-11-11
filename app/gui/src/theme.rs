@@ -69,6 +69,10 @@ pub fn pal(ui: &Ui) -> &'static Palette {
     if ui.visuals().dark_mode { &DARK } else { &LIGHT }
 }
 
+pub fn pal_ctx(ctx: &egui::Context) -> &'static Palette {
+    if ctx.theme() == egui::Theme::Dark { &DARK } else { &LIGHT }
+}
+
 /// Colour at `t` (0..1) along the prism.
 pub fn prism_at(t: f32) -> Color32 {
     let t = t.clamp(0.0, 1.0) * (PRISM.len() - 1) as f32;
@@ -476,6 +480,22 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, size: f32, tooltip: &str) -> Respons
     if tooltip.is_empty() { resp } else { resp.on_hover_text(tooltip) }
 }
 
+/// A round, outlined transport button (a CD player's stop / eject).
+pub fn control_button(ui: &mut Ui, icon: Icon, size: f32, color: Color32) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    let p = pal(ui);
+    let enabled = ui.is_enabled();
+    let hovered = resp.hovered() && enabled;
+    let painter = ui.painter();
+    painter.circle_filled(rect.center(), size / 2.0, if hovered { with_alpha(color, 0.16) } else { p.card });
+    painter.circle_stroke(rect.center(), size / 2.0 - 0.5, Stroke::new(1.0, if hovered { with_alpha(color, 0.8) } else { p.line }));
+    paint_icon(painter, rect.shrink(size * 0.3), icon, if enabled { color } else { p.faint });
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum Kind {
     /// Prism-filled: the page's main action.
@@ -618,4 +638,84 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     painter.circle_filled(knob, 7.5, Color32::WHITE);
     painter.galley(pos2(track.right() + 8.0, rect.center().y - galley.size().y / 2.0), galley, p.text);
     resp
+}
+
+/// A CD seen from its data side: dark body, a prism sheen in two opposite
+/// bands (like a disc under a lamp), the album cover as its label, and the
+/// spindle hole. `spin` = the angle in radians when it's turning (the label
+/// turns with it); None = at rest.
+pub fn disc(painter: &egui::Painter, center: Pos2, r: f32, spin: Option<f32>, label: Option<egui::TextureId>, dark: bool) {
+    use std::f32::consts::{PI, TAU};
+    let body = if dark { Color32::from_rgb(30, 33, 50) } else { Color32::from_rgb(208, 212, 226) };
+    painter.circle_filled(center, r, body);
+    let angle = spin.unwrap_or(0.5);
+    let strength = if spin.is_some() { 1.0 } else { 0.55 };
+    let inner = r * 0.36;
+    let seg = 120;
+    let mut mesh = Mesh::default();
+    for i in 0..=seg {
+        let th = i as f32 / seg as f32 * TAU;
+        let rel = th - angle;
+        let band = (rel * 2.0).cos().max(0.0).powi(3);
+        let a = (0.10 + 0.70 * band) * strength;
+        let c = prism_at((rel / PI).rem_euclid(1.0));
+        let dir = vec2(th.cos(), th.sin());
+        mesh.colored_vertex(center + dir * r * 0.985, with_alpha(c, a));
+        mesh.colored_vertex(center + dir * inner, with_alpha(c, a * 0.25));
+    }
+    for i in 0..seg as u32 {
+        let (a, b, c, d) = (2 * i, 2 * i + 1, 2 * i + 2, 2 * i + 3);
+        mesh.add_triangle(a, b, c);
+        mesh.add_triangle(b, d, c);
+    }
+    painter.add(Shape::mesh(mesh));
+    // A few faint grooves for depth.
+    for k in [0.55, 0.72, 0.88] {
+        painter.circle_stroke(center, r * k, Stroke::new(0.6, Color32::from_white_alpha(if dark { 10 } else { 40 })));
+    }
+    painter.circle_stroke(center, r, Stroke::new(1.0, Color32::from_white_alpha(if dark { 28 } else { 90 })));
+
+    // Label: the cover, turning with the disc, or a plain centre.
+    let label_r = inner * 0.96;
+    match label {
+        Some(tex) => {
+            let mut m = Mesh::with_texture(tex);
+            let n = 64;
+            m.vertices.push(egui::epaint::Vertex { pos: center, uv: pos2(0.5, 0.5), color: Color32::WHITE });
+            for i in 0..=n {
+                let th = i as f32 / n as f32 * TAU;
+                let u = th - angle;
+                m.vertices.push(egui::epaint::Vertex {
+                    pos: center + vec2(th.cos(), th.sin()) * label_r,
+                    uv: pos2(0.5 + 0.5 * u.cos(), 0.5 + 0.5 * u.sin()),
+                    color: Color32::WHITE,
+                });
+            }
+            for i in 0..n as u32 {
+                m.add_triangle(0, 1 + i, 2 + i);
+            }
+            painter.add(Shape::mesh(m));
+        }
+        None => {
+            painter.circle_filled(center, label_r, if dark { DARK.card_hover } else { LIGHT.card });
+        }
+    }
+    painter.circle_filled(center, r * 0.085, if dark { DARK.base } else { LIGHT.base });
+    painter.circle_stroke(center, r * 0.13, Stroke::new(1.0, Color32::from_white_alpha(if dark { 30 } else { 120 })));
+}
+
+/// A small rotating arc in prism colours (work in progress).
+pub fn spinner(painter: &egui::Painter, center: Pos2, r: f32, time: f64) {
+    let start = (time * 5.0) as f32;
+    let n = 24;
+    for i in 0..n {
+        let t0 = i as f32 / n as f32;
+        let t1 = (i + 1) as f32 / n as f32;
+        let a0 = start + t0 * 4.4;
+        let a1 = start + t1 * 4.4;
+        painter.line_segment(
+            [center + vec2(a0.cos(), a0.sin()) * r, center + vec2(a1.cos(), a1.sin()) * r],
+            Stroke::new(2.2, prism_at(t0)),
+        );
+    }
 }

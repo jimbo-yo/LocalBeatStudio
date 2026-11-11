@@ -39,7 +39,7 @@ Dark-first (light variant kept), inspired by light on a CD's data side.
    gradient painter, icon painter, card/badge/button helpers); sidebar
    navigation replaces the top tabs; Rip, Phone and Review pages moved into
    it unchanged in function. Install.
-2. **Rip page redesign.** Drive deck cards with grouped controls and the
+2. ✅ (2026-11-11) **Rip page redesign.** Drive deck cards with grouped controls and the
    animated disc, header with all-drive controls, album/track layout,
    release-choice dialog, log drawer. Install.
 3. **Playback engine** (new crate `app/player`, no UI): Symphonia decode
@@ -62,7 +62,8 @@ Dark-first (light variant kept), inspired by light on a CD's data side.
 ## Checking the look
 
 `RIPSHELF_DEMO=1` (Rip page), `=phone` or `=review` opens that page with a
-made-up session; e.g.
+made-up session (`=sr2` shows the second drive, `=choice` the release
+dialog); e.g.
 `RIPSHELF_DEMO=1 target/debug/ripshelf-gui & sleep 4; spectacle -b -n -a -o shot.png`.
 
 Screenshots of the real window (RIPSHELF_DEMO=1 for a made-up rip session)

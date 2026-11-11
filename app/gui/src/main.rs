@@ -263,9 +263,33 @@ impl App {
         };
         if std::env::var_os("RIPSHELF_DEMO").is_some() {
             // Made-up disc for working on the layout without a CD.
-            app.drives.insert("/dev/sr1".into(), DriveView { disc: Some(demo_disc()), stage: "Ripping track 5 (demo)".into(), stop_disc: Some(Default::default()) });
-            app.drives.insert("/dev/sr2".into(), DriveView { disc: None, stage: "Waiting for a disc (demo)".into(), stop_disc: Some(Default::default()) });
-            app.view = Some("/dev/sr1".into());
+            let mut d1 = demo_disc();
+            d1.cover = Some(demo_cover(&app.ctx));
+            let mut d2 = demo_disc();
+            d2.drive = "/dev/sr2".into();
+            d2.model = "Apple SuperDrive".into();
+            d2.offset = 6;
+            d2.release = Some(Release { title: "Grace".into(), artist: "Jeff Buckley".into(), date: "1994-08-23".into(), country: "US".into(), media_count: 1, ..Default::default() });
+            d2.done_secs = 300 * 75;
+            app.drives.insert("/dev/sr0".into(), DriveView { disc: None, stage: "Waiting for a disc".into(), stop_disc: Some(Default::default()) });
+            app.drives.insert("/dev/sr1".into(), DriveView { disc: Some(d1), stage: "Ripping track 5".into(), stop_disc: Some(Default::default()) });
+            app.drives.insert("/dev/sr2".into(), DriveView { disc: Some(d2), stage: "Ripping track 2".into(), stop_disc: Some(Default::default()) });
+            let demo = std::env::var("RIPSHELF_DEMO").unwrap_or_default();
+            app.view = Some(if demo == "sr2" { "/dev/sr2" } else { "/dev/sr1" }.into());
+            app.running = true;
+            app.stage = "Ripping on 2 drives".into();
+            if demo == "choice" {
+                let (reply, _keep) = channel();
+                std::mem::forget(_keep);
+                let r = |t: &str, c: &str, d: &str| Release { title: t.into(), artist: "Radiohead".into(), country: c.into(), date: d.into(), media_count: 1, ..Default::default() };
+                app.choice = Some(Choice {
+                    drive: "/dev/sr1".into(),
+                    candidates: vec![r("OK Computer", "US", "1997-07-01"), r("OK Computer", "GB", "1997-06-16"), r("OK Computer", "JP", "1997-05-21")],
+                    reply,
+                    selected: 0,
+                    deadline: Some(Instant::now() + Duration::from_secs(AUTO_CHOOSE_SECS)),
+                });
+            }
             app.tab = match std::env::var("RIPSHELF_DEMO").as_deref() {
                 Ok("phone") => Tab::Phone,
                 Ok("review") => Tab::Review,
@@ -931,149 +955,160 @@ impl App {
             }
         });
 
+        let time = ui.input(|i| i.time);
+        let mut spinning = false;
         if !self.drives.is_empty() {
-            let f = egui::Frame::new().fill(p.content).inner_margin(egui::Margin { left: 28, right: 28, top: 4, bottom: 10 });
+            let f = egui::Frame::new().fill(p.content).inner_margin(egui::Margin { left: 28, right: 28, top: 4, bottom: 14 });
             egui::Panel::top("drives").frame(f).show_separator_line(false).show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.weak("Drives:");
-                    let all_ejecting = self.eject.iter().any(|(d, _)| d.is_none());
-                    for (path, v) in &self.drives {
+                // As many cards per row as fit (at least 280 px each), all the same width.
+                let gap = 12.0;
+                let avail = ui.available_width();
+                let n = self.drives.len();
+                let per_row = (((avail + gap) / (280.0 + gap)).floor() as usize).clamp(1, n);
+                let card_w = (avail - gap * (per_row - 1) as f32) / per_row as f32;
+                let all_ejecting = self.eject.iter().any(|(d, _)| d.is_none());
+                let drives: Vec<(&String, &DriveView)> = self.drives.iter().collect();
+                for row in drives.chunks(per_row) {
+                  ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(gap, gap);
+                    for &(path, v) in row {
                         let shown = self.view.as_deref() == Some(path.as_str());
                         let (disc, stage) = if shown { (&self.disc, &self.stage) } else { (&v.disc, &v.stage) };
-                        let name = path.trim_start_matches(r"\\.\").trim_start_matches("/dev/");
-                        let what = match disc {
-                            Some(d) if d.result.is_none() => {
-                                let album = d.release.as_ref().map(|r| r.title.clone()).or(d.unknown_album.clone()).unwrap_or_else(|| "new disc".into());
-                                format!("{album} · {stage}")
-                            }
-                            _ => stage.clone(),
-                        };
-                        let model = disc.as_ref().map(|d| d.model.clone()).filter(|m| !m.is_empty());
                         // Ripping = its loop is on a disc that's still in the drive.
                         let ripping = v.stop_disc.is_some() && disc.as_ref().is_some_and(|d| d.result.is_none() && !d.ejected);
                         let stopping = disc.as_ref().is_some_and(|d| d.stopping) && ripping;
-                        egui::Frame::group(ui.style()).inner_margin(egui::Margin::symmetric(6, 3)).show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                let r = ui.selectable_label(shown, egui::RichText::new(format!("{name}: {what}")));
-                                let r = match model {
-                                    Some(m) => r.on_hover_text(m),
-                                    None => r,
-                                };
-                                if r.clicked() && !shown {
-                                    self.pending_view = Some(path.clone());
-                                }
-                                if ripping {
-                                    let label = if stopping { "Stopping…" } else { "⏹ Stop & eject" };
-                                    let hint = "Stop ripping this disc and eject it. Tracks already saved stay in the library; \
-                                                put the disc back in later and only the missing tracks are ripped. \
-                                                This drive keeps watching for the next disc.";
-                                    if ui.add_enabled(!stopping, egui::Button::new(label).small()).on_hover_text(hint).clicked() {
-                                        self.drive_action = Some((path.clone(), DriveAction::StopDisc));
-                                    }
-                                } else {
-                                    let ejecting = all_ejecting || self.eject.iter().any(|(d, _)| d.as_deref() == Some(path.as_str()));
-                                    let label = if ejecting { "Ejecting…" } else { "⏏ Eject" };
-                                    if ui.add_enabled(!ejecting, egui::Button::new(label).small()).on_hover_text("Eject this drive's disc").clicked() {
-                                        self.drive_action = Some((path.clone(), DriveAction::Eject));
-                                    }
-                                }
-                            });
-                        });
+                        let ejecting = all_ejecting || self.eject.iter().any(|(d, _)| d.as_deref() == Some(path.as_str()));
+                        spinning |= ripping;
+                        let deck = Deck { path, disc: disc.as_ref(), stage, shown, ripping, stopping, ejecting, time };
+                        match deck_card(ui, &deck, card_w) {
+                            Some(DeckClick::Select) => self.pending_view = Some(path.clone()),
+                            Some(DeckClick::StopDisc) => self.drive_action = Some((path.clone(), DriveAction::StopDisc)),
+                            Some(DeckClick::Eject) => self.drive_action = Some((path.clone(), DriveAction::Eject)),
+                            None => {}
+                        }
                     }
-                });
+                  });
+                  ui.add_space(gap - ui.spacing().item_spacing.y);
+                }
             });
         }
 
-        let f = egui::Frame::new().fill(p.content).inner_margin(egui::Margin { left: 28, right: 12, top: 6, bottom: 12 });
-        egui::Panel::left("album").resizable(false).exact_size(330.0).frame(f).show_separator_line(false).show(ui, |ui| {
-            ui.add_space(8.0);
-            match &self.disc {
-                None => {
-                    ui.heading("No disc yet");
-                    ui.label("Put a CD in a drive. Each disc is ripped, verified, filed in the library and ejected.");
-                    ui.add_space(8.0);
-                    ui.small(format!("Library: {}", self.settings.flac_dir.display()));
-                    ui.small(format!("Phone copies: {}", self.settings.phone_dir.display()));
-                }
-                Some(d) => {
-                    if let Some(t) = &d.cover {
-                        ui.add(egui::Image::new(t).max_width(284.0).corner_radius(4.0));
-                    } else {
+        let f = egui::Frame::new().fill(p.content).inner_margin(egui::Margin { left: 28, right: 16, top: 4, bottom: 16 });
+        egui::Panel::left("album").resizable(false).exact_size(340.0).frame(f).show_separator_line(false).show(ui, |ui| {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                let dark = ui.visuals().dark_mode;
+                match &self.disc {
+                    None => {
                         let (rect, _) = ui.allocate_exact_size(egui::vec2(284.0, 284.0), egui::Sense::hover());
-                        ui.painter().rect_filled(rect, 4.0, ui.visuals().faint_bg_color);
-                        ui.painter().text(
-                            rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            "♪",
-                            egui::FontId::proportional(64.0),
-                            ui.visuals().weak_text_color(),
-                        );
+                        theme::disc(ui.painter(), rect.center(), 136.0, None, None, dark);
+                        ui.add_space(12.0);
+                        ui.label(egui::RichText::new("No disc yet").font(theme::bold(24.0)).color(p.text));
+                        ui.label(egui::RichText::new("Put a CD in any drive. It's ripped, verified, tagged, filed in the library and ejected.").color(p.dim));
+                        ui.add_space(8.0);
+                        ui.label(egui::RichText::new(format!("Library  {}", self.settings.flac_dir.display())).small().color(p.faint));
                     }
-                    ui.add_space(6.0);
-                    match (&d.release, &d.unknown_album) {
-                        (Some(r), _) => {
-                            ui.heading(&r.title);
-                            ui.label(egui::RichText::new(&r.artist).strong());
-                            let mut bits = vec![r.date.clone(), r.country.clone()];
-                            bits.extend(r.labels.first().cloned());
-                            bits.retain(|b| !b.is_empty());
-                            ui.small(bits.join(" · "));
-                            if r.media_count > 1 {
-                                ui.label(format!("Disc {} of {}", r.medium.position, r.media_count));
+                    Some(d) => {
+                        let ripping = d.result.is_none() && !d.ejected && self.running;
+                        spinning |= ripping;
+                        match &d.cover {
+                            Some(t) => {
+                                let shadow = egui::Shadow { offset: [0, 14], blur: 36, spread: 0, color: egui::Color32::from_black_alpha(140) };
+                                egui::Frame::new().shadow(shadow).corner_radius(14.0).show(ui, |ui| {
+                                    ui.add(egui::Image::new(t).fit_to_exact_size(egui::vec2(284.0, 284.0)).corner_radius(14.0));
+                                });
                             }
-                            if d.alternatives > 0 {
-                                ui.small(format!("({} other matching releases)", d.alternatives));
+                            None => {
+                                let (rect, _) = ui.allocate_exact_size(egui::vec2(284.0, 284.0), egui::Sense::hover());
+                                let spin = ripping.then_some((time * 1.6) as f32);
+                                theme::disc(ui.painter(), rect.center(), 136.0, spin, None, dark);
                             }
                         }
-                        (None, Some(a)) => {
-                            ui.heading(a);
-                            ui.label("Not in MusicBrainz");
+                        ui.add_space(14.0);
+                        match (&d.release, &d.unknown_album) {
+                            (Some(r), _) => {
+                                ui.label(egui::RichText::new(&r.title).font(theme::bold(24.0)).color(p.text));
+                                ui.label(egui::RichText::new(&r.artist).font(theme::medium(16.0)).color(theme::prism_at(0.3)));
+                                let mut bits = vec![r.date.clone(), r.country.clone()];
+                                bits.extend(r.labels.first().cloned());
+                                bits.retain(|b| !b.is_empty());
+                                ui.label(egui::RichText::new(bits.join(" · ")).color(p.dim));
+                                if d.alternatives > 0 {
+                                    ui.label(egui::RichText::new(format!("{} other matching releases", d.alternatives)).small().color(p.faint));
+                                }
+                            }
+                            (None, Some(a)) => {
+                                ui.label(egui::RichText::new(a).font(theme::bold(24.0)).color(p.text));
+                                ui.label(egui::RichText::new("Not in MusicBrainz").color(p.dim));
+                            }
+                            _ => {
+                                ui.label(egui::RichText::new("Identifying…").font(theme::bold(24.0)).color(p.text));
+                            }
                         }
-                        _ => {
-                            ui.heading("Identifying…");
-                        }
-                    }
-                    ui.add_space(6.0);
-                    ui.small(format!("{} · {} · offset {:+}", d.drive.trim_start_matches(r"\\.\"), d.model, d.offset));
-                    if d.in_accuraterip == Some(false) {
-                        ui.small("Not in AccurateRip: verifying by repeat reads");
-                    }
-                    if let Some(res) = &d.result {
                         ui.add_space(6.0);
-                        ui.label(egui::RichText::new(res).strong());
+                        ui.horizontal_wrapped(|ui| {
+                            if let Some(r) = &d.release {
+                                if r.media_count > 1 {
+                                    theme::badge(ui, &format!("Disc {} of {}", r.medium.position, r.media_count), theme::prism_at(0.1));
+                                }
+                            }
+                            match d.in_accuraterip {
+                                Some(true) => {
+                                    theme::badge(ui, "AccurateRip", theme::OK).on_hover_text("This disc is in the AccurateRip database: tracks are checked against other people's rips");
+                                }
+                                Some(false) => {
+                                    theme::badge(ui, "Not in AccurateRip", theme::WARN).on_hover_text("Verifying by repeat reads instead");
+                                }
+                                None => {}
+                            }
+                            theme::badge(ui, &format!("offset {:+}", d.offset), p.dim).on_hover_text(format!("{} · {}", d.drive.trim_start_matches(r"\\.\"), d.model));
+                        });
+                        if let Some(res) = &d.result {
+                            ui.add_space(10.0);
+                            theme::card(ui).show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.label(egui::RichText::new(res).font(theme::medium(14.5)).color(p.text));
+                            });
+                        }
                     }
                 }
-            }
-            if !self.session.is_empty() {
-                ui.add_space(12.0);
-                ui.separator();
-                ui.label(egui::RichText::new("This session").strong());
-                for (ok, s) in self.session.iter().rev() {
-                    ui.small(format!("{} {s}", if *ok { "✔" } else { "✘" }));
+                if !self.session.is_empty() {
+                    ui.add_space(18.0);
+                    theme::section_label(ui, "This session");
+                    ui.add_space(2.0);
+                    for (ok, s) in self.session.iter().rev() {
+                        ui.horizontal(|ui| {
+                            let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                            let (icon, color) = if *ok { (theme::Icon::Check, theme::OK) } else { (theme::Icon::Cross, theme::ERR) };
+                            theme::paint_icon(ui.painter(), rect, icon, color);
+                            ui.label(egui::RichText::new(s).color(p.dim));
+                        });
+                    }
                 }
-            }
+            });
         });
 
-        let f = egui::Frame::new().fill(p.content).inner_margin(egui::Margin { left: 12, right: 28, top: 6, bottom: 12 });
+        let f = egui::Frame::new().fill(p.content).inner_margin(egui::Margin { left: 12, right: 28, top: 4, bottom: 16 });
         egui::CentralPanel::default().frame(f).show(ui, |ui| {
             let Some(d) = &self.disc else {
                 // Nothing to show yet: say what's happening, centred.
                 ui.vertical_centered(|ui| {
-                    ui.add_space(ui.available_height() * 0.3);
-                    ui.label(egui::RichText::new("💿").size(64.0).color(ui.visuals().weak_text_color()));
-                    ui.add_space(8.0);
+                    ui.add_space(ui.available_height() * 0.28);
                     let (title, hint) = if self.running {
-                        ("Ready for a disc", "Put a CD in the drive. It's ripped, checked against AccurateRip, tagged and ejected.")
+                        ("Ready for a disc", "Put a CD in any drive. It's ripped, checked against AccurateRip, tagged and ejected, and the next one starts by itself.")
                     } else {
-                        ("Ripping is stopped", "Press ▶ Start ripping to watch the drives for a disc.")
+                        ("Ripping is stopped", "Press Start ripping to watch the drives for discs.")
                     };
-                    ui.heading(title);
-                    ui.weak(hint);
+                    ui.label(egui::RichText::new(title).font(theme::bold(26.0)).color(p.text));
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(hint).color(p.dim));
                 });
                 return;
             };
-            track_list(ui, d);
+            track_list(ui, d, time);
         });
+        if spinning && self.tab == Tab::Rip {
+            ctx.request_repaint_after(Duration::from_millis(33));
+        }
 
         self.choice_window(ctx);
     }
@@ -1088,51 +1123,75 @@ impl App {
                 answer = Some(ReleaseChoice::Use(c.selected));
             }
         }
-        egui::Window::new(format!("Which release is this? ({})", c.drive))
+        let p = theme::pal_ctx(ctx);
+        egui::Window::new("Which release is this?")
             .id(egui::Id::unique("release-choice"))
             .collapsible(false)
             .resizable(true)
-            .default_width(560.0)
+            .title_bar(false)
+            .default_width(600.0)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
+                ui.label(egui::RichText::new("Which release is this?").font(theme::bold(22.0)).color(p.text));
+                ui.label(egui::RichText::new(format!("Disc in {}", c.drive.trim_start_matches("/dev/"))).color(p.faint));
+                ui.add_space(6.0);
                 if c.candidates.is_empty() {
-                    ui.label("MusicBrainz doesn't know this disc.");
-                    ui.label("Rip it as \"Unknown Artist / Unknown Album\", or skip it (it will be ejected).");
+                    ui.label(egui::RichText::new("MusicBrainz doesn't know this disc.").color(p.text));
+                    ui.label(egui::RichText::new("Rip it as \"Unknown Artist / Unknown Album\", or skip it (it will be ejected).").color(p.dim));
                 } else {
-                    if c.candidates[0].fuzzy {
-                        ui.label("MusicBrainz doesn't have this exact disc. These releases have a similar track layout; the track names may not fit.");
+                    let intro = if c.candidates[0].fuzzy {
+                        "MusicBrainz doesn't have this exact disc. These releases have a similar track layout; the track names may not fit.".to_string()
                     } else {
-                        ui.label(format!("{} releases match this disc. The first is the best guess.", c.candidates.len()));
-                    }
-                    ui.add_space(6.0);
-                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                        format!("{} releases match this disc. The first is the best guess.", c.candidates.len())
+                    };
+                    ui.label(egui::RichText::new(intro).color(p.dim));
+                    ui.add_space(8.0);
+                    egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
                         for (i, r) in c.candidates.iter().enumerate() {
-                            let mut text = r.summary();
-                            if r.fuzzy {
-                                text.push_str("  [similar TOC]");
-                            }
-                            if ui.radio(c.selected == i, text).clicked() {
+                            let sel = c.selected == i;
+                            let resp = egui::Frame::new()
+                                .fill(if sel { p.card_hover } else { p.card })
+                                .stroke(egui::Stroke::new(if sel { 1.5 } else { 1.0 }, if sel { theme::ACCENT } else { p.line }))
+                                .corner_radius(10.0)
+                                .inner_margin(egui::Margin::symmetric(12, 8))
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new(r.summary()).color(p.text));
+                                        if r.fuzzy {
+                                            theme::badge(ui, "similar TOC", theme::WARN);
+                                        }
+                                        if i == 0 && !r.fuzzy {
+                                            theme::badge(ui, "best guess", theme::OK);
+                                        }
+                                    });
+                                })
+                                .response
+                                .interact(egui::Sense::click());
+                            if resp.clicked() {
                                 c.selected = i;
                                 c.deadline = None;
                             }
+                            ui.add_space(4.0);
                         }
                     });
                 }
-                ui.add_space(8.0);
+                ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    if !c.candidates.is_empty() && ui.button("Use this release").clicked() {
+                    if !c.candidates.is_empty() && theme::button(ui, Some(theme::Icon::Check), "Use this release", theme::Kind::Primary).clicked() {
                         answer = Some(ReleaseChoice::Use(c.selected));
                     }
-                    if ui.button("Rip as unknown").clicked() {
+                    if theme::button(ui, None, "Rip as unknown", theme::Kind::Secondary).clicked() {
                         answer = Some(ReleaseChoice::Unknown);
                     }
-                    if ui.button("Skip disc").clicked() {
+                    if theme::button(ui, Some(theme::Icon::Eject), "Skip disc", theme::Kind::Danger).clicked() {
                         answer = Some(ReleaseChoice::Skip);
                     }
                 });
                 if let Some(dl) = c.deadline {
-                    let left = dl.saturating_duration_since(Instant::now()).as_secs();
-                    ui.small(format!("Using the first in {left} s unless you choose."));
+                    let left = dl.saturating_duration_since(Instant::now()).as_secs_f32();
+                    ui.add_space(6.0);
+                    theme::progress(ui, 1.0 - left / AUTO_CHOOSE_SECS as f32, 200.0, Some(&format!("Using the first in {:.0} s unless you choose", left.ceil())));
                 }
             });
         if let Some(a) = answer {
@@ -1171,85 +1230,218 @@ fn summary_line(d: &Disc) -> String {
     bits.join(" · ")
 }
 
-/// The disc's tracks: one card per track with a status mark, title, the
-/// result of each read, and a progress bar on the one being read.
-fn track_list(ui: &mut egui::Ui, d: &Disc) {
-    const GREEN: egui::Color32 = theme::OK;
-    const AMBER: egui::Color32 = theme::WARN;
+/// What a drive card shows.
+struct Deck<'a> {
+    path: &'a str,
+    disc: Option<&'a Disc>,
+    stage: &'a str,
+    /// The drive the page shows.
+    shown: bool,
+    ripping: bool,
+    stopping: bool,
+    ejecting: bool,
+    time: f64,
+}
+
+enum DeckClick {
+    Select,
+    StopDisc,
+    Eject,
+}
+
+/// One drive: its disc (spinning while read), name, what it's doing, and
+/// its own controls. Click the card to show that drive below.
+fn deck_card(ui: &mut egui::Ui, d: &Deck, width: f32) -> Option<DeckClick> {
+    let p = theme::pal(ui);
+    let dark = ui.visuals().dark_mode;
+    let mut click = None;
+    let name = d.path.trim_start_matches(r"\\.\").trim_start_matches("/dev/");
+    let frame = egui::Frame::new()
+        .fill(if d.shown { p.card_hover } else { p.card })
+        .stroke(egui::Stroke::new(if d.shown { 1.5 } else { 1.0 }, if d.shown { theme::ACCENT } else { p.line }))
+        .corner_radius(16.0)
+        .inner_margin(egui::Margin { left: 12, right: 14, top: 12, bottom: 12 });
+    let r = frame.show(ui, |ui| {
+        ui.set_width(width - 26.0);
+        ui.set_height(98.0);
+        ui.horizontal(|ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(72.0, 72.0), egui::Sense::hover());
+            let has_disc = d.disc.is_some_and(|x| !x.ejected);
+            if has_disc {
+                let cover = d.disc.and_then(|x| x.cover.as_ref()).map(|t| t.id());
+                let spin = d.ripping.then_some((d.time * 1.6) as f32);
+                theme::disc(ui.painter(), rect.center(), 34.0, spin, cover, dark);
+            } else {
+                // Empty drive: a faint outline where the disc would be.
+                ui.painter().circle_stroke(rect.center(), 34.0, egui::Stroke::new(1.5, p.line));
+                ui.painter().circle_stroke(rect.center(), 8.0, egui::Stroke::new(1.0, p.line));
+            }
+            ui.add_space(4.0);
+            ui.vertical(|ui| {
+                ui.set_width((width - 26.0 - 76.0 - 56.0).max(100.0));
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(name).font(theme::bold(16.0)).color(p.text));
+                    if let Some(m) = d.disc.map(|x| x.model.as_str()).filter(|m| !m.is_empty()) {
+                        ui.add(egui::Label::new(egui::RichText::new(m).small().color(p.faint)).truncate());
+                    }
+                });
+                let what = match d.disc {
+                    Some(x) if x.result.is_none() => x
+                        .release
+                        .as_ref()
+                        .map(|r| format!("{} – {}", r.artist, r.title))
+                        .or(x.unknown_album.clone())
+                        .unwrap_or_else(|| "New disc".into()),
+                    _ => String::new(),
+                };
+                if !what.is_empty() {
+                    ui.add(egui::Label::new(egui::RichText::new(what).font(theme::medium(14.0)).color(p.text)).truncate());
+                }
+                ui.add(egui::Label::new(egui::RichText::new(d.stage).small().color(p.dim)).truncate());
+                if let Some(x) = d.disc.filter(|_| d.ripping) {
+                    if x.total_secs > 0 {
+                        let f = x.done_secs as f32 / x.total_secs as f32;
+                        let w = (ui.available_width() - 44.0).max(60.0);
+                        theme::progress(ui, f, w, Some(&format!("{:.0}%", f * 100.0)));
+                    }
+                }
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if d.ripping {
+                    let hint = "Stop ripping this disc and eject it. Tracks already saved stay in the library; \
+                                put the disc back in later and only the missing tracks are ripped. \
+                                This drive keeps watching for the next disc.";
+                    let r = ui.add_enabled_ui(!d.stopping, |ui| theme::control_button(ui, theme::Icon::Stop, 38.0, theme::ERR));
+                    if r.inner.on_hover_text(hint).clicked() {
+                        click = Some(DeckClick::StopDisc);
+                    }
+                } else {
+                    let r = ui.add_enabled_ui(!d.ejecting, |ui| theme::control_button(ui, theme::Icon::Eject, 38.0, theme::pal(ui).text));
+                    if r.inner.on_hover_text(if d.ejecting { "Ejecting…" } else { "Eject this drive's disc" }).clicked() {
+                        click = Some(DeckClick::Eject);
+                    }
+                }
+            });
+        });
+    });
+    let resp = r.response.interact(egui::Sense::click());
+    if click.is_none() && resp.clicked() && !d.shown {
+        click = Some(DeckClick::Select);
+    }
+    if resp.hovered() && !d.shown {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    click
+}
+
+/// The disc's tracks: one row per track with a status mark, title, status
+/// and length; the reads underneath; a progress bar on the one being read.
+fn track_list(ui: &mut egui::Ui, d: &Disc, time: f64) {
     let p = theme::pal(ui);
     ui.label(egui::RichText::new(summary_line(d)).font(theme::medium(15.0)).color(p.text));
     if !d.album_dir.is_empty() {
         ui.label(egui::RichText::new(&d.album_dir).small().color(p.faint)).on_hover_text("Where the FLAC files go");
     }
-    ui.add_space(6.0);
+    ui.add_space(8.0);
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         for r in &d.rows {
             let reading = matches!(r.status, Status::Reading { .. });
             let frame = egui::Frame::new()
                 .fill(if reading { p.card_hover } else { p.card })
-                .stroke(if reading { egui::Stroke::new(1.5, theme::ACCENT) } else { egui::Stroke::new(1.0, p.line) })
-                .corner_radius(10.0)
-                .inner_margin(egui::Margin::symmetric(14, 9));
+                .stroke(egui::Stroke::new(if reading { 1.5 } else { 1.0 }, if reading { theme::ACCENT } else { p.line }))
+                .corner_radius(12.0)
+                .inner_margin(egui::Margin::symmetric(14, 10));
             frame.show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    let (mark, colour) = match &r.status {
-                        Status::Pending => ("○", ui.visuals().weak_text_color()),
-                        Status::Present => ("✓", ui.visuals().weak_text_color()),
-                        Status::Reading { .. } => ("⟳", theme::ACCENT),
-                        Status::Saved(_) => ("✔", GREEN),
-                        Status::SavedWarn(_) => ("⚠", AMBER),
-                        Status::Rejected(_) => ("✘", ui.visuals().error_fg_color),
-                    };
-                    if reading {
-                        ui.add_sized([22.0, 22.0], egui::Spinner::new().size(16.0).color(theme::ACCENT));
-                    } else {
-                        ui.add_sized([22.0, 22.0], egui::Label::new(egui::RichText::new(mark).size(18.0).color(colour)));
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::hover());
+                    let painter = ui.painter();
+                    match &r.status {
+                        Status::Pending => {
+                            painter.circle_stroke(rect.center(), 6.0, egui::Stroke::new(1.5, p.faint));
+                        }
+                        Status::Present => theme::paint_icon(painter, rect.shrink(2.0), theme::Icon::Check, p.faint),
+                        Status::Reading { .. } => theme::spinner(painter, rect.center(), 8.0, time),
+                        Status::Saved(_) => {
+                            painter.circle_filled(rect.center(), 10.0, theme::OK.gamma_multiply(0.18));
+                            theme::paint_icon(painter, rect.shrink(5.0), theme::Icon::Check, theme::OK);
+                        }
+                        Status::SavedWarn(_) => {
+                            painter.circle_filled(rect.center(), 10.0, theme::WARN.gamma_multiply(0.18));
+                            painter.text(rect.center(), egui::Align2::CENTER_CENTER, "!", theme::bold(14.0), theme::WARN);
+                        }
+                        Status::Rejected(_) => {
+                            painter.circle_filled(rect.center(), 10.0, theme::ERR.gamma_multiply(0.18));
+                            theme::paint_icon(painter, rect.shrink(6.0), theme::Icon::Cross, theme::ERR);
+                        }
                     }
-                    ui.add_sized([26.0, 22.0], egui::Label::new(egui::RichText::new(format!("{:>2}", r.info.position)).monospace().weak()));
-                    ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
-                            let title = egui::RichText::new(&r.info.title);
-                            ui.label(if reading { title.strong() } else { title });
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.weak(fmt_duration(Duration::from_secs(r.info.seconds as u64)));
-                                ui.add_space(10.0);
-                                match &r.status {
-                                    Status::Pending => {
-                                        ui.weak("waiting");
-                                    }
-                                    Status::Present => {
-                                        ui.weak("already in library");
-                                    }
-                                    Status::Reading { read, fraction } => {
-                                        ui.colored_label(theme::ACCENT, format!("read {read} · {:.0}%", fraction * 100.0));
-                                    }
-                                    Status::SavedWarn(t) => {
-                                        ui.colored_label(AMBER, t.trim_start_matches("⚠ "))
-                                            .on_hover_text("AccurateRip knows this pressing, but the track doesn't match it: probably a damaged spot that reads wrong the same way every time. The audio is kept; clean the disc and re-rip this track.");
-                                    }
-                                    Status::Saved(t) => {
-                                        ui.colored_label(GREEN, t.trim_start_matches("✔ "));
-                                    }
-                                    Status::Rejected(t) => {
-                                        ui.colored_label(ui.visuals().error_fg_color, t.trim_start_matches("✘ "));
-                                    }
-                                }
-                            });
+                    ui.add_sized([24.0, 22.0], egui::Label::new(egui::RichText::new(r.info.position.to_string()).monospace().color(p.faint)));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(egui::RichText::new(fmt_duration(Duration::from_secs(r.info.seconds as u64))).monospace().color(p.dim));
+                        ui.add_space(6.0);
+                        match &r.status {
+                            Status::Pending => {
+                                ui.label(egui::RichText::new("waiting").color(p.faint));
+                            }
+                            Status::Present => {
+                                ui.label(egui::RichText::new("in library").color(p.faint));
+                            }
+                            Status::Reading { read, fraction } => {
+                                ui.label(egui::RichText::new(format!("read {read} · {:.0}%", fraction * 100.0)).font(theme::medium(13.5)).color(theme::prism_at(0.35)));
+                            }
+                            Status::Saved(t) => {
+                                theme::badge(ui, t.trim_start_matches("✔ "), theme::OK);
+                            }
+                            Status::SavedWarn(t) => {
+                                theme::badge(ui, "saved · check", theme::WARN).on_hover_text(format!(
+                                    "{}\n\nAccurateRip knows this pressing, but the track doesn't match it: probably a damaged spot that reads \
+                                     wrong the same way every time. The audio is kept; clean the disc and re-rip this track.",
+                                    t.trim_start_matches("⚠ ")
+                                ));
+                            }
+                            Status::Rejected(t) => {
+                                theme::badge(ui, t.trim_start_matches("✘ "), theme::ERR);
+                            }
+                        }
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            let title = egui::RichText::new(&r.info.title).font(if reading { theme::medium(15.0) } else { egui::FontId::proportional(15.0) }).color(p.text);
+                            ui.add(egui::Label::new(title).truncate());
                         });
-                        if let Status::Reading { fraction, .. } = &r.status {
-                            let w = ui.available_width();
-                            theme::progress(ui, *fraction, w, None);
-                        }
-                        for line in &r.reads {
-                            ui.small(egui::RichText::new(line).weak());
-                        }
                     });
                 });
+                if let Status::Reading { fraction, .. } = &r.status {
+                    ui.horizontal(|ui| {
+                        ui.add_space(58.0);
+                        let w = ui.available_width();
+                        theme::progress(ui, *fraction, w, None);
+                    });
+                }
+                for line in &r.reads {
+                    ui.horizontal(|ui| {
+                        ui.add_space(58.0);
+                        ui.label(egui::RichText::new(line).small().color(p.faint));
+                    });
+                }
             });
-            ui.add_space(1.0);
+            ui.add_space(4.0);
         }
     });
+}
+
+/// A made-up cover for the demo: soft diagonal colour fields.
+fn demo_cover(ctx: &egui::Context) -> egui::TextureHandle {
+    let n = 256;
+    let mut px = Vec::with_capacity(n * n);
+    for y in 0..n {
+        for x in 0..n {
+            let (fx, fy) = (x as f32 / n as f32, y as f32 / n as f32);
+            let band = ((fx * 3.0 + fy * 5.0).sin() * 0.5 + 0.5) * 0.6;
+            let c = theme::lerp(theme::prism_at(fx * 0.8), egui::Color32::from_rgb(12, 14, 30), 0.35 + band * 0.5 + fy * 0.2);
+            px.push(c);
+        }
+    }
+    let img = egui::ColorImage { size: [n, n], pixels: px, source_size: egui::vec2(n as f32, n as f32) };
+    ctx.load_texture("demo-cover", img, Default::default())
 }
 
 /// A made-up disc in every state, for RIPSHELF_DEMO=1.

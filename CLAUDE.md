@@ -672,7 +672,13 @@ exit-code-52 errors) was removed.
   Segoe UI loaded at runtime, prism gradients via egui Mesh, vector icons,
   button/badge/toggle/progress/nav_item/page_header); left sidebar replaces
   the top tabs; Rip page header holds the all-drive controls.
-  `RIPSHELF_DEMO=1|phone|review` for screenshots
+  `RIPSHELF_DEMO=1|phone|review|sr2|choice` for screenshots
+- Chunk 2 done: Rip page = row of drive cards (theme::disc: spinning CD
+  with prism sheen and the cover as label; own Stop/Eject round buttons;
+  click to show that drive), album column (cover with shadow or big disc,
+  badges, session list), track rows (status icons, badges, truncating
+  titles), release dialog as cards with a countdown bar. Repaints at ~30
+  fps only while a disc spins on the Rip page
 
 ### In progress: CUETools DB repair (2026-11-11)
 - Sector voting (core/vote.rs, per sector then per sample, AR-verified only)
