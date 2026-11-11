@@ -192,7 +192,14 @@ impl App {
             phone: phone_tab::PhoneTab::new(),
             review: review_tab::ReviewTab::new(),
         };
-        app.start();
+        if std::env::var_os("RIPSHELF_DEMO").is_some() {
+            // Made-up disc for working on the layout without a CD.
+            app.disc = Some(demo_disc());
+            app.stage = "Ripping track 5 (demo)".into();
+            app.session = vec![(true, "Radiohead – OK Computer: 12/12".into()), (false, "Lenny Kravitz – Let Love Rule: 11/12".into())];
+        } else {
+            app.start();
+        }
         app
     }
 
@@ -645,46 +652,7 @@ impl eframe::App for App {
                 });
                 return;
             };
-            if !d.album_dir.is_empty() {
-                ui.small(&d.album_dir);
-                ui.add_space(4.0);
-            }
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                egui::Grid::new("tracks").striped(true).num_columns(4).spacing([12.0, 6.0]).show(ui, |ui| {
-                    for r in &d.rows {
-                        ui.label(format!("{:>2}", r.info.position));
-                        ui.vertical(|ui| {
-                            ui.label(&r.info.title);
-                            for line in &r.reads {
-                                ui.small(line);
-                            }
-                        });
-                        ui.label(fmt_duration(Duration::from_secs(r.info.seconds as u64)));
-                        match &r.status {
-                            Status::Pending => {
-                                ui.weak("waiting");
-                            }
-                            Status::Present => {
-                                ui.weak("already in library");
-                            }
-                            Status::Reading { read, fraction } => {
-                                ui.add(
-                                    egui::ProgressBar::new(*fraction)
-                                        .desired_width(180.0)
-                                        .text(format!("read {read} · {:.0}%", fraction * 100.0)),
-                                );
-                            }
-                            Status::Saved(t) => {
-                                ui.colored_label(egui::Color32::from_rgb(60, 160, 80), t);
-                            }
-                            Status::Rejected(t) => {
-                                ui.colored_label(ui.visuals().error_fg_color, t);
-                            }
-                        }
-                        ui.end_row();
-                    }
-                });
-            });
+            track_list(ui, d);
         });
 
         self.choice_window(ctx);
@@ -751,5 +719,155 @@ impl App {
                 let _ = c.reply.send(a);
             }
         }
+    }
+}
+
+/// Counts for the line above the track list.
+fn summary_line(d: &Disc) -> String {
+    let n = d.rows.len();
+    let count = |f: fn(&Status) -> bool| d.rows.iter().filter(|r| f(&r.status)).count();
+    let saved = count(|s| matches!(s, Status::Saved(_)));
+    let present = count(|s| matches!(s, Status::Present));
+    let rejected = count(|s| matches!(s, Status::Rejected(_)));
+    let mut bits = vec![format!("{n} tracks")];
+    if saved > 0 {
+        bits.push(format!("{saved} saved"));
+    }
+    if present > 0 {
+        bits.push(format!("{present} already in library"));
+    }
+    if rejected > 0 {
+        bits.push(format!("{rejected} rejected"));
+    }
+    let left = n - saved - present - rejected;
+    if left > 0 {
+        bits.push(format!("{left} to go"));
+    }
+    bits.join(" · ")
+}
+
+/// The disc's tracks: one card per track with a status mark, title, the
+/// result of each read, and a progress bar on the one being read.
+fn track_list(ui: &mut egui::Ui, d: &Disc) {
+    const GREEN: egui::Color32 = egui::Color32::from_rgb(70, 170, 95);
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(summary_line(d)).strong());
+        if !d.album_dir.is_empty() {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.weak(&d.album_dir).on_hover_text("Where the FLAC files go");
+            });
+        }
+    });
+    ui.add_space(6.0);
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        for r in &d.rows {
+            let reading = matches!(r.status, Status::Reading { .. });
+            let v = ui.visuals();
+            let frame = egui::Frame::new()
+                .fill(if reading { v.faint_bg_color } else { v.panel_fill })
+                .stroke(if reading { egui::Stroke::new(1.5, theme::ACCENT) } else { egui::Stroke::new(1.0, v.widgets.noninteractive.bg_stroke.color) })
+                .corner_radius(8.0)
+                .inner_margin(egui::Margin::symmetric(12, 8));
+            frame.show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    let (mark, colour) = match &r.status {
+                        Status::Pending => ("○", ui.visuals().weak_text_color()),
+                        Status::Present => ("✓", ui.visuals().weak_text_color()),
+                        Status::Reading { .. } => ("⟳", theme::ACCENT),
+                        Status::Saved(_) => ("✔", GREEN),
+                        Status::Rejected(_) => ("✘", ui.visuals().error_fg_color),
+                    };
+                    if reading {
+                        ui.add_sized([22.0, 22.0], egui::Spinner::new().size(16.0).color(theme::ACCENT));
+                    } else {
+                        ui.add_sized([22.0, 22.0], egui::Label::new(egui::RichText::new(mark).size(18.0).color(colour)));
+                    }
+                    ui.add_sized([26.0, 22.0], egui::Label::new(egui::RichText::new(format!("{:>2}", r.info.position)).monospace().weak()));
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            let title = egui::RichText::new(&r.info.title);
+                            ui.label(if reading { title.strong() } else { title });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.weak(fmt_duration(Duration::from_secs(r.info.seconds as u64)));
+                                ui.add_space(10.0);
+                                match &r.status {
+                                    Status::Pending => {
+                                        ui.weak("waiting");
+                                    }
+                                    Status::Present => {
+                                        ui.weak("already in library");
+                                    }
+                                    Status::Reading { read, fraction } => {
+                                        ui.colored_label(theme::ACCENT, format!("read {read} · {:.0}%", fraction * 100.0));
+                                    }
+                                    Status::Saved(t) => {
+                                        ui.colored_label(GREEN, t.trim_start_matches("✔ "));
+                                    }
+                                    Status::Rejected(t) => {
+                                        ui.colored_label(ui.visuals().error_fg_color, t.trim_start_matches("✘ "));
+                                    }
+                                }
+                            });
+                        });
+                        if let Status::Reading { fraction, .. } = &r.status {
+                            ui.add(egui::ProgressBar::new(*fraction).desired_height(6.0).fill(theme::ACCENT));
+                        }
+                        for line in &r.reads {
+                            ui.small(egui::RichText::new(line).weak());
+                        }
+                    });
+                });
+            });
+            ui.add_space(1.0);
+        }
+    });
+}
+
+/// A made-up disc in every state, for RIPSHELF_DEMO=1.
+fn demo_disc() -> Disc {
+    let titles = [
+        ("Airbag", 284), ("Paranoid Android", 383), ("Subterranean Homesick Alien", 267), ("Exit Music (For a Film)", 264),
+        ("Let Down", 299), ("Karma Police", 264), ("Fitter Happier", 117), ("Electioneering", 230),
+        ("Climbing Up the Walls", 285), ("No Surprises", 229), ("Lucky", 259), ("The Tourist", 324),
+    ];
+    let rows = titles
+        .iter()
+        .enumerate()
+        .map(|(i, (t, secs))| {
+            let position = i + 1;
+            let (status, reads) = match position {
+                1 => (Status::Present, vec![]),
+                2 | 3 => (Status::Saved("✔ AccurateRip (200)".into()), vec!["read 1: 1A2B3C4D AccurateRip ✔ (200)".to_string()]),
+                4 => (
+                    Status::Saved("✔ identical reads (2)".into()),
+                    vec!["read 1: 5E6F7A8B no AR match".to_string(), "read 2: 5E6F7A8B no AR match, same as before".to_string()],
+                ),
+                5 => (Status::Reading { read: 2, fraction: 0.42 }, vec!["read 1: 9C0D1E2F no AR match".to_string()]),
+                6 => (Status::Rejected("✘ rejected (4 reads)".into()), vec!["read 1: 11111111 no AR match, 3 unreadable sectors".to_string()]),
+                _ => (Status::Pending, vec![]),
+            };
+            Row { info: TrackInfo { position, title: t.to_string(), artist: "Radiohead".into(), seconds: *secs, exists: position == 1 }, status, reads }
+        })
+        .collect();
+    Disc {
+        drive: "/dev/sr1".into(),
+        model: "hp DVDRAM GTA0N".into(),
+        offset: 102,
+        release: Some(Release {
+            title: "OK Computer".into(),
+            artist: "Radiohead".into(),
+            date: "1997-07-01".into(),
+            country: "US".into(),
+            labels: vec!["Capitol Records".into()],
+            media_count: 1,
+            ..Default::default()
+        }),
+        in_accuraterip: Some(true),
+        album_dir: "~/Music/FLAC/Radiohead/OK Computer".into(),
+        rows,
+        total_secs: 3405 * 75,
+        done_secs: 1500 * 75,
+        ..Default::default()
     }
 }
