@@ -21,6 +21,7 @@ use ripshelf_platform::phone_notify;
 
 mod phone_tab;
 mod review_tab;
+mod theme;
 
 #[derive(PartialEq, Clone, Copy)]
 enum Tab {
@@ -41,10 +42,13 @@ fn main() -> eframe::Result {
         unsafe { std::env::set_var("WGPU_BACKEND", "gl") };
     }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([980.0, 680.0]).with_title("ripshelf"),
+        viewport: egui::ViewportBuilder::default().with_inner_size([1100.0, 760.0]).with_min_inner_size([760.0, 480.0]).with_title("ripshelf"),
         ..Default::default()
     };
-    eframe::run_native("ripshelf", options, Box::new(|cc| Ok(Box::new(App::new(cc.egui_ctx.clone())))))
+    eframe::run_native("ripshelf", options, Box::new(|cc| {
+        theme::apply(&cc.egui_ctx);
+        Ok(Box::new(App::new(cc.egui_ctx.clone())))
+    }))
 }
 
 /// Messages from the engine thread.
@@ -477,11 +481,14 @@ impl eframe::App for App {
             ctx.request_repaint_after(Duration::from_millis(500));
         }
 
-        egui::Panel::top("top").show(ui, |ui| {
+        let header = egui::Frame::new().fill(ui.visuals().extreme_bg_color).inner_margin(egui::Margin::symmetric(14, 10));
+        egui::Panel::top("top").frame(header).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.tab, Tab::Rip, "💿 Rip");
-                ui.selectable_value(&mut self.tab, Tab::Phone, "📱 Phone");
-                ui.selectable_value(&mut self.tab, Tab::Review, "🏷 Review tags");
+                ui.label(egui::RichText::new("ripshelf").size(20.0).strong().color(theme::ACCENT));
+                ui.add_space(12.0);
+                ui.selectable_value(&mut self.tab, Tab::Rip, theme::tab("💿 Rip"));
+                ui.selectable_value(&mut self.tab, Tab::Phone, theme::tab("📱 Phone"));
+                ui.selectable_value(&mut self.tab, Tab::Review, theme::tab("🏷 Review tags"));
                 ui.separator();
                 // The rip loop's controls only on the Rip tab (on the Phone tab
                 // they looked like sync controls); there, just its status.
@@ -622,7 +629,22 @@ impl eframe::App for App {
         });
 
         egui::CentralPanel::default().show(ui, |ui| {
-            let Some(d) = &self.disc else { return };
+            let Some(d) = &self.disc else {
+                // Nothing to show yet: say what's happening, centred.
+                ui.vertical_centered(|ui| {
+                    ui.add_space(ui.available_height() * 0.3);
+                    ui.label(egui::RichText::new("💿").size(64.0).color(ui.visuals().weak_text_color()));
+                    ui.add_space(8.0);
+                    let (title, hint) = if self.running {
+                        ("Ready for a disc", "Put a CD in the drive. It's ripped, checked against AccurateRip, tagged and ejected.")
+                    } else {
+                        ("Ripping is stopped", "Press ▶ Start ripping to watch the drives for a disc.")
+                    };
+                    ui.heading(title);
+                    ui.weak(hint);
+                });
+                return;
+            };
             if !d.album_dir.is_empty() {
                 ui.small(&d.album_dir);
                 ui.add_space(4.0);
