@@ -172,15 +172,33 @@ pub const EXTRA_VOTE_READS: u32 = 4;
 
 /// Votes over the clean reads; the vote only counts if every differing sector
 /// has a clear majority and the result matches AccurateRip.
-fn try_vote(reads: &[Vec<u32>], t: &TrackPlan, db: &DiscEntries) -> Option<(u8, vote::Vote)> {
+fn try_vote(reads: &[Vec<u32>], t: &TrackPlan, db: &DiscEntries) -> Result<(u8, vote::Vote), String> {
     let v = vote::vote(reads);
-    if v.differing.is_empty() || !v.unresolved.is_empty() {
-        return None;
+    if v.differing.is_empty() {
+        return Err("the reads don't differ".into());
+    }
+    if !v.unresolved.is_empty() {
+        return Err(format!("no majority in {} of the {} differing sectors", v.unresolved.len(), v.differing.len()));
     }
     match db.verdict(t.position, accuraterip::checksums(&v.frames, t.first, t.last)) {
-        Verdict::Match { confidence, .. } => Some((confidence, v)),
-        _ => None,
+        Verdict::Match { confidence, .. } => Ok((confidence, v)),
+        _ => Err(format!(
+            "every differing sector had a majority ({} only sample by sample), but the result doesn't match AccurateRip",
+            v.by_sample
+        )),
     }
+}
+
+/// Saves the clean reads of a track the vote couldn't rescue, as raw PCM
+/// (16-bit stereo, 44.1 kHz), for trying other repairs later.
+fn keep_reads(dir: &Path, t: &TrackPlan, reads: &[Vec<u32>]) -> Result<PathBuf> {
+    let dir = dir.join(format!("track{:02}", t.position));
+    std::fs::create_dir_all(&dir)?;
+    for (i, r) in reads.iter().enumerate() {
+        let bytes: Vec<u8> = r.iter().flat_map(|f| f.to_le_bytes()).collect();
+        std::fs::write(dir.join(format!("read{}.raw", i + 1)), bytes)?;
+    }
+    Ok(dir)
 }
 
 /// A clean read that matched nothing: is it a pressing the database has at
@@ -297,8 +315,15 @@ pub fn rip(
                     on(Event::Note(format!("track {}: matches AccurateRip for another pressing (shifted {shift:+} frames)", t.position)));
                     accepted = Some(Acceptance::OtherPressing { confidence, shift });
                 } else if let Some((confidence, v)) = (clean_reads.len() >= 3 && !repeat)
-                    .then(|| try_vote(&clean_reads, t, ctx.accuraterip?))
+                    .then(|| ctx.accuraterip)
                     .flatten()
+                    .and_then(|db| match try_vote(&clean_reads, t, db) {
+                        Ok(x) => Some(x),
+                        Err(why) => {
+                            let _ = writeln!(sum.log, "Track {:>2}: vote over {} reads: {why}", t.position, clean_reads.len());
+                            None
+                        }
+                    })
                 {
                     let _ = writeln!(
                         sum.log,
@@ -363,6 +388,14 @@ pub fn rip(
                     .and_then(|()| write_atomically(&path, &r, &t.tags, ctx.cover, s.compression));
                 if let Err(e) = &saved {
                     on(Event::Note(format!("couldn't save the rejected read of track {}: {e:#}", t.position)));
+                }
+                if clean_reads.len() >= 3 {
+                    match keep_reads(&dir.join("reads"), t, &clean_reads) {
+                        Ok(d) => {
+                            let _ = writeln!(sum.log, "Track {:>2}: its {} clean reads are kept in {} (for repair attempts)", t.position, clean_reads.len(), d.display());
+                        }
+                        Err(e) => on(Event::Note(format!("couldn't keep the reads of track {}: {e:#}", t.position))),
+                    }
                 }
                 let _ = writeln!(sum.log, "Track {:>2}: REJECTED after {reads_done} reads", t.position);
                 on(Event::Rejected { position: t.position, path: saved.is_ok().then_some(path.as_path()), reads: reads_done });
