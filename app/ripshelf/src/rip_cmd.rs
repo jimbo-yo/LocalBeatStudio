@@ -143,6 +143,9 @@ impl Frontend for Printer {
                 Acceptance::AccurateRip { .. } => println!("      saved (verified by AccurateRip)"),
                 Acceptance::OtherPressing { shift, .. } => println!("      saved (verified by AccurateRip: another pressing, shifted {shift:+} frames)"),
                 Acceptance::Repeat { reads } => println!("      saved (two identical reads, {reads} reads)"),
+                Acceptance::RepeatDiffers { reads } => println!(
+                    "      saved, but CHECK IT: two identical reads ({reads} reads) that differ from AccurateRip's copy of this pressing (damaged spot? clean and re-rip)"
+                ),
             },
             Event::Rejected { reads, kept, .. } => {
                 println!("      REJECTED: no verified read in {reads} reads");

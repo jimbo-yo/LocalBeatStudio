@@ -118,6 +118,52 @@ pub fn free_drive_with_audio(s: &Settings) -> Result<Option<String>> {
     Ok(None)
 }
 
+/// What [`eject_idle`] did, per drive path.
+#[derive(Debug, Default)]
+pub struct EjectReport {
+    pub ejected: Vec<String>,
+    /// Being ripped (by this or another ripshelf): left alone.
+    pub busy: Vec<String>,
+    pub failed: Vec<(String, String)>,
+}
+
+/// Ejects the CD from every drive no rip is using. A drive the rip loop is
+/// only checking (it holds the lock for a moment every 2 s) is retried for
+/// a few seconds before it counts as busy.
+pub fn eject_idle(s: &Settings) -> EjectReport {
+    let mut report = EjectReport::default();
+    for path in drive::drive_paths() {
+        let mut lock = None;
+        for _ in 0..8 {
+            match lock::try_lock(&s.cache_dir, &lock::drive_lock_name(&path)) {
+                Ok(Some(l)) => {
+                    lock = Some(l);
+                    break;
+                }
+                Ok(None) => std::thread::sleep(Duration::from_millis(500)),
+                Err(e) => {
+                    report.failed.push((path.clone(), format!("{e:#}")));
+                    break;
+                }
+            }
+        }
+        let Some(_lock) = lock else {
+            if !report.failed.iter().any(|(p, _)| p == &path) {
+                report.busy.push(path);
+            }
+            continue;
+        };
+        if !drive::has_audio_cd(&path) {
+            continue;
+        }
+        match Drive::open(&path).and_then(|d| d.eject()) {
+            Ok(()) => report.ejected.push(path),
+            Err(e) => report.failed.push((path, format!("{e:#}"))),
+        }
+    }
+    report
+}
+
 /// MusicBrainz disc ID of the disc in the drive, if any.
 fn disc_in(path: &str) -> Option<String> {
     Drive::open(path).and_then(|d| d.read_toc()).ok().map(|t| t.musicbrainz_id().to_string())

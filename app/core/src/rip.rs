@@ -128,6 +128,11 @@ pub enum Acceptance {
     OtherPressing { confidence: u8, shift: i64 },
     /// Two clean reads with the same CRC (`reads` = reads it took).
     Repeat { reads: u32 },
+    /// Like `Repeat`, but AccurateRip has this pressing (its frame-450 sector
+    /// matches) and the track still doesn't match: the audio differs
+    /// somewhere, most likely a damaged spot read wrong the same way each
+    /// time. Kept, but worth cleaning the disc and re-ripping.
+    RepeatDiffers { reads: u32 },
 }
 
 pub enum Event<'a> {
@@ -262,7 +267,8 @@ pub fn rip(
                     on(Event::Note(format!("track {}: matches AccurateRip for another pressing (shifted {shift:+} frames)", t.position)));
                     accepted = Some(Acceptance::OtherPressing { confidence, shift });
                 } else if repeat {
-                    accepted = Some(Acceptance::Repeat { reads: read });
+                    let right_pressing = verdict == Verdict::NoMatch && ctx.accuraterip.is_some_and(|db| db.frame450_matches(t.position, &r.frames));
+                    accepted = Some(if right_pressing { Acceptance::RepeatDiffers { reads: read } } else { Acceptance::Repeat { reads: read } });
                 }
                 clean_crcs.push(crc);
             }
@@ -331,6 +337,9 @@ fn describe(how: Acceptance) -> String {
         Acceptance::AccurateRip { confidence } => format!("AccurateRip, confidence {confidence}"),
         Acceptance::OtherPressing { confidence, shift } => format!("AccurateRip for another pressing ({shift:+} frames), confidence {confidence}"),
         Acceptance::Repeat { reads } => format!("two identical reads, {reads} reads"),
+        Acceptance::RepeatDiffers { reads } => {
+            format!("two identical reads ({reads} reads), but it differs from AccurateRip's copy of this pressing: probably damaged, clean and re-rip")
+        }
     }
 }
 

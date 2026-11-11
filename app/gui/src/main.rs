@@ -97,6 +97,8 @@ enum Status {
     Present,
     Reading { read: u32, fraction: f32 },
     Saved(String),
+    /// Saved, but probably damaged (see Acceptance::RepeatDiffers).
+    SavedWarn(String),
     Rejected(String),
 }
 
@@ -153,6 +155,8 @@ struct App {
     tab: Tab,
     phone: phone_tab::PhoneTab,
     review: review_tab::ReviewTab,
+    /// Result of a running Eject (button off meanwhile).
+    eject: Option<Receiver<Vec<String>>>,
 }
 
 impl App {
@@ -191,6 +195,7 @@ impl App {
             tab: Tab::Rip,
             phone: phone_tab::PhoneTab::new(),
             review: review_tab::ReviewTab::new(),
+            eject: None,
         };
         if std::env::var_os("RIPSHELF_DEMO").is_some() {
             // Made-up disc for working on the layout without a CD.
@@ -370,8 +375,16 @@ impl App {
                     Acceptance::AccurateRip { confidence } => format!("✔ AccurateRip ({confidence})"),
                     Acceptance::OtherPressing { confidence, shift } => format!("✔ AccurateRip ({confidence}, other pressing {shift:+})"),
                     Acceptance::Repeat { reads } => format!("✔ identical reads ({reads})"),
+                    Acceptance::RepeatDiffers { reads } => {
+                        self.log(format!(
+                            "Track {position}: saved after {reads} reads, but it differs from AccurateRip's copy of this pressing: \
+                             probably a damaged spot read the same wrong way each time. Clean the disc and re-rip it."
+                        ));
+                        format!("⚠ identical reads ({reads}), differs from AccurateRip: clean & re-rip")
+                    }
                 };
-                self.finish_track(position, Status::Saved(text));
+                let status = if matches!(how, Acceptance::RepeatDiffers { .. }) { Status::SavedWarn(text) } else { Status::Saved(text) };
+                self.finish_track(position, status);
             }
             Event::Rejected { position, reads, .. } => {
                 self.log(format!("Track {position} REJECTED after {reads} reads"));
@@ -484,6 +497,12 @@ impl eframe::App for App {
         for line in self.review.poll(ctx) {
             self.log(line);
         }
+        if let Some(lines) = self.eject.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.eject = None;
+            for l in lines {
+                self.log(l);
+            }
+        }
         if self.running || self.choice.is_some() {
             // Keep the countdown and progress moving.
             ctx.request_repaint_after(Duration::from_millis(500));
@@ -510,6 +529,25 @@ impl eframe::App for App {
                     } else if ui.button("▶ Start ripping").clicked() {
                         self.start();
                     }
+                    let ejecting = self.eject.is_some();
+                    let hint = "Eject the CD from every drive that isn't being ripped. To eject a disc that's being ripped, stop ripping first.";
+                    if ui.add_enabled(!ejecting, egui::Button::new(if ejecting { "⏏ Ejecting…" } else { "⏏ Eject" })).on_hover_text(hint).clicked() {
+                        let (tx, rx) = channel();
+                        let (settings, ctx) = (self.settings.clone(), ctx.clone());
+                        std::thread::spawn(move || {
+                            let r = engine::eject_idle(&settings);
+                            let mut lines: Vec<String> = r.ejected.iter().map(|p| format!("Ejected {p}")).collect();
+                            lines.extend(r.busy.iter().map(|p| format!("{p} is being ripped: stop ripping first to eject it")));
+                            lines.extend(r.failed.iter().map(|(p, e)| format!("Couldn't eject {p}: {e}")));
+                            if lines.is_empty() {
+                                lines.push("No CD to eject".into());
+                            }
+                            let _ = tx.send(lines);
+                            ctx.request_repaint();
+                        });
+                        self.eject = Some(rx);
+                        self.show_log = true;
+                    }
                     ui.separator();
                     ui.label(&self.stage);
                 }
@@ -519,7 +557,7 @@ impl eframe::App for App {
                         Some(e) => format!("{:.0}% · {} left", frac * 100.0, fmt_duration(e)),
                         None => format!("{:.0}%", frac * 100.0),
                     };
-                    ui.add(egui::ProgressBar::new(frac).text(text).desired_width(260.0));
+                    ui.add(egui::ProgressBar::new(frac).text(text).desired_width(170.0));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.toggle_value(&mut self.show_log, "Log");
@@ -727,12 +765,16 @@ impl App {
 fn summary_line(d: &Disc) -> String {
     let n = d.rows.len();
     let count = |f: fn(&Status) -> bool| d.rows.iter().filter(|r| f(&r.status)).count();
-    let saved = count(|s| matches!(s, Status::Saved(_)));
+    let saved = count(|s| matches!(s, Status::Saved(_) | Status::SavedWarn(_)));
+    let warn = count(|s| matches!(s, Status::SavedWarn(_)));
     let present = count(|s| matches!(s, Status::Present));
     let rejected = count(|s| matches!(s, Status::Rejected(_)));
     let mut bits = vec![format!("{n} tracks")];
     if saved > 0 {
         bits.push(format!("{saved} saved"));
+    }
+    if warn > 0 {
+        bits.push(format!("{warn} to check"));
     }
     if present > 0 {
         bits.push(format!("{present} already in library"));
@@ -751,6 +793,7 @@ fn summary_line(d: &Disc) -> String {
 /// result of each read, and a progress bar on the one being read.
 fn track_list(ui: &mut egui::Ui, d: &Disc) {
     const GREEN: egui::Color32 = egui::Color32::from_rgb(70, 170, 95);
+    const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 170, 60);
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(summary_line(d)).strong());
         if !d.album_dir.is_empty() {
@@ -777,6 +820,7 @@ fn track_list(ui: &mut egui::Ui, d: &Disc) {
                         Status::Present => ("✓", ui.visuals().weak_text_color()),
                         Status::Reading { .. } => ("⟳", theme::ACCENT),
                         Status::Saved(_) => ("✔", GREEN),
+                        Status::SavedWarn(_) => ("⚠", AMBER),
                         Status::Rejected(_) => ("✘", ui.visuals().error_fg_color),
                     };
                     if reading {
@@ -801,6 +845,10 @@ fn track_list(ui: &mut egui::Ui, d: &Disc) {
                                     }
                                     Status::Reading { read, fraction } => {
                                         ui.colored_label(theme::ACCENT, format!("read {read} · {:.0}%", fraction * 100.0));
+                                    }
+                                    Status::SavedWarn(t) => {
+                                        ui.colored_label(AMBER, t.trim_start_matches("⚠ "))
+                                            .on_hover_text("AccurateRip knows this pressing, but the track doesn't match it: probably a damaged spot that reads wrong the same way every time. The audio is kept; clean the disc and re-rip this track.");
                                     }
                                     Status::Saved(t) => {
                                         ui.colored_label(GREEN, t.trim_start_matches("✔ "));
@@ -841,7 +889,7 @@ fn demo_disc() -> Disc {
                 1 => (Status::Present, vec![]),
                 2 | 3 => (Status::Saved("✔ AccurateRip (200)".into()), vec!["read 1: 1A2B3C4D AccurateRip ✔ (200)".to_string()]),
                 4 => (
-                    Status::Saved("✔ identical reads (2)".into()),
+                    Status::SavedWarn("⚠ identical reads (2), differs from AccurateRip: clean & re-rip".into()),
                     vec!["read 1: 5E6F7A8B no AR match".to_string(), "read 2: 5E6F7A8B no AR match, same as before".to_string()],
                 ),
                 5 => (Status::Reading { read: 2, fraction: 0.42 }, vec!["read 1: 9C0D1E2F no AR match".to_string()]),
