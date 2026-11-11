@@ -653,6 +653,16 @@ exit-code-52 errors) was removed.
   ("right pressing"). Led Zeppelin box: 6 such tracks (disc 1: 1, 4, 5, 10;
   disc 2: 14; disc 3: 2) from the SuperDrive/cyanrip rip: to re-rip
 
+### In progress: CUETools DB repair (2026-11-11)
+- Sector voting (core/vote.rs, per sector then per sample, AR-verified only)
+  couldn't save Grace's Hallelujah: the drive conceals some samples the same
+  way on every read. Repaired by hand (de-interpolated), tagged
+  `ACCURATERIP=unverified`; So Real (track 5) also tagged (CTDB shows it
+  wrong). Rejected damaged tracks keep their reads in
+  `<cache>/rejected/<album>/reads/`
+- **Next: port CTDB parity repair. Design, protocol, Grace test data and
+  plan: `docs/ctdb-repair.md`** (start with the track 1/10 CRC edge rule)
+
 ## Next steps (planned 2026-11-05)
 
 1. Test a second (shorter) CD with the new Artist/Album layout
