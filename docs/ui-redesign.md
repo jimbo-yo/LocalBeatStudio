@@ -48,7 +48,7 @@ Dark-first (light variant kept), inspired by light on a CD's data side.
    sample rate, seek, pause, volume, position, events. CLI `ripshelf play
    FILE...` to test. **Needs `sudo dnf install alsa-lib-devel`** (Ubuntu:
    `libasound2-dev`).
-4. **Library index**: scan FLAC_DIR + MISC_DIR with lofty, cache in
+4. ✅ (2026-11-11) **Library index**: scan FLAC_DIR + MISC_DIR with lofty, cache in
    `<cache>/rip-cd/library.json` (path, size, mtime, tags, duration, format),
    incremental rescans, rescan of an album after a rip; albums grouped by
    album artist + album tag; cover finder + thumbnail cache on disk.

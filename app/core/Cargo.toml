@@ -14,6 +14,8 @@ lofty.workspace = true
 unicode-normalization.workspace = true
 ureq.workspace = true
 serde_json.workspace = true
+serde.workspace = true
+image.workspace = true
 crc32fast.workspace = true
 libflac-sys = { version = "0.3.4", default-features = false, features = ["build-flac"] }
 dirs.workspace = true

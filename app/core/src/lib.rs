@@ -2,6 +2,8 @@
 //! here, so everything builds and tests the same on Windows and Linux.
 
 pub mod accuraterip;
+pub mod covers;
+pub mod library;
 pub mod acoustid;
 pub mod album_check;
 pub mod audio_source;

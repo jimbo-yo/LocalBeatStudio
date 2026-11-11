@@ -695,6 +695,18 @@ exit-code-52 errors) was removed.
   set_volume/status. Tests use a fake Backend (gapless, seek, rate change,
   resample, bad files). `ripshelf play PATH... [--seek S] [--volume V]`
   (keys p/n/b/f/r/q + Enter); tried on FLAC, MP3, AAC, m4p on the laptop
+- Chunk 4 done: core/library.rs (lofty, Relaxed parsing, all cores; cache
+  `<cache>/library.json` by path+size+mtime; `added` = file creation time)
+  and core/covers.rs (cover/folder/front image in the album folders, else
+  embedded front picture; 512 px JPEG thumbnails in `<cache>/covers/
+  <crc32(album key)>-512.jpg`, remade when the source is newer;
+  accent_color for album pages). Albums = album tag + album artist (a song
+  missing the album artist joins its folder mates; none at all: album tag +
+  folder, several artists -> "Various Artists"; no album tag / "Unknown
+  Album": the folder); FLAC copy hides a Misc one with the same key.
+  `ripshelf library [--covers] [--list]`. Fedora laptop 2026-11-11: 3995
+  songs, 453 albums, 260 artists, 274 h; cold scan 11-15 s (disk), cached
+  0.1 s; 415 covers in 21 s
 
 ### In progress: CUETools DB repair (2026-11-11)
 - Sector voting (core/vote.rs, per sector then per sample, AR-verified only)

@@ -1,3 +1,4 @@
+mod library_cmd;
 mod play_cmd;
 mod drive_cmds;
 mod rip_cmd;
@@ -165,6 +166,15 @@ enum Command {
     },
     /// Identify one song by sound (AcoustID) and show what it found
     Fingerprint { file: std::path::PathBuf },
+    /// Scan the music library as the player sees it (FLAC + Miscellaneous)
+    Library {
+        /// Also make every album's cover thumbnail
+        #[arg(long)]
+        covers: bool,
+        /// List every album
+        #[arg(long)]
+        list: bool,
+    },
     /// Play songs or album folders through the speakers (FLAC, MP3,
     /// AAC/ALAC, Ogg Vorbis, WAV, AIFF)
     Play {
@@ -247,6 +257,7 @@ fn main() -> ExitCode {
         })(),
         Command::Superseded { move_them } => superseded_cmd::run(move_them),
         Command::Play { paths, seek, volume } => play_cmd::run(paths, seek, volume),
+        Command::Library { covers, list } => library_cmd::run(covers, list),
         Command::Notify { message } => {
             let s = ripshelf_core::config::Settings::load();
             ripshelf_platform::phone_notify::notify(&s.config_dir, &message).map(|phone| {
