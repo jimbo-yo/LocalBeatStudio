@@ -228,7 +228,7 @@ impl Engine {
             },
             Cmd::Stop => self.stop(),
             Cmd::Next => {
-                if let Some((i, _)) = self.current() {
+                if let Some((i, _)) = self.here() {
                     if i + 1 < self.queue.len() {
                         self.play_from(i + 1, 0.0);
                     } else {
@@ -237,12 +237,12 @@ impl Engine {
                 }
             }
             Cmd::Prev => {
-                if let Some((i, pos)) = self.current() {
+                if let Some((i, pos)) = self.here() {
                     let to = if pos > 3.0 || i == 0 { i } else { i - 1 };
                     self.play_from(to, 0.0);
                 }
             }
-            Cmd::Seek(secs) if self.state == State::Stopped => {
+            Cmd::Seek(secs) if self.state != State::Playing => {
                 self.common.info.lock().unwrap().resume_at = secs.max(0.0);
             }
             Cmd::Seek(secs) => {
@@ -273,9 +273,40 @@ impl Engine {
         self.publish();
     }
 
+    /// Pausing remembers the exact spot and releases the sound device (a
+    /// desktop shows an app with an open stream as playing, even silent);
+    /// resuming reopens it there.
     fn set_paused(&mut self, p: bool) {
-        self.shared.paused.store(p, Ordering::Relaxed);
-        self.state = if p { State::Paused } else { State::Playing };
+        if p {
+            if self.state != State::Playing {
+                return;
+            }
+            let at = self.current();
+            self.flush();
+            self.src = None;
+            self.out = None;
+            self.draining = false;
+            self.reopen_pending = None;
+            self.shared.paused.store(false, Ordering::Relaxed);
+            self.state = State::Paused;
+            let mut info = self.common.info.lock().unwrap();
+            info.stopped_index = at.map(|x| x.0);
+            info.resume_at = at.map_or(0.0, |x| x.1);
+        } else if self.state == State::Paused {
+            let (i, at) = {
+                let mut info = self.common.info.lock().unwrap();
+                (info.stopped_index.unwrap_or(0), std::mem::take(&mut info.resume_at))
+            };
+            self.play_from(i, at);
+        }
+    }
+
+    /// The song and position: playing, or where it was paused / stopped.
+    fn here(&self) -> Option<(usize, f64)> {
+        self.current().or_else(|| {
+            let info = self.common.info.lock().unwrap();
+            info.stopped_index.map(|i| (i, info.resume_at))
+        })
     }
 
     /// Starts song `i` at `at` seconds, dropping whatever is buffered.

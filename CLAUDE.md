@@ -668,6 +668,14 @@ exit-code-52 errors) was removed.
   Event::DiscStopped, is ejected, saved tracks stay, the loop keeps watching;
   flag cleared at the next DiscStart) and **⏏ Eject** when idle
   (engine::eject_one). Not yet tried on a real rip
+- Drive cards (2026-11-12): while ripping, **■ Stop** (leave the disc in;
+  not ripped again until taken out and put back: Frontend::eject_stopped =
+  false) and **⏏** (stop and eject); idle: ⏏. GUI flag per drive is an
+  AtomicU8 (0 / 1 stop+eject / 2 stop+keep)
+- Player pause releases the sound device (KDE's task manager showed the
+  "playing" speaker while a silent stream stayed open); resume reopens at the
+  exact frame (Info.stopped_index / resume_at, also used by Seek/Next/Prev
+  while paused)
 - **Rips no longer make phone copies** (2026-11-12, user's choice): phone
   sync converts from the library at sync time (it never read ~/Music/phone),
   and the copies kept a drive's loop busy 1-2 min after the eject; pushing a

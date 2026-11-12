@@ -150,7 +150,7 @@ impl Player {
         let info = self.common.info.lock().unwrap().clone();
         let volume = f32::from_bits(self.shared.volume.load(Ordering::Relaxed));
         let mut s = Status { state: info.state, queue_len: info.queue.len(), volume, error: info.error, ..Default::default() };
-        if info.state == State::Stopped {
+        if info.state != State::Playing {
             s.index = info.stopped_index.filter(|&i| i < info.queue.len());
             s.position = info.resume_at;
         } else {
@@ -284,6 +284,31 @@ mod tests {
         wait(&p, "the end", |s| s.state == State::Stopped);
         let n = fake.played.lock().unwrap().len() / 2;
         assert!((n as i64 - 16000).abs() <= 2, "{n}");
+    }
+
+    #[test]
+    fn pause_releases_the_device_and_resumes_on_the_same_frame() {
+        let a = tmp("pause-a.wav");
+        write_wav(&a, 8000, 2, 80_000, |n| (n % 30_000) as i16);
+        let fake = FakeBackend::default();
+        let p = Player::with_backend(Box::new(fake.clone()));
+        p.load(vec![a], 0);
+        wait(&p, "playing", |s| s.state == State::Playing && s.position > 0.05);
+        p.pause();
+        let s = wait(&p, "paused", |s| s.state == State::Paused);
+        assert_eq!(s.index, Some(0));
+        let heard = left(&fake.played.lock().unwrap());
+        let last = *heard.last().unwrap();
+        assert!((s.position * 8000.0).round() as i32 == heard.len() as i32, "position {} vs {} frames heard", s.position, heard.len());
+        fake.played.lock().unwrap().clear();
+        p.play();
+        wait(&p, "playing again", |s| s.state == State::Playing);
+        let t = Instant::now();
+        while fake.played.lock().unwrap().is_empty() && t.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(left(&fake.played.lock().unwrap())[0], last + 1, "carries on where it stopped");
+        assert_eq!(fake.opened.lock().unwrap().len(), 2, "the device was released and reopened");
     }
 
     #[test]

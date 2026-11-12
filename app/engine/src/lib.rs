@@ -107,6 +107,12 @@ pub trait Frontend: Sync {
     fn stop_disc(&self) -> bool {
         false
     }
+
+    /// After [`Frontend::stop_disc`]: eject the disc (else it stays in, and
+    /// isn't ripped again until it's taken out and put back).
+    fn eject_stopped(&self) -> bool {
+        true
+    }
 }
 
 /// Whether the disc being ripped should end now.
@@ -248,8 +254,10 @@ pub fn rip_loop(s: &Settings, opts: &Options, fe: &dyn Frontend) -> Result<()> {
                             // Stopped on request: eject even with --no-eject
                             // (that's what was asked for).
                             fe.event(Event::DiscStopped);
-                            let ok = Drive::open(&path).and_then(|d| d.eject()).is_ok();
-                            fe.event(Event::Ejected { ok });
+                            if fe.eject_stopped() {
+                                let ok = Drive::open(&path).and_then(|d| d.eject()).is_ok();
+                                fe.event(Event::Ejected { ok });
+                            }
                         }
                         Err(e) => {
                             fe.event(Event::DiscFailed(format!("{e:#}")));

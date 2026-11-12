@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
@@ -78,7 +78,7 @@ enum Msg {
     Event(String, Event),
     Choose { drive: String, candidates: Vec<Release>, reply: Sender<ReleaseChoice> },
     /// A drive's rip loop started (with its stop-this-disc flag) / ended.
-    LoopStarted(String, Arc<AtomicBool>),
+    LoopStarted(String, Arc<AtomicU8>),
     Stopped(String, Option<String>),
     /// The drive watcher ended (after Stop).
     WatcherDone,
@@ -89,7 +89,8 @@ struct GuiFrontend {
     tx: Sender<Msg>,
     stop: Arc<AtomicBool>,
     /// "Stop & eject" for this drive's current disc.
-    stop_disc: Arc<AtomicBool>,
+    /// Stop this drive's disc: 0 no, 1 and eject it, 2 and leave it in.
+    stop_disc: Arc<AtomicU8>,
     ctx: egui::Context,
     notifier: Arc<Notifier>,
 }
@@ -97,7 +98,7 @@ struct GuiFrontend {
 impl Frontend for GuiFrontend {
     fn event(&self, e: Event) {
         if matches!(e, Event::DiscStart { .. }) {
-            self.stop_disc.store(false, Ordering::Relaxed);
+            self.stop_disc.store(0, Ordering::Relaxed);
         }
         self.notifier.observe(&e);
         let _ = self.tx.send(Msg::Event(self.drive.clone(), e));
@@ -123,7 +124,11 @@ impl Frontend for GuiFrontend {
     }
 
     fn stop_disc(&self) -> bool {
-        self.stop_disc.load(Ordering::Relaxed)
+        self.stop_disc.load(Ordering::Relaxed) != 0
+    }
+
+    fn eject_stopped(&self) -> bool {
+        self.stop_disc.load(Ordering::Relaxed) != 2
     }
 }
 
@@ -167,8 +172,10 @@ struct Disc {
     alert: Option<String>,
     /// The disc has left the drive (after ripping, or after Stop & eject).
     ejected: bool,
-    /// Stop & eject was pressed.
+    /// Stop (or Stop & eject) was pressed.
     stopping: bool,
+    /// ...and the disc is to stay in the drive.
+    keep_in: bool,
 }
 
 /// One drive's part of the Rip tab.
@@ -177,12 +184,13 @@ struct DriveView {
     disc: Option<Disc>,
     stage: String,
     /// While its rip loop runs: the flag that stops the current disc.
-    stop_disc: Option<Arc<AtomicBool>>,
+    stop_disc: Option<Arc<AtomicU8>>,
 }
 
 /// A per-drive button pressed in the drive strip (done after drawing).
 enum DriveAction {
-    StopDisc,
+    /// Stop ripping the disc; `eject` it, or leave it in the drive.
+    StopDisc { eject: bool },
     Eject,
 }
 
@@ -346,7 +354,7 @@ impl App {
                     if !started.insert(path.clone()) {
                         continue;
                     }
-                    let stop_disc = Arc::new(AtomicBool::new(false));
+                    let stop_disc = Arc::new(AtomicU8::new(0));
                     let fe = GuiFrontend {
                         drive: path.clone(),
                         tx: tx.clone(),
@@ -425,9 +433,9 @@ impl App {
     /// A per-drive button from the drive strip (views not swapped in).
     fn drive_action(&mut self, drive: String, action: DriveAction) {
         match action {
-            DriveAction::StopDisc => {
+            DriveAction::StopDisc { eject } => {
                 let Some(flag) = self.drives.get(&drive).and_then(|v| v.stop_disc.clone()) else { return };
-                flag.store(true, Ordering::Relaxed);
+                flag.store(if eject { 1 } else { 2 }, Ordering::Relaxed);
                 // Its release question, if any, goes away.
                 if self.choice.as_ref().is_some_and(|c| c.drive == drive) {
                     if let Some(c) = self.choice.take() {
@@ -442,6 +450,7 @@ impl App {
                 self.with_view(&drive, |a| {
                     if let Some(d) = &mut a.disc {
                         d.stopping = true;
+                        d.keep_in = !eject;
                     }
                     a.stage = "Stopping…".into();
                 });
@@ -886,11 +895,19 @@ impl App {
             }
             Event::DiscStopped => {
                 let label = self.disc_label();
-                self.log(format!("Stopped {label}: ejecting it"));
+                let keep = self.disc.as_ref().is_some_and(|d| d.keep_in);
+                self.log(format!("Stopped {label}{}", if keep { ": the disc stays in the drive" } else { ": ejecting it" }));
                 self.session.push((false, format!("{label}: stopped")));
                 if let Some(d) = &mut self.disc {
                     let saved = d.rows.iter().filter(|r| matches!(r.status, Status::Saved(_) | Status::SavedWarn(_))).count();
-                    d.result = Some(format!("Stopped ({saved} tracks saved; put it back in to rip the rest)"));
+                    d.result = Some(if keep {
+                        format!("Stopped ({saved} tracks saved). The disc stays in: take it out and put it back to rip the rest")
+                    } else {
+                        format!("Stopped ({saved} tracks saved; put it back in to rip the rest)")
+                    });
+                    if keep {
+                        d.ejected = true; // nothing more to do with it on this card
+                    }
                     for r in &mut d.rows {
                         if matches!(r.status, Status::Reading { .. }) {
                             r.status = Status::Pending;
@@ -1179,7 +1196,7 @@ impl App {
                         let deck = Deck { path, disc: disc.as_ref(), stage, shown, ripping, stopping, ejecting, time };
                         match deck_card(ui, &deck, card_w) {
                             Some(DeckClick::Select) => self.pending_view = Some(path.clone()),
-                            Some(DeckClick::StopDisc) => self.drive_action = Some((path.clone(), DriveAction::StopDisc)),
+                            Some(DeckClick::StopDisc { eject }) => self.drive_action = Some((path.clone(), DriveAction::StopDisc { eject })),
                             Some(DeckClick::Eject) => self.drive_action = Some((path.clone(), DriveAction::Eject)),
                             None => {}
                         }
@@ -1442,7 +1459,7 @@ struct Deck<'a> {
 
 enum DeckClick {
     Select,
-    StopDisc,
+    StopDisc { eject: bool },
     Eject,
 }
 
@@ -1475,7 +1492,7 @@ fn deck_card(ui: &mut egui::Ui, d: &Deck, width: f32) -> Option<DeckClick> {
             }
             ui.add_space(4.0);
             ui.vertical(|ui| {
-                ui.set_width((width - 26.0 - 76.0 - 56.0).max(100.0));
+                ui.set_width((width - 26.0 - 76.0 - 100.0).max(100.0));
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(name).font(theme::bold(16.0)).color(p.text));
                     if let Some(m) = d.disc.map(|x| x.model.as_str()).filter(|m| !m.is_empty()) {
@@ -1505,12 +1522,19 @@ fn deck_card(ui: &mut egui::Ui, d: &Deck, width: f32) -> Option<DeckClick> {
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if d.ripping {
-                    let hint = "Stop ripping this disc and eject it. Tracks already saved stay in the library; \
-                                put the disc back in later and only the missing tracks are ripped. \
-                                This drive keeps watching for the next disc.";
+                    // Right to left: Eject, then Stop.
+                    let r = ui.add_enabled_ui(!d.stopping, |ui| theme::control_button(ui, theme::Icon::Eject, 38.0, theme::pal(ui).text));
+                    let eject_hint = "Stop ripping this disc and eject it. Tracks already saved stay in the library; \
+                                      put it back in later and only the missing tracks are ripped.";
+                    if r.inner.on_hover_text(eject_hint).clicked() {
+                        click = Some(DeckClick::StopDisc { eject: true });
+                    }
+                    ui.add_space(4.0);
                     let r = ui.add_enabled_ui(!d.stopping, |ui| theme::control_button(ui, theme::Icon::Stop, 38.0, theme::ERR));
-                    if r.inner.on_hover_text(hint).clicked() {
-                        click = Some(DeckClick::StopDisc);
+                    let stop_hint = "Stop ripping this disc and leave it in the drive. It isn't ripped again until \
+                                     you take it out and put it back; saved tracks stay in the library.";
+                    if r.inner.on_hover_text(stop_hint).clicked() {
+                        click = Some(DeckClick::StopDisc { eject: false });
                     }
                 } else {
                     let r = ui.add_enabled_ui(!d.ejecting, |ui| theme::control_button(ui, theme::Icon::Eject, 38.0, theme::pal(ui).text));
