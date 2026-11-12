@@ -324,6 +324,8 @@ pub enum Icon {
     Clock,
     Plus,
     Lock,
+    Info,
+    Back,
 }
 
 /// Draws `icon` centred in `rect`, in `color`.
@@ -491,6 +493,14 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
         Icon::Plus => {
             painter.line_segment([c + vec2(-0.6 * s, 0.0), c + vec2(0.6 * s, 0.0)], Stroke::new(w * 1.2, color));
             painter.line_segment([c + vec2(0.0, -0.6 * s), c + vec2(0.0, 0.6 * s)], Stroke::new(w * 1.2, color));
+        }
+        Icon::Info => {
+            painter.circle_stroke(c, 0.8 * s, stroke);
+            painter.circle_filled(c + vec2(0.0, -0.38 * s), 0.11 * s, color);
+            painter.line_segment([c + vec2(0.0, -0.12 * s), c + vec2(0.0, 0.45 * s)], Stroke::new(w * 1.1, color));
+        }
+        Icon::Back => {
+            painter.add(Shape::line(vec![c + vec2(0.25 * s, -0.6 * s), c + vec2(-0.35 * s, 0.0), c + vec2(0.25 * s, 0.6 * s)], Stroke::new(w * 1.2, color)));
         }
         Icon::Lock => {
             painter.rect_filled(Rect::from_min_max(c + vec2(-0.55 * s, -0.1 * s), c + vec2(0.55 * s, 0.7 * s)), 2.0, color);

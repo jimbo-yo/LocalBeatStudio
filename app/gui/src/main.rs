@@ -515,6 +515,17 @@ impl App {
                 ui.add_space(8.0);
                 theme::section_label(ui, "Library");
             });
+            let playing = self.library.playing();
+            let has_song = self.library.has_song();
+            let status = playing.then_some(("", theme::prism_at(0.3)));
+            if theme::nav_item(ui, theme::Icon::Songs, "Now Playing", self.tab == Tab::Library && self.library.now_open, status)
+                .on_hover_text(if has_song { "The song playing, big" } else { "Nothing playing yet" })
+                .clicked()
+            {
+                self.tab = Tab::Library;
+                self.library.search.clear();
+                self.library.open_now();
+            }
             let lib_counts = self.library.lib.as_ref().map(|l| (l.albums.len(), l.artists.len(), l.songs.len()));
             for (page, icon, label, count) in [
                 (library_ui::Page::Albums, theme::Icon::Albums, "Albums", lib_counts.map(|c| c.0)),
@@ -522,12 +533,13 @@ impl App {
                 (library_ui::Page::Artists, theme::Icon::Artists, "Artists", lib_counts.map(|c| c.1)),
                 (library_ui::Page::Songs, theme::Icon::Songs, "Songs", lib_counts.map(|c| c.2)),
             ] {
-                let selected = self.tab == Tab::Library && self.library.page == page && self.library.search.is_empty();
+                let selected = self.tab == Tab::Library && self.library.page == page && self.library.search.is_empty() && !self.library.now_open;
                 let n = count.map(|n| n.to_string()).unwrap_or_default();
                 let status = (!n.is_empty()).then_some((n.as_str(), p.faint));
                 if theme::nav_item(ui, icon, label, selected, status).clicked() {
                     self.tab = Tab::Library;
                     self.library.page = page;
+                    self.library.now_open = false;
                     self.library.album = None;
                     self.library.search.clear();
                 }
@@ -953,6 +965,9 @@ impl App {
         }
 
         let p = theme::pal(ui);
+        // The full-size Now Playing view has its own controls: no bar then.
+        let full_player = self.tab == Tab::Library && self.library.now_open;
+        if !full_player {
         egui::Panel::bottom("player")
             .exact_size(94.0)
             .resizable(false)
@@ -962,6 +977,7 @@ impl App {
         // drawn next overlap its top); the bar lays itself out below the
         // point where they really end.
         self.library.bar_top = Some(ui.available_rect_before_wrap().bottom());
+        }
         self.sidebar(ui);
 
         let p = theme::pal(ui);
