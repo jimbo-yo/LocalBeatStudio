@@ -4,6 +4,7 @@
 pub mod accuraterip;
 pub mod covers;
 pub mod ctdb;
+pub mod ctdb_repair;
 pub mod library;
 pub mod acoustid;
 pub mod album_check;

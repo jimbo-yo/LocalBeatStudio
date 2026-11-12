@@ -70,7 +70,7 @@ Reference implementation (LGPL): github.com/gchudov/cuetools.net
    MATCHES
 2. (part done 2026-11-12) Port Galois16 + syndrome calculation; check: our syndromes for a clean
    disc (OK Computer, all AR-verified) equal the database's (no errors).
-3. Port RsDecode (Berlekamp-Massey, Chien, Forney); repair Grace from the
+3. ✅ (2026-11-12, see below) Port RsDecode (Berlekamp-Massey, Chien, Forney); repair Grace from the
    library FLACs + saved reads; result must match CTDB crc32 and AccurateRip.
 4. `ripshelf repair DIR` (CLI), then in the rip: after AR fails, try CTDB.
 
@@ -105,3 +105,31 @@ each kept in `~/.cache/rip-cd/rejected/Various Artists - Ravel： Bolero, .../
 reads/`. Track 1: reads disagree on ~30k of 54M words, ~1950 with no 5-of-8
 majority, at most 4 per column (stride 11760): so erasure decoding (known
 suspect positions: 2*errors + erasures <= npar) is what can make it fit.
+
+## Repair results (2026-11-12, core/src/ctdb_repair.rs, `localbeat repair`)
+
+Decoder: errors-and-erasures (BM seeded with the erasure locator, Chien,
+Forney with the first syndrome at α^0), every result re-checked against
+all syndromes. Per damaged column, in order:
+1. the most doubtful words as erasures, fewest first, 1 spare syndrome;
+2. combinations of the top 14 doubtful words, 2 spare syndromes (many
+   tries: 1 spare would let a wrong combination through ~1 in 65536);
+3. erasures only, full strength, accepted only if every corrected word gets
+   a value some read saw (`vote_words_alts`).
+A column with npar erasures and no spare "explains" anything: never use it
+unchecked (tried: Bolero went from 19329 wrong words to 36392).
+
+- **Grace** (npar 16, entry 11118): voted reads for track 6 + library rest:
+  152 bad columns, all fixed; ALL 10 tracks and the whole disc match CTDB,
+  incl. track 5 (So Real, no reads: consistent misreads fixed by parity
+  alone) and Hallelujah. Not yet written to the library
+- **Bolero** (npar 8, entry 5755811): all 5 tracks from the failing
+  SuperDrive's 8 reads each, compared word by word with the HP's verified rip.
+  Voting leaves 19329 wrong words (2717 that every read got wrong the same
+  way); repair: 9411 of 9479 bad columns fixed, 370 wrong words left, no
+  column ever miscorrected. The 68 left are mostly columns with words no
+  read doubted: beyond npar 8 together with the doubtful ones
+- Speed: ~15-25 s for the repair, ~1 min with decoding the album
+- Not done: the offset search for damaged discs (falls back to the exact
+  TOC entry at shift 0), repair at a shift, writing the repaired tracks,
+  using it in the rip
