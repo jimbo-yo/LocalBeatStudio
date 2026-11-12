@@ -446,6 +446,65 @@ pub fn vote_words(reads: &[Vec<u32>]) -> (Vec<u16>, Vec<(usize, Doubt)>) {
     (w, d)
 }
 
+/// Votes over reads that may have gaps (unreadable stretches, frame ranges
+/// per read): only the reads that have a word vote on it. A word no read
+/// has is 0 and maximally doubtful (an erasure); a word only one read has
+/// is doubtful too.
+pub fn vote_words_gaps(reads: &[Vec<u32>], gaps: &[Vec<(usize, usize)>]) -> (Vec<u16>, Vec<(usize, Doubt)>, Vec<Vec<u16>>) {
+    if gaps.iter().all(|g| g.is_empty()) {
+        return vote_words_alts(reads);
+    }
+    let n = reads.iter().map(Vec::len).min().unwrap_or(0);
+    // Per read: is frame f inside a gap?
+    let masks: Vec<Vec<bool>> = (0..reads.len())
+        .map(|i| {
+            let mut m = vec![false; n];
+            for &(a, b) in gaps.get(i).map(Vec::as_slice).unwrap_or(&[]) {
+                for x in m.iter_mut().take(b.min(n)).skip(a.min(n)) {
+                    *x = true;
+                }
+            }
+            m
+        })
+        .collect();
+    let mut words = Vec::with_capacity(n * 2);
+    let mut doubts = Vec::new();
+    let mut alts = Vec::new();
+    let mut vals: Vec<u16> = Vec::with_capacity(reads.len());
+    for f in 0..n {
+        for half in 0..2 {
+            vals.clear();
+            vals.extend(reads.iter().zip(&masks).filter(|(_, m)| !m[f]).map(|(r, _)| (r[f] >> (16 * half)) as u16));
+            let idx = words.len();
+            if vals.is_empty() {
+                words.push(0);
+                doubts.push((idx, Doubt { agree: 0, reads: 0 }));
+                alts.push(Vec::new());
+                continue;
+            }
+            let first = vals[0];
+            if vals.len() > 1 && vals.iter().all(|&v| v == first) {
+                words.push(first);
+                continue;
+            }
+            let mut best = (0usize, first);
+            for &v in &vals {
+                let c = vals.iter().filter(|&&x| x == v).count();
+                if c > best.0 {
+                    best = (c, v);
+                }
+            }
+            words.push(best.1);
+            doubts.push((idx, Doubt { agree: best.0 as u8, reads: vals.len() as u8 }));
+            let mut distinct = vals.clone();
+            distinct.sort_unstable();
+            distinct.dedup();
+            alts.push(distinct);
+        }
+    }
+    (words, doubts, alts)
+}
+
 /// [`vote_words`], plus each doubtful word's distinct values across the reads.
 pub fn vote_words_alts(reads: &[Vec<u32>]) -> (Vec<u16>, Vec<(usize, Doubt)>, Vec<Vec<u16>>) {
     let mut alts = Vec::new();
@@ -601,6 +660,24 @@ mod tests {
         let rep = repair_with(&mut bad, &doubts, &theirs, npar, 1);
         assert_eq!(rep.failed_columns, 0, "{rep:?}");
         assert_eq!(bad, good);
+    }
+
+    #[test]
+    fn voting_skips_gaps() {
+        // Three reads; read 0 has a gap over frame 1, read 1 over frames 1-2.
+        let reads = vec![vec![10u32, 99, 30], vec![10, 98, 97], vec![10, 20, 30]];
+        let gaps = vec![vec![(1, 2)], vec![(1, 3)], vec![]];
+        let (w, d, _) = vote_words_gaps(&reads, &gaps);
+        // Frame 1: only read 2 has it -> its value, doubtful (one read).
+        assert_eq!(w[2], 20);
+        assert!(d.iter().any(|&(i, x)| i == 2 && x.reads == 1));
+        // Frame 2: reads 0 and 2 agree on 30 -> no doubt.
+        assert_eq!(w[4], 30);
+        assert!(!d.iter().any(|&(i, _)| i == 4));
+        // A frame every read misses: 0, erasure.
+        let (w, d, _) = vote_words_gaps(&[vec![5u32], vec![6]], &[vec![(0, 1)], vec![(0, 1)]]);
+        assert_eq!(w[0], 0);
+        assert_eq!(d[0].1, Doubt { agree: 0, reads: 0 });
     }
 
     #[test]

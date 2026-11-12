@@ -154,7 +154,23 @@ pub fn repair_disc(s: &Settings, album: &Path, cdtoc: &str, rejected: Option<&Pa
             if rs.is_empty() || rs.iter().any(|r| r.len() != len) {
                 bail!("the reads in {} aren't track {t}'s length", dir.display());
             }
-            let (w, d, a) = ctdb_repair::vote_words_alts(&rs);
+            // Unreadable stretches, if the read had any (readK.gaps).
+            let gaps: Vec<Vec<(usize, usize)>> = paths
+                .iter()
+                .map(|p| {
+                    std::fs::read_to_string(p.with_extension("gaps"))
+                        .map(|t| {
+                            t.lines()
+                                .filter_map(|l| {
+                                    let mut it = l.split_whitespace().map(|x| x.parse::<usize>());
+                                    Some((it.next()?.ok()?, it.next()?.ok()?))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                })
+                .collect();
+            let (w, d, a) = ctdb_repair::vote_words_gaps(&rs, &gaps);
             words.extend_from_slice(&w);
             let n_doubt = d.len();
             for ((k, s), v) in d.into_iter().zip(a) {

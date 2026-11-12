@@ -780,6 +780,14 @@ exit-code-52 errors) was removed.
   "repaired · CUETools" and shows an amber "clean and put it back in" card
   for what's still missing; the phone notification waits for the repair.
   Demo: LOCALBEAT_DEMO=alert
+- **Skip past damage (2026-11-12)**: a chunk that stalls (>= 10 s, i.e. the
+  30 s timeout) isn't retried sector by sector; it and the next 25 sectors
+  are marked unreadable, the skip doubling on further stalls (max 750) and
+  resetting after a good chunk; budget 150 s per read before the rest is
+  given up. Reads WITH gaps are kept too (`readK.gaps`: "start end" frame
+  ranges); the repair votes only over reads that have each word, a word
+  none has being an erasure (vote_words_gaps). Soul Coughing "Irresistible
+  Bliss" track 1 (stalled -> rest of track skipped twice) is the test
 - **Next: port CTDB parity repair. Design, protocol, Grace test data and
   plan: `docs/ctdb-repair.md`** (start with the track 1/10 CRC edge rule)
 

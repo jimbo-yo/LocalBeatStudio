@@ -193,18 +193,44 @@ fn try_vote(reads: &[Vec<u32>], t: &TrackPlan, db: &DiscEntries) -> Result<(u8, 
 /// (16-bit stereo, 44.1 kHz), for the CUETools repair. Reads from earlier
 /// rips of the disc are kept: new ones take the next free numbers, so a
 /// re-rip after cleaning adds to them and the repair votes over all.
-fn keep_reads(dir: &Path, t: &TrackPlan, reads: &[Vec<u32>]) -> Result<PathBuf> {
+/// A read with unreadable sectors also gets `readK.gaps`: one "start end"
+/// line (frames, track-relative, end exclusive) per unreadable stretch.
+fn keep_reads(dir: &Path, t: &TrackPlan, reads: &[(Vec<u32>, Vec<(usize, usize)>)]) -> Result<PathBuf> {
     let dir = dir.join(format!("track{:02}", t.position));
     std::fs::create_dir_all(&dir)?;
     let mut next = 1;
-    for r in reads {
+    for (r, gaps) in reads {
         while dir.join(format!("read{next}.raw")).exists() {
             next += 1;
         }
         let bytes: Vec<u8> = r.iter().flat_map(|f| f.to_le_bytes()).collect();
         std::fs::write(dir.join(format!("read{next}.raw")), bytes)?;
+        if !gaps.is_empty() {
+            let text: String = gaps.iter().map(|(a, b)| format!("{a} {b}\n")).collect();
+            std::fs::write(dir.join(format!("read{next}.gaps")), text)?;
+        }
     }
     Ok(dir)
+}
+
+/// A read's unreadable sectors as frame ranges of the track (merged).
+fn gaps_of(r: &TrackRead, t: &TrackPlan, offset: i32) -> Vec<(usize, usize)> {
+    let fps = accuraterip::FRAMES_PER_SECTOR as i64;
+    let start = t.sectors.start as i64 * fps + offset as i64;
+    let len = r.frames.len() as i64;
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    for &s in &r.unreadable {
+        let a = (s as i64 * fps - start).clamp(0, len) as usize;
+        let b = ((s as i64 + 1) * fps - start).clamp(0, len) as usize;
+        if a >= b {
+            continue;
+        }
+        match out.last_mut() {
+            Some(last) if last.1 >= a => last.1 = last.1.max(b),
+            _ => out.push((a, b)),
+        }
+    }
+    out
 }
 
 /// A clean read that matched nothing: is it a pressing the database has at
@@ -272,6 +298,9 @@ pub fn rip(
         let mut reads_done = 0;
         // Clean reads kept for sector voting, and the audio a vote produced.
         let mut clean_reads: Vec<Vec<u32>> = Vec::new();
+        // Every read, with its unreadable stretches (frames, track-relative),
+        // for the CUETools repair: gaps are known erasures there.
+        let mut all_reads: Vec<(Vec<u32>, Vec<(usize, usize)>)> = Vec::new();
         let mut voted: Option<Vec<u32>> = None;
 
         let mut limit = s.reads.max(1);
@@ -313,6 +342,7 @@ pub fn rip(
             if clean {
                 clean_reads.push(r.frames.clone());
             }
+            all_reads.push((r.frames.clone(), gaps_of(&r, t, ctx.offset)));
             if clean {
                 if let Verdict::Match { confidence, .. } = verdict {
                     accepted = Some(Acceptance::AccurateRip { confidence });
@@ -412,10 +442,10 @@ pub fn rip(
                 if let Err(e) = &saved {
                     on(Event::Note(format!("couldn't save the rejected read of track {}: {e:#}", t.position)));
                 }
-                if !clean_reads.is_empty() {
-                    match keep_reads(&dir.join("reads"), t, &clean_reads) {
+                if !all_reads.is_empty() {
+                    match keep_reads(&dir.join("reads"), t, &all_reads) {
                         Ok(d) => {
-                            let _ = writeln!(sum.log, "Track {:>2}: its {} clean reads are kept in {} (for repair attempts)", t.position, clean_reads.len(), d.display());
+                            let _ = writeln!(sum.log, "Track {:>2}: its {} reads are kept in {} (for the CUETools repair)", t.position, all_reads.len(), d.display());
                         }
                         Err(e) => on(Event::Note(format!("couldn't keep the reads of track {}: {e:#}", t.position))),
                     }

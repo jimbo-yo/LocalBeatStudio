@@ -23,13 +23,22 @@ pub const CHUNK_SECTORS: u32 = 26;
 /// and once stalls add up to `budget` the rest of the track is too.
 #[derive(Debug, Clone, Copy)]
 pub struct StallLimits {
+    /// A failed read command that took this long is a stall.
     pub slow: Duration,
+    /// Stalls may cost this much per read; then the rest of the track is
+    /// marked unreadable untried.
     pub budget: Duration,
+    /// After a stall, this many sectors are skipped (marked unreadable,
+    /// not tried) before reading again; doubled on each further stall up
+    /// to `skip_max`, back to `skip_first` after a chunk reads well.
+    pub skip_first: u32,
+    pub skip_max: u32,
 }
 
 impl Default for StallLimits {
     fn default() -> Self {
-        Self { slow: Duration::from_secs(10), budget: Duration::from_secs(90) }
+        // A stall costs a 30 s timeout: 150 s is about five of them.
+        Self { slow: Duration::from_secs(10), budget: Duration::from_secs(150), skip_first: 25, skip_max: 750 }
     }
 }
 
@@ -114,50 +123,71 @@ pub fn read_track_limited(
     let mut lba = first_sector;
     let mut stalled = Duration::ZERO;
     let mut gave_up = false;
+    // Sectors still to skip after a stall, and the next skip's length.
+    let mut skip_ahead: u32 = 0;
+    let mut next_skip = limits.skip_first.max(1);
     let lost = |buf: &mut Vec<u8>, unreadable: &mut Vec<u32>, s: u32| {
         buf.extend(std::iter::repeat_n(0u8, SECTOR_BYTES));
         unreadable.push(s);
     };
     while lba < end_sector {
         let count = CHUNK_SECTORS.min(end_sector - lba);
-        if gave_up {
-            for s in lba..lba + count {
+        // Past a stall: skip ahead (or, budget spent, everything) untried.
+        if gave_up || skip_ahead > 0 {
+            let n = if gave_up { count } else { count.min(skip_ahead) };
+            for s in lba..lba + n {
                 lost(&mut buf, &mut unreadable, s);
             }
-            lba += count;
+            if !gave_up {
+                skip_ahead -= n;
+            }
+            lba += n;
             progress(lba - first_sector, total);
             continue;
         }
         let t = Instant::now();
         match src.read_sectors(lba, count) {
-            Ok(data) if data.len() == count as usize * SECTOR_BYTES => buf.extend_from_slice(&data),
+            Ok(data) if data.len() == count as usize * SECTOR_BYTES => {
+                buf.extend_from_slice(&data);
+                next_skip = limits.skip_first.max(1);
+            }
             _ => {
+                let mut stall = false;
                 if t.elapsed() >= limits.slow {
+                    // The chunk stalled: trying its sectors one by one
+                    // would stall again on each. Give it up and skip on.
                     stalled += t.elapsed();
-                }
-                // Retry sector by sector so one bad spot doesn't lose the
-                // chunk; but past a stalled sector the rest of the chunk is
-                // given up (each would likely stall too).
-                let mut skip = false;
-                for s in lba..lba + count {
-                    if skip {
+                    stall = true;
+                    for s in lba..lba + count {
                         lost(&mut buf, &mut unreadable, s);
-                        continue;
                     }
-                    let t = Instant::now();
-                    match src.read_sectors(s, 1) {
-                        Ok(data) if data.len() == SECTOR_BYTES => buf.extend_from_slice(&data),
-                        _ => {
+                } else {
+                    // A quick failure: retry sector by sector so one bad
+                    // spot doesn't lose the chunk (stopping at a stall).
+                    for s in lba..lba + count {
+                        if stall {
                             lost(&mut buf, &mut unreadable, s);
-                            if t.elapsed() >= limits.slow {
-                                stalled += t.elapsed();
-                                skip = true;
+                            continue;
+                        }
+                        let t = Instant::now();
+                        match src.read_sectors(s, 1) {
+                            Ok(data) if data.len() == SECTOR_BYTES => buf.extend_from_slice(&data),
+                            _ => {
+                                lost(&mut buf, &mut unreadable, s);
+                                if t.elapsed() >= limits.slow {
+                                    stalled += t.elapsed();
+                                    stall = true;
+                                }
                             }
                         }
                     }
                 }
-                if skip && stalled >= limits.budget {
-                    gave_up = true;
+                if stall {
+                    skip_ahead = next_skip;
+                    next_skip = (next_skip * 2).min(limits.skip_max.max(1));
+                    if stalled >= limits.budget {
+                        gave_up = true;
+                    }
                 }
             }
         }
@@ -227,11 +257,6 @@ mod tests {
         }
     }
 
-    /// Every failure counts as a stall (the fake fails instantly).
-    fn stall_on_any_error(budget: Duration) -> StallLimits {
-        StallLimits { slow: Duration::ZERO, budget }
-    }
-
     impl SectorSource for FakeDisc {
         fn read_sectors(&mut self, lba: u32, count: u32) -> Result<Vec<u8>, String> {
             self.reads.push((lba, count));
@@ -246,8 +271,6 @@ mod tests {
             Ok((first..first + n).flat_map(|f| (f as u32 + 1).to_le_bytes()).collect())
         }
     }
-
-    fn noop(_: u32, _: u32) {}
 
     #[test]
     fn zero_offset_reads_exact_track() {
@@ -296,17 +319,41 @@ mod tests {
         assert_eq!(r.frames[(34 - 10) * 588], 34 * 588 + 1);
     }
 
+    fn noop(_: u32, _: u32) {}
+
+    /// Every failure counts as a stall (the fake fails instantly).
+    fn stall_on_any_error(budget: Duration) -> StallLimits {
+        StallLimits { slow: Duration::ZERO, budget, skip_first: 26, skip_max: 104 }
+    }
+
     #[test]
-    fn stalled_sector_gives_up_rest_of_its_chunk() {
-        let mut d = FakeDisc::new(200);
+    fn a_stall_skips_a_short_stretch_and_reading_goes_on() {
+        let mut d = FakeDisc::new(400);
         d.bad = vec![33];
         let lim = stall_on_any_error(Duration::from_secs(3600));
-        let r = read_track_limited(&mut d, 26..78, 200, 0, lim, &mut noop);
-        // Chunk 26..52: 26..33 read one by one, 33 stalls, 34..52 untried.
-        assert_eq!(r.unreadable, (33..52).collect::<Vec<_>>());
-        assert!(!d.reads.iter().any(|&(lba, n)| n == 1 && lba > 33 && lba < 52));
-        // The next chunk is read normally.
-        assert_eq!(r.frames[(52 - 26) * 588], 52 * 588 + 1);
+        let r = read_track_limited(&mut d, 26..200, 400, 0, lim, &mut noop);
+        // The stalled chunk (26..52) and one skip (52..78) are lost, untried.
+        assert_eq!(r.unreadable, (26..78).collect::<Vec<_>>());
+        assert!(!d.reads.iter().any(|&(lba, n)| n == 1 || (lba >= 52 && lba < 78)), "{:?}", d.reads);
+        // Reading resumed after the skip.
+        assert_eq!(r.frames[(78 - 26) * 588], 78 * 588 + 1);
+        assert_eq!(*r.frames.last().unwrap(), 200 * 588);
+        assert!(!r.gave_up);
+    }
+
+    #[test]
+    fn skips_grow_on_repeated_stalls_and_reset_after_good_reads() {
+        let mut d = FakeDisc::new(1000);
+        // Stalls at 30 and again right after the first skip (at 82), then
+        // clean until a later stall at 500.
+        d.bad = vec![30, 82, 500];
+        let lim = stall_on_any_error(Duration::from_secs(3600));
+        let r = read_track_limited(&mut d, 26..700, 1000, 0, lim, &mut noop);
+        let u = &r.unreadable;
+        // 26..52 stalled, skip 26 -> 78; chunk 78..104 stalls, skip 52 -> 156.
+        assert!(u.contains(&26) && u.contains(&155) && !u.contains(&156), "{u:?}");
+        // Later: the chunk holding 500 (494..520) stalls, skip back to 26 -> 546.
+        assert!(u.contains(&494) && u.contains(&545) && !u.contains(&546), "{u:?}");
         assert!(!r.gave_up);
     }
 
@@ -316,7 +363,7 @@ mod tests {
         d.bad = vec![30];
         let r = read_track_limited(&mut d, 26..130, 200, 0, stall_on_any_error(Duration::ZERO), &mut noop);
         assert!(r.gave_up);
-        assert_eq!(r.unreadable, (30..130).collect::<Vec<_>>());
+        assert_eq!(r.unreadable, (26..130).collect::<Vec<_>>());
         // Nothing after the stalled chunk was asked of the drive.
         assert!(d.reads.iter().all(|&(lba, _)| lba < 52));
         assert_eq!(r.frames.len(), 104 * 588);
