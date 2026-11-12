@@ -343,3 +343,103 @@ pub fn fetch_parity(entry: &Entry) -> Result<Vec<u16>> {
 pub fn matching_columns(ours: &[u16], theirs: &[u16], npar: usize) -> usize {
     ours.chunks(npar).zip(theirs.chunks(npar)).filter(|(a, b)| a == b).count()
 }
+
+/// Syndromes of column `col` of the disc shifted by `k` words (the
+/// shifted disc's word p is our word p + k), from our offset-0 column
+/// syndromes `base` and the words themselves. A shift moves a column into
+/// its neighbour `col + k`; past a row's end it also slides one row, which
+/// adds the word entering at one end and drops the one leaving at the other
+/// (CUETools `GetSyndrome(.., offset)`).
+pub fn shifted_column(words: &[u16], base: &[u16], npar: usize, col: usize, k: isize) -> Vec<u16> {
+    let layout = Layout::new((words.len() / 2) as u64);
+    let r = layout.stridecount;
+    let g = gf();
+    let s = col as isize + k;
+    let (src, rows) = if s >= STRIDE as isize {
+        ((s - STRIDE as isize) as usize, 1)
+    } else if s < 0 {
+        ((s + STRIDE as isize) as usize, -1)
+    } else {
+        (s as usize, 0)
+    };
+    let orig = &base[src * npar..src * npar + npar];
+    let w = |row: usize| words[row * STRIDE + src];
+    (0..npar)
+        .map(|i| match rows {
+            0 => orig[i],
+            // Rows 2..=R+1 of `src`: drop row 1 (weight α^(i·R) after the shift), add row R+1.
+            1 => g.mul_exp(orig[i], i) ^ g.mul_exp(w(1), i * r) ^ w(r + 1),
+            // Rows 0..=R-1: drop row R, add row 0 (weight α^(i·(R-1))).
+            _ => {
+                let x = orig[i] ^ w(r);
+                let x = if x == 0 { 0 } else { g.exp[g.log[x as usize] as usize + GF_MAX - i % GF_MAX] };
+                x ^ g.mul_exp(w(0), i * (r - 1))
+            }
+        })
+        .collect()
+}
+
+/// The shift (in words, even: whole stereo samples) at which our disc lines
+/// up with an entry's parity, searched within half a row either way: the
+/// one where a few columns spread across the row agree exactly.
+pub fn find_shift(words: &[u16], base: &[u16], theirs: &[u16], npar: usize) -> Option<isize> {
+    let probe = [0usize, 1471, 2942, 4413, 5884, 7355, 8826, 10297];
+    let half = (STRIDE / 2) as isize;
+    let mut best: Option<(usize, isize)> = None;
+    let mut k = -half + 2;
+    while k < half {
+        let agree = probe
+            .iter()
+            .filter(|&&c| shifted_column(words, base, npar, c, k) == theirs[c * npar..c * npar + npar])
+            .count();
+        if agree > best.map_or(0, |b| b.0) {
+            best = Some((agree, k));
+        }
+        k += 2;
+    }
+    // More than half the probes: one damaged column can't decide it.
+    best.filter(|b| b.0 * 2 > probe.len()).map(|b| b.1)
+}
+
+/// Columns agreeing with `theirs` when our disc is shifted by `k` words.
+pub fn matching_columns_shifted(words: &[u16], base: &[u16], theirs: &[u16], npar: usize, k: isize) -> usize {
+    (0..STRIDE).filter(|&c| shifted_column(words, base, npar, c, k) == theirs[c * npar..c * npar + npar]).count()
+}
+
+#[cfg(test)]
+mod parity_tests {
+    use super::*;
+
+    /// A small made-up disc: 40 rows plus a ragged end.
+    fn disc() -> Vec<u16> {
+        let n = STRIDE * 40 + 3000;
+        (0..n).map(|i| ((i as u64 * 2654435761) >> 7) as u16).collect()
+    }
+
+    #[test]
+    fn shifting_matches_recomputing() {
+        let w = disc();
+        let npar = 8;
+        let base = column_syndromes(&w, npar);
+        for k in [-5878isize, -2, 2, 30, 5878] {
+            // The shifted disc, computed the slow way: same length, word p = w[p + k].
+            let shifted: Vec<u16> = (0..w.len() as isize).map(|p| *w.get((p + k).clamp(0, w.len() as isize - 1) as usize).unwrap()).collect();
+            let want = column_syndromes(&shifted, npar);
+            for col in [0usize, 1, 5879, 5880, 11000, STRIDE - 1] {
+                assert_eq!(shifted_column(&w, &base, npar, col, k), want[col * npar..col * npar + npar], "k {k} col {col}");
+            }
+        }
+    }
+
+    #[test]
+    fn finds_the_shift() {
+        let w = disc();
+        let npar = 8;
+        let base = column_syndromes(&w, npar);
+        let k = 1234;
+        let shifted: Vec<u16> = (0..w.len() as isize).map(|p| *w.get((p + k).clamp(0, w.len() as isize - 1) as usize).unwrap()).collect();
+        let theirs = column_syndromes(&shifted, npar);
+        assert_eq!(find_shift(&w, &base, &theirs, npar), Some(k));
+        assert_eq!(matching_columns_shifted(&w, &base, &theirs, npar, k), STRIDE);
+    }
+}

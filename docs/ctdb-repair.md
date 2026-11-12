@@ -84,7 +84,13 @@ Reference implementation (LGPL): github.com/gchudov/cuetools.net
   the rows), GF(2^16) poly 0x1100B. Ours == theirs => that column is right.
 - Grace vs entry 11118 at offset 0: 11666 / 11760 columns agree; the rest
   are tracks 5/6 (known misreads). `localbeat ctdb ALBUM` prints this
-- Next: FindOffset (other alignments: OK Computer's entry 2013), speed
+- FindOffset done (ctdb::shifted_column / find_shift, tested against
+  recomputing): a k-word shift turns column c into column c+k, sliding a
+  row past the row's end (multiply by α^±i, add/drop the lead-in and
+  lead-out words). OK Computer: entry 2013 (conf 11781) lines up 994
+  samples later and ALL 11760 columns agree. Grace: 167943 lines up 1055
+  samples earlier, same 94 bad columns as 11118
+- Next: speed
   (~24 s for npar 16 in release; fine for now), then the decoder
 - Bolero: the HP read it fine (2026-11-12; the SuperDrive was failing: it
   also spat out good discs). So the HP rip is ground truth for repairing

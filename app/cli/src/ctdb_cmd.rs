@@ -67,19 +67,41 @@ fn check(dir: &Path) -> Result<bool> {
             let whole = if e.crc32 == disc_crc { "  WHOLE DISC MATCHES" } else { "" };
             println!("  entry {:>9}  confirmed by {:>5}  {parity:>9}  tracks {marks} ({hits}/{}){whole}", e.id, e.confidence, ours.len());
         }
-        // Parity: compare our columns with the best-confirmed entry that has it.
+        // Parity: the entries that have it, best-matching and best-confirmed
+        // first; each one lined up with our rip (it may be at another alignment).
         let hits = |e: &ctdb::Entry| ours.iter().zip(&e.track_crcs).filter(|(a, b)| a == b).count();
-        if let Some(e) = entries.iter().filter(|e| e.parity_url.is_some()).max_by_key(|e| (hits(e), e.confidence)) {
-            let t = std::time::Instant::now();
+        let mut with_parity: Vec<&ctdb::Entry> = entries.iter().filter(|e| e.parity_url.is_some() && (e.confidence >= 2 || hits(e) > 0)).collect();
+        with_parity.sort_by_key(|e| std::cmp::Reverse((hits(e), e.confidence)));
+        if !with_parity.is_empty() {
             let words = ctdb::disc_words(&refs);
-            let npar = e.npar as usize;
-            let ours = ctdb::column_syndromes(&words, npar);
-            match ctdb::fetch_parity(e) {
-                Ok(theirs) => {
-                    let m = ctdb::matching_columns(&ours, &theirs, npar);
-                    println!("  parity of entry {} (npar {npar}): {m} of {} columns agree at offset 0 ({:.1} s)", e.id, ctdb::STRIDE, t.elapsed().as_secs_f64());
+            let mut base: Option<(usize, Vec<u16>)> = None;
+            for e in with_parity.iter().take(3) {
+                let npar = e.npar as usize;
+                if base.as_ref().is_none_or(|b| b.0 != npar) {
+                    base = Some((npar, ctdb::column_syndromes(&words, npar)));
                 }
-                Err(err) => println!("  parity of entry {}: {err:#}", e.id),
+                let ours_syn = &base.as_ref().unwrap().1;
+                let theirs = match ctdb::fetch_parity(e) {
+                    Ok(t) => t,
+                    Err(err) => {
+                        println!("  parity of entry {}: {err:#}", e.id);
+                        continue;
+                    }
+                };
+                match ctdb::find_shift(&words, ours_syn, &theirs, npar) {
+                    Some(k) => {
+                        let m = ctdb::matching_columns_shifted(&words, ours_syn, &theirs, npar, k);
+                        let pct = m as f64 * 100.0 / ctdb::STRIDE as f64;
+                        println!(
+                            "  parity of entry {} (npar {npar}): lines up {} samples {}; {m} of {} columns agree ({pct:.1}%)",
+                            e.id,
+                            (k / 2).abs(),
+                            if k >= 0 { "later" } else { "earlier" },
+                            ctdb::STRIDE
+                        );
+                    }
+                    None => println!("  parity of entry {} (npar {npar}): no alignment within half a row lines up (a different pressing?)", e.id),
+                }
             }
         }
         let others = entries.len() - shown;
