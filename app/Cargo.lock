@@ -2316,6 +2316,7 @@ dependencies = [
  "cdtoc",
  "chrono",
  "clap",
+ "imagesize",
  "localbeat-core",
  "localbeat-engine",
  "localbeat-platform",

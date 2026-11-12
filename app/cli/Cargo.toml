@@ -14,5 +14,6 @@ anyhow.workspace = true
 clap.workspace = true
 cdtoc.workspace = true
 chrono.workspace = true
+imagesize.workspace = true
 localbeat-engine.workspace = true
 localbeat-player = { path = "../player" }

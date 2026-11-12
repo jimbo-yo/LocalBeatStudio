@@ -168,13 +168,16 @@ enum Command {
     },
     /// Identify one song by sound (AcoustID) and show what it found
     Fingerprint { file: std::path::PathBuf },
-    /// Try CUETools-parity repair on an album with saved reads of rejected
-    /// tracks (reports only; writes nothing yet)
+    /// Repair an album with CUETools-database parity (and saved reads of
+    /// rejected tracks); --write replaces the tracks that then match
     Repair {
         album: PathBuf,
         /// Folder with trackNN/readK.raw (the rejected folder's "reads")
         #[arg(long)]
         reads: Option<PathBuf>,
+        /// Replace tracks that now match the database (originals are kept)
+        #[arg(long)]
+        write: bool,
     },
     /// Check ripped albums against the CUETools database: the pressings it
     /// knows and which of our tracks each confirms
@@ -272,7 +275,7 @@ fn main() -> ExitCode {
         Command::Play { paths, seek, volume } => play_cmd::run(paths, seek, volume),
         Command::Library { covers, list } => library_cmd::run(covers, list),
         Command::Ctdb { dirs } => ctdb_cmd::run(dirs),
-        Command::Repair { album, reads } => repair_cmd::run(album, reads),
+        Command::Repair { album, reads, write } => repair_cmd::run(album, reads, write),
         Command::Notify { message } => {
             let s = localbeat_core::config::Settings::load();
             localbeat_platform::phone_notify::notify(&s.config_dir, &message).map(|phone| {

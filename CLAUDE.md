@@ -768,6 +768,9 @@ exit-code-52 errors) was removed.
 - Step 1 done (2026-11-12): core/src/ctdb.rs (layout, track/disc CRCs,
   lookup) + `localbeat ctdb ALBUM`; the CTDB stride is 11760 words (its
   "5880" is stereo samples). Bolero (SuperDrive-rejected) is the test disc
+- CTDB repair works (2026-11-12): `localbeat repair ALBUM --reads DIR
+  [--write]` (see docs/ctdb-repair.md). Grace's Hallelujah and So Real repaired
+  bit-exact (CTDB 999 + AccurateRip 200) and written
 - **Next: port CTDB parity repair. Design, protocol, Grace test data and
   plan: `docs/ctdb-repair.md`** (start with the track 1/10 CRC edge rule)
 

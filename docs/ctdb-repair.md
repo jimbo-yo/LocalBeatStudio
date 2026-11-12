@@ -72,7 +72,7 @@ Reference implementation (LGPL): github.com/gchudov/cuetools.net
    disc (OK Computer, all AR-verified) equal the database's (no errors).
 3. ✅ (2026-11-12, see below) Port RsDecode (Berlekamp-Massey, Chien, Forney); repair Grace from the
    library FLACs + saved reads; result must match CTDB crc32 and AccurateRip.
-4. `ripshelf repair DIR` (CLI), then in the rip: after AR fails, try CTDB.
+4. (CLI done 2026-11-12) `localbeat repair ALBUM [--reads DIR] [--write]`, then in the rip: after AR fails, try CTDB.
 
 ## Parity, as found (2026-11-12)
 
@@ -133,3 +133,17 @@ unchecked (tried: Bolero went from 19329 wrong words to 36392).
 - Not done: the offset search for damaged discs (falls back to the exact
   TOC entry at shift 0), repair at a shift, writing the repaired tracks,
   using it in the rip
+
+## Step 4: writing (2026-11-12)
+
+`localbeat repair ALBUM --reads <rejected>/<album>/reads [--write]`: layout
+from the CDTOC tag; each track from its saved reads (voted), else the
+album's FLAC, else the rejected FLAC. Every track is checked against CTDB
+and AccurateRip; a track is written only if CTDB matches and AccurateRip
+matches too (or, if AR doesn't know the track, the CTDB entry has 3+
+confirmations). Written via .part, decoded back and compared, original
+moved to `<cache>/repaired-originals/<album>/`; tags kept minus
+ACCURATERIP, plus `CTDBREPAIR=CUETools DB entry N, confirmed by C (...)`.
+Missing tracks are written under the rejected file's name and tags.
+**Grace written 2026-11-12**: So Real and Hallelujah repaired, both
+AccurateRip 200 too; the whole album matches CTDB entry 11118.
