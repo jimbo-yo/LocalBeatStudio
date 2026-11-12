@@ -3,6 +3,7 @@
 
 pub mod accuraterip;
 pub mod covers;
+pub mod ctdb;
 pub mod library;
 pub mod acoustid;
 pub mod album_check;

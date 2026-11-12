@@ -759,6 +759,9 @@ exit-code-52 errors) was removed.
   `ACCURATERIP=unverified`; So Real (track 5) also tagged (CTDB shows it
   wrong). Rejected damaged tracks keep their reads in
   `<cache>/rejected/<album>/reads/`
+- Step 1 done (2026-11-12): core/src/ctdb.rs (layout, track/disc CRCs,
+  lookup) + `localbeat ctdb ALBUM`; the CTDB stride is 11760 words (its
+  "5880" is stereo samples). Bolero (SuperDrive-rejected) is the test disc
 - **Next: port CTDB parity repair. Design, protocol, Grace test data and
   plan: `docs/ctdb-repair.md`** (start with the track 1/10 CRC edge rule)
 

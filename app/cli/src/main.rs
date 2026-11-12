@@ -1,3 +1,4 @@
+mod ctdb_cmd;
 mod library_cmd;
 mod play_cmd;
 mod drive_cmds;
@@ -166,6 +167,9 @@ enum Command {
     },
     /// Identify one song by sound (AcoustID) and show what it found
     Fingerprint { file: std::path::PathBuf },
+    /// Check ripped albums against the CUETools database: the pressings it
+    /// knows and which of our tracks each confirms
+    Ctdb { dirs: Vec<PathBuf> },
     /// Scan the music library as the player sees it (FLAC + Miscellaneous)
     Library {
         /// Also make every album's cover thumbnail
@@ -258,6 +262,7 @@ fn main() -> ExitCode {
         Command::Superseded { move_them } => superseded_cmd::run(move_them),
         Command::Play { paths, seek, volume } => play_cmd::run(paths, seek, volume),
         Command::Library { covers, list } => library_cmd::run(covers, list),
+        Command::Ctdb { dirs } => ctdb_cmd::run(dirs),
         Command::Notify { message } => {
             let s = localbeat_core::config::Settings::load();
             localbeat_platform::phone_notify::notify(&s.config_dir, &message).map(|phone| {
