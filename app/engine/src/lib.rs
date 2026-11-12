@@ -71,6 +71,13 @@ pub enum Event {
     DiscDone { ok: bool },
     /// The disc failed (it's ejected unless --no-eject).
     DiscFailed(String),
+    /// Rejected tracks are being repaired with the CUETools database.
+    RepairStart,
+    /// A track was repaired (or added) and is now in the library, verified.
+    Repaired { position: usize },
+    /// The repair is over: tracks now in the library, and still missing
+    /// (clean the disc and rip it again: the reads add up).
+    RepairDone { repaired: Vec<usize>, missing: Vec<usize> },
     /// The disc was stopped on request ([`Frontend::stop_disc`]); it's
     /// ejected next and the loop carries on.
     DiscStopped,
@@ -363,6 +370,7 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
 
     let started = Instant::now();
     let mut ok = true;
+    let mut rejected_now: Vec<usize> = Vec::new();
     if plan.missing().next().is_none() {
         fe.event(Event::Note(format!("All {} tracks are already in the library", plan.tracks.len())));
         fe.event(Event::RipDone { accepted: 0, rejected: vec![], skipped: plan.tracks.len(), elapsed: started.elapsed() });
@@ -442,6 +450,7 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
         }
         let sum = sum?;
         ok = sum.rejected.is_empty();
+        rejected_now = sum.rejected.clone();
         fe.event(Event::RipDone {
             accepted: sum.accepted.len(),
             rejected: sum.rejected.clone(),
@@ -455,6 +464,33 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
     } else {
         let ok = drive.eject().is_ok();
         fe.event(Event::Ejected { ok });
+    }
+
+    // Rejected tracks: try the CUETools repair with everything there is
+    // (this rip's reads plus any from earlier rips of the disc). The drive
+    // is already free: this is computing only.
+    if !rejected_now.is_empty() {
+        fe.event(Event::Stage("Repairing with the CUETools database".into()));
+        fe.event(Event::RepairStart);
+        let dir = s.rejected_dir().join(localbeat_core::naming::safe_component(&plan.label));
+        match localbeat_core::repair_disc::repair_disc(s, &plan.album_dir, &toc.to_string(), Some(&dir), true) {
+            Ok(r) => {
+                for l in &r.log {
+                    fe.event(Event::Note(l.clone()));
+                }
+                let repaired: Vec<usize> = r.tracks.iter().filter(|t| t.written.is_some()).map(|t| t.position).collect();
+                for &p in &repaired {
+                    fe.event(Event::Repaired { position: p });
+                }
+                let missing = r.still_missing();
+                ok = missing.is_empty();
+                fe.event(Event::RepairDone { repaired, missing });
+            }
+            Err(e) => {
+                fe.event(Event::Note(format!("CUETools repair failed: {e:#}")));
+                fe.event(Event::RepairDone { repaired: Vec::new(), missing: rejected_now.clone() });
+            }
+        }
     }
 
     // No phone copies here any more (2026-11-12): phone sync converts from

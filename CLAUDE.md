@@ -771,6 +771,15 @@ exit-code-52 errors) was removed.
 - CTDB repair works (2026-11-12): `localbeat repair ALBUM --reads DIR
   [--write]` (see docs/ctdb-repair.md). Grace's Hallelujah and So Real repaired
   bit-exact (CTDB 999 + AccurateRip 200) and written
+- **Repair in the rip (2026-11-12)**: rejected tracks keep ALL clean reads
+  (no AccurateRip needed; numbered on, so a re-rip after cleaning ADDS reads);
+  after the eject, engine runs core::repair_disc (shared with `localbeat
+  repair`) on the disc: writes tracks verified by CTDB + AccurateRip (or
+  CTDB 3+ when AR doesn't know the track), removes their reads; events
+  RepairStart / Repaired / RepairDone{repaired, missing}. Studio marks
+  "repaired · CUETools" and shows an amber "clean and put it back in" card
+  for what's still missing; the phone notification waits for the repair.
+  Demo: LOCALBEAT_DEMO=alert
 - **Next: port CTDB parity repair. Design, protocol, Grace test data and
   plan: `docs/ctdb-repair.md`** (start with the track 1/10 CRC edge rule)
 

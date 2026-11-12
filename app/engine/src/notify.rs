@@ -77,15 +77,27 @@ impl Notifier {
                         let list = rejected.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ");
                         let ok = st.total.saturating_sub(rejected.len());
                         st.summary = Some(format!("{label}: {ok} of {} tracks; couldn't read {list} ({took})", st.total));
-                        now_msg = Some(format!(
-                            "{label}: couldn't read track(s) {list}. Clean the disc and rip it again later: only those get re-read."
-                        ));
+                        // The repair comes next: the message waits for its result.
                     }
                 }
                 Event::DiscFailed(msg) => {
                     let label = if st.label.is_empty() { "A disc".to_string() } else { st.label.clone() };
                     st.summary = Some(format!("{label} failed: {msg}"));
                     now_msg = Some(format!("{label} failed: {msg}"));
+                }
+                Event::RepairDone { repaired, missing } => {
+                    let label = if st.label.is_empty() { "The disc".to_string() } else { st.label.clone() };
+                    let list = |v: &[usize]| v.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ");
+                    if missing.is_empty() {
+                        st.summary = Some(format!("{label}: all {} tracks in the library ({} repaired with the CUETools database)", st.total, repaired.len()));
+                    } else {
+                        let msg = format!(
+                            "{label}: track(s) {} couldn't be read or repaired. Clean the disc (wipe straight out from the centre) and put it back in: only those are read again, and the reads add up for another repair.",
+                            list(missing)
+                        );
+                        st.summary = Some(msg.clone());
+                        now_msg = Some(msg);
+                    }
                 }
                 Event::DiscStopped => {
                     let label = if st.label.is_empty() { "The disc".to_string() } else { st.label.clone() };
@@ -175,8 +187,11 @@ mod tests {
     fn problems_right_away_and_off_means_off() {
         let (n, sent) = notifier(Duration::from_secs(60));
         disc(&n, "Zeppelin", 15, vec![11, 15]);
+        // Nothing yet: the repair's result decides the message.
+        assert_eq!(sent.lock().unwrap().len(), 0);
+        n.observe(&Event::RepairDone { repaired: vec![11], missing: vec![15] });
         assert_eq!(sent.lock().unwrap().len(), 1);
-        assert!(sent.lock().unwrap()[0].contains("couldn't read track(s) 11, 15"));
+        assert!(sent.lock().unwrap()[0].contains("track(s) 15 couldn't be read or repaired"), "{:?}", sent.lock().unwrap());
         n.set_enabled(false);
         disc(&n, "B", 10, vec![3]);
         let t0 = n.state.lock().unwrap().waiting_since.unwrap();

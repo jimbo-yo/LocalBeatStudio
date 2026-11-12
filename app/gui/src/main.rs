@@ -161,6 +161,8 @@ struct Disc {
     done_secs: u32,
     total_secs: u32,
     result: Option<String>,
+    /// Tracks still missing after the repair: what to do about it.
+    alert: Option<String>,
     /// The disc has left the drive (after ripping, or after Stop & eject).
     ejected: bool,
     /// Stop & eject was pressed.
@@ -281,8 +283,12 @@ impl App {
         };
         if std::env::var_os("LOCALBEAT_DEMO").is_some() {
             // Made-up disc for working on the layout without a CD.
+            let demo = std::env::var("LOCALBEAT_DEMO").unwrap_or_default();
             let mut d1 = demo_disc();
             d1.cover = Some(demo_cover(&app.ctx));
+            if demo == "alert" {
+                d1.alert = Some("Track 6 couldn't be read or repaired. Clean the disc, wiping straight out from the centre, and put it back in: only that one is read again, and the new reads are added to these for another repair.".into());
+            }
             let mut d2 = demo_disc();
             d2.drive = "/dev/sr2".into();
             d2.model = "Apple SuperDrive".into();
@@ -292,7 +298,6 @@ impl App {
             app.drives.insert("/dev/sr0".into(), DriveView { disc: None, stage: "Waiting for a disc".into(), stop_disc: Some(Default::default()) });
             app.drives.insert("/dev/sr1".into(), DriveView { disc: Some(d1), stage: "Ripping track 5".into(), stop_disc: Some(Default::default()) });
             app.drives.insert("/dev/sr2".into(), DriveView { disc: Some(d2), stage: "Ripping track 2".into(), stop_disc: Some(Default::default()) });
-            let demo = std::env::var("LOCALBEAT_DEMO").unwrap_or_default();
             app.view = Some(if demo == "sr2" { "/dev/sr2" } else { "/dev/sr1" }.into());
             app.running = true;
             app.stage = "Ripping on 2 drives".into();
@@ -312,7 +317,7 @@ impl App {
             app.tab = match demo.as_str() {
                 "phone" => Tab::Phone,
                 "review" => Tab::Review,
-                "1" | "sr2" | "choice" => Tab::Rip,
+                "1" | "sr2" | "choice" | "alert" => Tab::Rip,
                 _ => Tab::Library,
             };
             app.library.demo = Some(demo.clone());
@@ -836,6 +841,31 @@ impl App {
                 self.session.push((false, format!("{label}: {e}")));
                 if let Some(d) = &mut self.disc {
                     d.result = Some(format!("Failed: {e}"));
+                }
+            }
+            Event::RepairStart => self.log("Repairing the rejected tracks with the CUETools database".into()),
+            Event::Repaired { position } => {
+                self.log(format!("Track {position} repaired with the CUETools database and verified"));
+                if let Some(r) = self.row(position) {
+                    r.status = Status::Saved("repaired · CUETools".into());
+                }
+            }
+            Event::RepairDone { repaired, missing } => {
+                let list = |v: &[usize]| v.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ");
+                if let Some(d) = &mut self.disc {
+                    if missing.is_empty() {
+                        if !repaired.is_empty() {
+                            d.result = Some(format!("Every track is in the library: {} repaired with the CUETools database", repaired.len()));
+                        }
+                        d.alert = None;
+                    } else {
+                        d.alert = Some(format!(
+                            "Track{} {} couldn't be read or repaired. Clean the disc, wiping straight out from the centre, and put it back in: only {} read again, and the new reads are added to these for another repair.",
+                            if missing.len() > 1 { "s" } else { "" },
+                            list(&missing),
+                            if missing.len() > 1 { "those are" } else { "that one is" }
+                        ));
+                    }
                 }
             }
             Event::DiscStopped => {
@@ -1473,6 +1503,22 @@ fn deck_card(ui: &mut egui::Ui, d: &Deck, width: f32) -> Option<DeckClick> {
 /// and length; the reads underneath; a progress bar on the one being read.
 fn track_list(ui: &mut egui::Ui, d: &Disc, time: f64) {
     let p = theme::pal(ui);
+    if let Some(alert) = &d.alert {
+        egui::Frame::new()
+            .fill(theme::WARN.gamma_multiply(0.12))
+            .stroke(egui::Stroke::new(1.0, theme::WARN.gamma_multiply(0.6)))
+            .corner_radius(12.0)
+            .inner_margin(egui::Margin::symmetric(14, 10))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("!").font(theme::bold(20.0)).color(theme::WARN));
+                    ui.add_space(6.0);
+                    ui.add(egui::Label::new(egui::RichText::new(alert).color(p.text)).wrap());
+                });
+            });
+        ui.add_space(8.0);
+    }
     ui.label(egui::RichText::new(summary_line(d)).font(theme::medium(15.0)).color(p.text));
     if !d.album_dir.is_empty() {
         ui.label(egui::RichText::new(&d.album_dir).small().color(p.faint)).on_hover_text("Where the FLAC files go");

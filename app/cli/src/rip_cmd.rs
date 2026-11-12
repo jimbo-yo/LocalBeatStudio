@@ -183,6 +183,18 @@ impl Frontend for Printer {
             Event::DiscDone { .. } => {}
             Event::DiscFailed(e) => println!("\nerror: {e}\nThat disc didn't finish; carrying on."),
             Event::DiscStopped => println!("\nStopped that disc; ejecting it."),
+            Event::RepairStart => println!("\nRepairing the rejected tracks with the CUETools database..."),
+            Event::Repaired { position } => println!("  track {position}: repaired and verified, now in the library"),
+            Event::RepairDone { repaired, missing } => {
+                if missing.is_empty() {
+                    println!("Every track is in the library ({} repaired).", repaired.len());
+                } else {
+                    println!(
+                        "Still missing: track(s) {:?}. Clean the disc (wipe straight out from the centre) and rip it again: only those are read, and the new reads are added to these for another repair.",
+                        missing
+                    );
+                }
+            }
             Event::Note(n) => println!("  note: {n}"),
         }
     }

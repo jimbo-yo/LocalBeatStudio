@@ -2331,6 +2331,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cdtoc",
+ "chrono",
  "claxon",
  "crc32fast",
  "dirs",

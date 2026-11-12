@@ -189,14 +189,20 @@ fn try_vote(reads: &[Vec<u32>], t: &TrackPlan, db: &DiscEntries) -> Result<(u8, 
     }
 }
 
-/// Saves the clean reads of a track the vote couldn't rescue, as raw PCM
-/// (16-bit stereo, 44.1 kHz), for trying other repairs later.
+/// Saves the clean reads of a track that couldn't be verified, as raw PCM
+/// (16-bit stereo, 44.1 kHz), for the CUETools repair. Reads from earlier
+/// rips of the disc are kept: new ones take the next free numbers, so a
+/// re-rip after cleaning adds to them and the repair votes over all.
 fn keep_reads(dir: &Path, t: &TrackPlan, reads: &[Vec<u32>]) -> Result<PathBuf> {
     let dir = dir.join(format!("track{:02}", t.position));
     std::fs::create_dir_all(&dir)?;
-    for (i, r) in reads.iter().enumerate() {
+    let mut next = 1;
+    for r in reads {
+        while dir.join(format!("read{next}.raw")).exists() {
+            next += 1;
+        }
         let bytes: Vec<u8> = r.iter().flat_map(|f| f.to_le_bytes()).collect();
-        std::fs::write(dir.join(format!("read{}.raw", i + 1)), bytes)?;
+        std::fs::write(dir.join(format!("read{next}.raw")), bytes)?;
     }
     Ok(dir)
 }
@@ -267,7 +273,7 @@ pub fn rip(
         // Clean reads kept for sector voting, and the audio a vote produced.
         let mut clean_reads: Vec<Vec<u32>> = Vec::new();
         let mut voted: Option<Vec<u32>> = None;
-        let in_ar = ctx.accuraterip.is_some_and(|db| db.tracks.get(t.position - 1).is_some_and(|m| !m.is_empty()));
+
         let mut limit = s.reads.max(1);
         let mut read = 0;
         let mut gave_up = 0;
@@ -302,7 +308,9 @@ pub fn rip(
                 },
                 if clean { String::new() } else { format!(", {} unreadable sectors", r.unreadable.len()) }
             );
-            if clean && in_ar {
+            // Kept for the sector vote (AccurateRip discs) and the CUETools
+            // repair (any disc).
+            if clean {
                 clean_reads.push(r.frames.clone());
             }
             if clean {
@@ -404,7 +412,7 @@ pub fn rip(
                 if let Err(e) = &saved {
                     on(Event::Note(format!("couldn't save the rejected read of track {}: {e:#}", t.position)));
                 }
-                if clean_reads.len() >= 3 {
+                if !clean_reads.is_empty() {
                     match keep_reads(&dir.join("reads"), t, &clean_reads) {
                         Ok(d) => {
                             let _ = writeln!(sum.log, "Track {:>2}: its {} clean reads are kept in {} (for repair attempts)", t.position, clean_reads.len(), d.display());
@@ -569,7 +577,11 @@ mod tests {
         assert!(!p.tracks[1].dest.exists());
         assert!(s.rejected_dir().join("Unknown Artist - Test Album").join("02. Unknown Artist - Track 2.flac").exists());
         let log = std::fs::read_to_string(p.album_dir.join("Test Album.log")).unwrap();
-        assert!(log.contains("REJECTED after 4 reads"), "{log}");
+        // Reads differing in one sector earn 4 extra reads; all 8 are kept
+        // for the CUETools repair (no AccurateRip needed for that).
+        assert!(log.contains("REJECTED after 8 reads"), "{log}");
+        let reads_dir = s.rejected_dir().join("Unknown Artist - Test Album").join("reads").join("track02");
+        assert_eq!(std::fs::read_dir(&reads_dir).unwrap().count(), 8);
 
         // Audio in the file is the offset-corrected read.
         let (_, frames) = crate::flacfile::read_cd_audio(&p.tracks[0].dest).unwrap();
