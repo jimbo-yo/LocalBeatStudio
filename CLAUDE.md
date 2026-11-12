@@ -792,6 +792,15 @@ exit-code-52 errors) was removed.
   lookup per disc, ctdb::has_parity): a track out of reads gets 4 more even
   when the reads differ widely (the AR-vote rule only extends below 5% of
   sectors differing)
+- **Repairs page** (2026-11-12, gui/repairs_tab.rs): every disc in
+  `<cache>/rejected` (repair_disc::damaged_discs, album from the rejected
+  FLACs' ALBUMARTIST/ALBUM), missing tracks with read counts, the last
+  repair in words (`repair.json` next to the reads, repair_disc::save_record,
+  also appended to the album's rip log), Try repair again (background),
+  Clear leftovers (only when nothing is missing), sidebar count. The rip's
+  log lines now say per track "repaired and verified" / "still missing" and
+  "Repair finished: N of M repaired". Demo: LOCALBEAT_DEMO=repairs.
+  2026-11-12: 14 discs listed (many rejected before reads were kept)
 - **Next: port CTDB parity repair. Design, protocol, Grace test data and
   plan: `docs/ctdb-repair.md`** (start with the track 1/10 CRC edge rule)
 

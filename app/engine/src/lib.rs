@@ -481,6 +481,13 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
                 for l in &r.log {
                     fe.event(Event::Note(l.clone()));
                 }
+                for (t, words) in r.record().tracks {
+                    fe.event(Event::Note(format!("Repair: track {t} {words}")));
+                }
+                fe.event(Event::Note(format!("Repair finished: {}", r.summary())));
+                if let Err(e) = localbeat_core::repair_disc::save_record(&r, &plan.album_dir, &dir, &plan.disc_suffix) {
+                    fe.event(Event::Note(format!("couldn't save the repair record: {e:#}")));
+                }
                 let repaired: Vec<usize> = r.tracks.iter().filter(|t| t.written.is_some()).map(|t| t.position).collect();
                 for &p in &repaired {
                     fe.event(Event::Repaired { position: p });

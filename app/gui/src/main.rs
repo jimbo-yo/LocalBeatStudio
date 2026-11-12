@@ -24,12 +24,14 @@ mod cover_cache;
 mod library_ui;
 mod media_keys;
 mod phone_tab;
+mod repairs_tab;
 mod review_tab;
 mod theme;
 
 #[derive(PartialEq, Clone, Copy)]
 enum Tab {
     Library,
+    Repairs,
     Rip,
     Phone,
     Review,
@@ -226,6 +228,7 @@ struct App {
     tab: Tab,
     phone: phone_tab::PhoneTab,
     review: review_tab::ReviewTab,
+    repairs: repairs_tab::RepairsTab,
     /// Running Ejects: drive (None = every idle drive) and the result.
     eject: Vec<(Option<String>, Receiver<Vec<String>>)>,
     /// The music library, the player and their pages.
@@ -278,6 +281,7 @@ impl App {
             tab: Tab::Library,
             phone: phone_tab::PhoneTab::new(),
             review: review_tab::ReviewTab::new(),
+            repairs: repairs_tab::RepairsTab::new(),
             eject: Vec::new(),
             drive_action: None,
         };
@@ -316,6 +320,7 @@ impl App {
             app.library.set_demo_volume();
             app.tab = match demo.as_str() {
                 "phone" => Tab::Phone,
+                "repairs" => Tab::Repairs,
                 "review" => Tab::Review,
                 "1" | "sr2" | "choice" | "alert" => Tab::Rip,
                 _ => Tab::Library,
@@ -593,6 +598,16 @@ impl App {
             if theme::nav_item(ui, theme::Icon::Tag, "Review tags", self.tab == Tab::Review, None).clicked() {
                 self.tab = Tab::Review;
             }
+            let damaged = self.repairs.count();
+            let n = damaged.to_string();
+            let status = (damaged > 0).then_some((n.as_str(), theme::WARN));
+            if theme::nav_item(ui, theme::Icon::Refresh, "Repairs", self.tab == Tab::Repairs, status)
+                .on_hover_text("Discs with tracks that couldn't be read cleanly")
+                .clicked()
+            {
+                self.tab = Tab::Repairs;
+                self.repairs.stale = true;
+            }
 
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                 if theme::nav_item(ui, theme::Icon::Log, "Activity log", self.show_log, None).clicked() {
@@ -851,6 +866,7 @@ impl App {
                 }
             }
             Event::RepairDone { repaired, missing } => {
+                self.repairs.stale = true;
                 let list = |v: &[usize]| v.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ");
                 if let Some(d) = &mut self.disc {
                     if missing.is_empty() {
@@ -971,6 +987,10 @@ impl App {
         for line in self.review.poll(ctx) {
             self.log(line);
         }
+        let settings = self.settings.clone();
+        for line in self.repairs.poll(&settings, ctx) {
+            self.log(line);
+        }
         for line in self.library.poll(ctx) {
             self.log(line);
         }
@@ -1035,6 +1055,18 @@ impl App {
                     .show(ui, |ui| self.library.queue_panel(ui));
             }
             egui::CentralPanel::default().frame(page).show(ui, |ui| self.library.page_ui(ui));
+            self.choice_window(ctx);
+            return;
+        }
+        if self.tab == Tab::Repairs {
+            let mut lines = Vec::new();
+            egui::CentralPanel::default().frame(page).show(ui, |ui| {
+                theme::page_header(ui, "Repairs", "Discs with tracks that couldn't be read cleanly, and what the CUETools repair could do", |_| {});
+                lines = self.repairs.ui(ui, &self.settings);
+            });
+            for l in lines {
+                self.log(l);
+            }
             self.choice_window(ctx);
             return;
         }

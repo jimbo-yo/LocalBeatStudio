@@ -27,6 +27,11 @@ pub fn run(album: PathBuf, reads: Option<PathBuf>, write: bool) -> Result<bool> 
     for toc in tocs {
         let t0 = std::time::Instant::now();
         let r = repair_disc::repair_disc(&s, &album, &toc, rejected.as_deref(), write)?;
+        if write {
+            if let Some(rej) = &rejected {
+                repair_disc::save_record(&r, &album, rej, "")?;
+            }
+        }
         for l in &r.log {
             println!("{l}");
         }

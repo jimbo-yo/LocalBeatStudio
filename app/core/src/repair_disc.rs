@@ -359,3 +359,167 @@ fn write_track(dest: &Path, tag_source: &Path, frames: &[u32], note: &str, backu
     std::fs::rename(&tmp, dest).with_context(|| format!("putting {name} in place"))?;
     Ok(())
 }
+
+// ---------------------------------------------------------------- records
+
+/// What the last repair of a disc did, kept as `repair.json` in the disc's
+/// rejected folder (the Repairs page shows it).
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct RepairRecord {
+    /// "2026-11-12 15:04"
+    pub when: String,
+    /// "CUETools entry 11287614 (confirmed by 1)", or why there was no repair.
+    pub entry: String,
+    pub damaged_columns: usize,
+    pub fixed_columns: usize,
+    /// (track, outcome in words), for the tracks that weren't already in the album.
+    pub tracks: Vec<(usize, String)>,
+    pub repaired: Vec<usize>,
+    pub missing: Vec<usize>,
+}
+
+fn verdict_words(v: Option<Verdict>) -> String {
+    match v {
+        Some(Verdict::Match { confidence, .. }) => format!("AccurateRip {confidence}"),
+        Some(Verdict::NoMatch) => "AccurateRip: no match".into(),
+        _ => "not in AccurateRip".into(),
+    }
+}
+
+impl DiscRepair {
+    /// The plain-words record of this repair.
+    pub fn record(&self) -> RepairRecord {
+        let mut r = RepairRecord {
+            when: chrono::Local::now().format("%Y-%m-%d %H:%M").to_string(),
+            entry: match self.entry {
+                Some((id, conf, npar, shift)) => format!("CUETools entry {id} (confirmed by {conf}, parity {npar}, {shift:+} samples)"),
+                None => self.log.last().cloned().unwrap_or_else(|| "no CUETools repair data".into()),
+            },
+            damaged_columns: self.report.bad_columns,
+            fixed_columns: self.report.fixed_columns,
+            ..Default::default()
+        };
+        for t in self.tracks.iter().filter(|t| t.source != Source::Album) {
+            let reads = match t.source {
+                Source::Reads(n) => format!("{n} reads"),
+                _ => "one read".into(),
+            };
+            let words = if t.written.is_some() {
+                format!("repaired and verified ({}; from {reads})", verdict_words(t.accuraterip))
+            } else if t.verified {
+                format!("verified but not written (from {reads})")
+            } else {
+                format!("still missing (CUETools: {}, {}; from {reads})", if t.ctdb_match { "matches" } else { "no match" }, verdict_words(t.accuraterip))
+            };
+            r.tracks.push((t.position, words));
+        }
+        r.repaired = self.tracks.iter().filter(|t| t.written.is_some()).map(|t| t.position).collect();
+        r.missing = self.still_missing();
+        r
+    }
+
+    /// One line: "1 of 7 repaired; still missing: 5, 7, 8".
+    pub fn summary(&self) -> String {
+        let rec = self.record();
+        let n = rec.repaired.len() + rec.missing.len();
+        let list = |v: &[usize]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", ");
+        match (rec.repaired.is_empty(), rec.missing.is_empty()) {
+            (_, true) => format!("all {n} repaired"),
+            (true, false) => format!("none of {n} could be repaired; still missing: {}", list(&rec.missing)),
+            (false, false) => format!("{} of {n} repaired ({}); still missing: {}", rec.repaired.len(), list(&rec.repaired), list(&rec.missing)),
+        }
+    }
+}
+
+/// Saves the record next to the reads and adds a section to the album's
+/// rip log (`<Album>[ CDn].log`).
+pub fn save_record(r: &DiscRepair, album: &Path, rejected: &Path, disc_suffix: &str) -> Result<()> {
+    let rec = r.record();
+    std::fs::create_dir_all(rejected)?;
+    std::fs::write(rejected.join("repair.json"), serde_json::to_vec_pretty(&rec)?)?;
+    if album.is_dir() {
+        use std::io::Write;
+        let name = album.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(album.join(format!("{name}{disc_suffix}.log")))?;
+        writeln!(f, "== CUETools repair, {} ==", rec.when)?;
+        writeln!(f, "{}", rec.entry)?;
+        if rec.damaged_columns > 0 {
+            writeln!(f, "Damaged columns: {}, fixed {}", rec.damaged_columns, rec.fixed_columns)?;
+        }
+        for (t, words) in &rec.tracks {
+            writeln!(f, "Track {t:>2}: {words}")?;
+        }
+        writeln!(f, "Result: {}\n", r.summary())?;
+    }
+    Ok(())
+}
+
+/// A disc with leftovers in the rejected folder: tracks still missing (or,
+/// once all are in the album, leftovers to clear).
+#[derive(Debug, Clone)]
+pub struct DamagedDisc {
+    /// `<cache>/rejected/<Artist - Album[ CDn]>`
+    pub rejected: PathBuf,
+    pub album: PathBuf,
+    pub artist: String,
+    pub title: String,
+    pub cdtoc: Option<String>,
+    pub disc_suffix: String,
+    /// Tracks not in the album yet, with how many reads are saved for each.
+    pub missing: Vec<(usize, usize)>,
+    pub last: Option<RepairRecord>,
+}
+
+/// Every disc in `<cache>/rejected`, from its rejected FLACs' tags.
+pub fn damaged_discs(s: &Settings) -> Vec<DamagedDisc> {
+    let mut out = Vec::new();
+    let Ok(rd) = std::fs::read_dir(s.rejected_dir()) else { return out };
+    for e in rd.flatten() {
+        let dir = e.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let flacs: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .map(|r| r.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("flac"))).collect())
+            .unwrap_or_default();
+        let tags = flacs.iter().find_map(|p| flacfile::read_tags(p).ok());
+        let get = |k: &str| tags.as_ref().and_then(|t| t.tag(k)).unwrap_or("").to_string();
+        let artist = get("ALBUMARTIST");
+        let artist = if artist.is_empty() { get("ARTIST") } else { artist };
+        let title = get("ALBUM");
+        let cdtoc = tags.as_ref().and_then(|t| t.tag("CDTOC")).map(str::to_string);
+        let disc_total: usize = get("DISCTOTAL").parse().unwrap_or(1);
+        let disc_suffix = if disc_total > 1 { format!(" CD{}", get("DISCNUMBER").split('/').next().unwrap_or("1")) } else { String::new() };
+        let album = s.flac_dir.join(crate::naming::safe_component(&artist)).join(crate::naming::safe_component(&title));
+        // Tracks with a rejected copy or saved reads, minus those in the album now.
+        let in_album = cdtoc.as_deref().map(|c| flacs_by_track(&album, c).unwrap_or_default()).unwrap_or_default();
+        let mut tracks: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+        for p in &flacs {
+            if let Some(n) = flacfile::read_tags(p).ok().and_then(|t| t.track_number()) {
+                tracks.entry(n).or_insert(0);
+            }
+        }
+        if let Ok(rd) = std::fs::read_dir(dir.join("reads")) {
+            for e in rd.flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if let Some(n) = name.strip_prefix("track").and_then(|x| x.parse::<usize>().ok()) {
+                    let count = std::fs::read_dir(e.path()).map(|r| r.flatten().filter(|f| f.path().extension().is_some_and(|x| x == "raw")).count()).unwrap_or(0);
+                    tracks.insert(n, count);
+                }
+            }
+        }
+        let missing: Vec<(usize, usize)> = tracks.into_iter().filter(|(n, _)| !in_album.contains_key(n)).collect();
+        let last = std::fs::read(dir.join("repair.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
+        out.push(DamagedDisc { rejected: dir, album, artist, title, cdtoc, disc_suffix, missing, last });
+    }
+    out.sort_by(|a, b| (a.missing.is_empty(), &a.artist, &a.title).cmp(&(b.missing.is_empty(), &b.artist, &b.title)));
+    out
+}
+
+/// Removes a disc's rejected folder (leftovers of tracks now in the album).
+pub fn clear_leftovers(d: &DamagedDisc) -> Result<()> {
+    if !d.missing.is_empty() {
+        bail!("tracks are still missing: keep their reads");
+    }
+    std::fs::remove_dir_all(&d.rejected).with_context(|| format!("removing {}", d.rejected.display()))
+}
