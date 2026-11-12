@@ -788,6 +788,10 @@ exit-code-52 errors) was removed.
   ranges); the repair votes only over reads that have each word, a word
   none has being an erasure (vote_words_gaps). Soul Coughing "Irresistible
   Bliss" track 1 (stalled -> rest of track skipped twice) is the test
+- Extra reads for the repair (2026-11-12): RipContext.ctdb_parity (one CTDB
+  lookup per disc, ctdb::has_parity): a track out of reads gets 4 more even
+  when the reads differ widely (the AR-vote rule only extends below 5% of
+  sectors differing)
 - **Next: port CTDB parity repair. Design, protocol, Grace test data and
   plan: `docs/ctdb-repair.md`** (start with the track 1/10 CRC edge rule)
 

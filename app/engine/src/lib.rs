@@ -412,12 +412,15 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
         if let Some(r) = &release {
             header.push_str(&format!("Release: {} [{}]\n", r.summary(), r.id));
         }
+        // Can the CUETools database repair this disc, if it comes to that?
+        let ctdb_parity = localbeat_core::ctdb::has_parity(&toc.to_string());
         let ctx = RipContext {
             settings: s,
             offset,
             accuraterip: entries.as_ref(),
             cover: cover.as_deref(),
             log_header: header,
+            ctdb_parity,
         };
 
         fe.event(Event::Stage("Ripping".into()));

@@ -165,6 +165,10 @@ pub struct RipContext<'a> {
     pub cover: Option<&'a Picture>,
     /// First lines of the log (date, drive, release...), written by the caller.
     pub log_header: String,
+    /// The CUETools database has repair data for this disc: a track that
+    /// can't be verified gets the extra reads anyway (the repair votes over
+    /// every read, however different they are).
+    pub ctdb_parity: bool,
 }
 
 /// Reads added for sector voting when a damaged track runs out of reads.
@@ -413,6 +417,13 @@ pub fn rip(
                     limit += EXTRA_VOTE_READS;
                 }
             }
+            // Still out of reads: if the CUETools repair can have a go, more
+            // reads give it more to vote on, however much they differ.
+            if read == limit && limit == s.reads.max(1) && ctx.ctdb_parity {
+                let _ = writeln!(sum.log, "Track {:>2}: {EXTRA_VOTE_READS} more reads for the CUETools repair", t.position);
+                on(Event::Note(format!("track {}: up to {EXTRA_VOTE_READS} more reads for the CUETools repair", t.position)));
+                limit += EXTRA_VOTE_READS;
+            }
         }
         let mut r = last.expect("at least one read");
         if let Some(frames) = voted {
@@ -582,6 +593,22 @@ mod tests {
     }
 
     #[test]
+    fn widely_differing_reads_get_extra_reads_only_for_a_ctdb_repair() {
+        // Track 2 (sectors 40..80) differs in many sectors on every read.
+        let flaky: Vec<u32> = (42..78).step_by(2).collect();
+        for (parity, want) in [(false, 4), (true, 8)] {
+            let (s, root) = setup(if parity { "ctdb-more" } else { "ctdb-none" });
+            let p = plan(&toc(), &Metadata::Unknown { album: "Test Album".into() }, &s.flac_dir);
+            let mut disc = FakeDisc { sectors: 120, flaky: flaky.clone(), bad: vec![], reads: 0 };
+            let ctx = RipContext { settings: &s, offset: 0, accuraterip: None, cover: None, log_header: String::new(), ctdb_parity: parity };
+            let sum = rip(&mut disc, &p, &ctx, &mut |_| {}).unwrap();
+            assert_eq!(sum.rejected, [2]);
+            assert!(sum.log.contains(&format!("Track  2: REJECTED after {want} reads")), "{}", sum.log);
+            std::fs::remove_dir_all(&root).ok();
+        }
+    }
+
+    #[test]
     fn rips_verifies_and_resumes() {
         let (s, root) = setup("basic");
         let toc = toc();
@@ -592,7 +619,7 @@ mod tests {
 
         // Track 2 is flaky (never reads the same twice) -> rejected.
         let mut disc = FakeDisc { sectors: 120, flaky: vec![55], bad: vec![], reads: 0 };
-        let ctx = RipContext { settings: &s, offset: 0, accuraterip: None, cover: None, log_header: String::new() };
+        let ctx = RipContext { settings: &s, offset: 0, accuraterip: None, cover: None, log_header: String::new(), ctdb_parity: false };
         let mut events = Vec::new();
         let sum = rip(&mut disc, &p, &ctx, &mut |e| {
             if let Event::Accepted { position, how, .. } = e {
@@ -641,7 +668,7 @@ mod tests {
         // Track 3 has a sector that always fails: identical (silent) reads
         // must not be accepted as a repeat.
         let mut disc = FakeDisc { sectors: 120, flaky: vec![], bad: vec![100], reads: 0 };
-        let ctx = RipContext { settings: &s, offset: 0, accuraterip: Some(&entries), cover: None, log_header: String::new() };
+        let ctx = RipContext { settings: &s, offset: 0, accuraterip: Some(&entries), cover: None, log_header: String::new(), ctdb_parity: false };
         let mut reads_of_1 = 0;
         let sum = rip(&mut disc, &p, &ctx, &mut |e| {
             if let Event::ReadStart { position: 1, .. } = e {
@@ -680,7 +707,7 @@ mod tests {
             };
 
             let mut disc = FakeDisc { sectors: 1500, flaky: vec![], bad: vec![], reads: 0 };
-            let ctx = RipContext { settings: &s, offset: 0, accuraterip: Some(&entries), cover: None, log_header: String::new() };
+            let ctx = RipContext { settings: &s, offset: 0, accuraterip: Some(&entries), cover: None, log_header: String::new(), ctdb_parity: false };
             let mut how = None;
             let mut reads_of_2 = 0;
             rip(&mut disc, &p, &ctx, &mut |e| match e {
@@ -731,7 +758,7 @@ mod tests {
         let entries = DiscEntries { tracks: vec![BTreeMap::new(), BTreeMap::from([(sums.v2, 30u8)]), BTreeMap::new()], ..Default::default() };
 
         let mut disc = Scratched { disc: FakeDisc { sectors: 120, flaky: vec![], bad: vec![], reads: 0 }, passes: 0 };
-        let ctx = RipContext { settings: &s, offset: 0, accuraterip: Some(&entries), cover: None, log_header: String::new() };
+        let ctx = RipContext { settings: &s, offset: 0, accuraterip: Some(&entries), cover: None, log_header: String::new(), ctdb_parity: false };
         let mut how = None;
         rip(&mut disc, &p, &ctx, &mut |e| {
             if let Event::Accepted { position: 2, how: h, .. } = e {

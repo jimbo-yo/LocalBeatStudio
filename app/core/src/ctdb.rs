@@ -102,6 +102,22 @@ pub fn toc_string(starts: &[u32], leadout: u32) -> String {
     starts.iter().chain(std::iter::once(&leadout)).map(|s| (s - first).to_string()).collect::<Vec<_>>().join(":")
 }
 
+/// TOC string from a CDTOC tag / `Toc` display ("N+start...+leadout", hex).
+pub fn toc_from_cdtoc(cdtoc: &str) -> Result<String> {
+    let parts: Vec<u32> = cdtoc.split('+').map(|h| u32::from_str_radix(h, 16)).collect::<Result<_, _>>().map_err(|e| anyhow!("bad CDTOC {cdtoc:?}: {e}"))?;
+    let n = *parts.first().ok_or_else(|| anyhow!("empty CDTOC"))? as usize;
+    if parts.len() < n + 2 {
+        return Err(anyhow!("CDTOC {cdtoc:?} is too short"));
+    }
+    Ok(toc_string(&parts[1..=n], parts[n + 1]))
+}
+
+/// Whether the database has repair data for this disc (any entry with
+/// parity). False if it can't be asked.
+pub fn has_parity(cdtoc: &str) -> bool {
+    toc_from_cdtoc(cdtoc).and_then(|t| lookup(&t)).is_ok_and(|e| e.iter().any(|x| x.parity_url.is_some()))
+}
+
 /// TOC string for back-to-back tracks of these lengths (stereo samples):
 /// a whole disc ripped by LocalBeat Studio, no data tracks.
 pub fn toc_from_lengths(lengths: &[usize]) -> Result<String> {
@@ -208,6 +224,7 @@ mod tests {
 
     #[test]
     fn toc_strings() {
+        assert_eq!(toc_from_cdtoc("2+96+3E8+BB8").unwrap(), "0:850:2850");
         assert_eq!(toc_string(&[150, 1150], 3150), "0:1000:3000");
         assert_eq!(toc_from_lengths(&[588 * 1000, 588 * 2000]).unwrap(), "0:1000:3000");
         assert!(toc_from_lengths(&[100]).is_err());
