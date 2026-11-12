@@ -67,6 +67,21 @@ fn check(dir: &Path) -> Result<bool> {
             let whole = if e.crc32 == disc_crc { "  WHOLE DISC MATCHES" } else { "" };
             println!("  entry {:>9}  confirmed by {:>5}  {parity:>9}  tracks {marks} ({hits}/{}){whole}", e.id, e.confidence, ours.len());
         }
+        // Parity: compare our columns with the best-confirmed entry that has it.
+        let hits = |e: &ctdb::Entry| ours.iter().zip(&e.track_crcs).filter(|(a, b)| a == b).count();
+        if let Some(e) = entries.iter().filter(|e| e.parity_url.is_some()).max_by_key(|e| (hits(e), e.confidence)) {
+            let t = std::time::Instant::now();
+            let words = ctdb::disc_words(&refs);
+            let npar = e.npar as usize;
+            let ours = ctdb::column_syndromes(&words, npar);
+            match ctdb::fetch_parity(e) {
+                Ok(theirs) => {
+                    let m = ctdb::matching_columns(&ours, &theirs, npar);
+                    println!("  parity of entry {} (npar {npar}): {m} of {} columns agree at offset 0 ({:.1} s)", e.id, ctdb::STRIDE, t.elapsed().as_secs_f64());
+                }
+                Err(err) => println!("  parity of entry {}: {err:#}", e.id),
+            }
+        }
         let others = entries.len() - shown;
         if others > 0 {
             println!("  ({others} more single submissions that match none of our tracks)");

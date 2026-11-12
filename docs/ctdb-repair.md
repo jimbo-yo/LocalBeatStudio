@@ -68,11 +68,27 @@ Reference implementation (LGPL): github.com/gchudov/cuetools.net
    Grace; whole-disc CRC matches an entry on 21+ of our CD rips (Born to Run,
    Pulp Fiction, Portishead, ...): `localbeat ctdb ALBUM` prints WHOLE DISC
    MATCHES
-2. Port Galois16 + syndrome calculation; check: our syndromes for a clean
+2. (part done 2026-11-12) Port Galois16 + syndrome calculation; check: our syndromes for a clean
    disc (OK Computer, all AR-verified) equal the database's (no errors).
 3. Port RsDecode (Berlekamp-Massey, Chien, Forney); repair Grace from the
    library FLACs + saved reads; result must match CTDB crc32 and AccurateRip.
 4. `ripshelf repair DIR` (CLI), then in the rip: after AR fails, try CTDB.
+
+## Parity, as found (2026-11-12)
+
+- The parity file IS the syndromes (`Syndrome2Bytes` of `GetSyndrome`):
+  `npar` blocks of 11760 little-endian words (Grace npar 16: 376320 bytes).
+- Column j = words j + r*11760 for rows r = 1..=stridecount (lead-in row 0
+  and the last laststride words are not in the code: `doPar` in
+  CalculateCRCs). syn_i = Σ_r word · α^(i·(stridecount − r)) (Horner down
+  the rows), GF(2^16) poly 0x1100B. Ours == theirs => that column is right.
+- Grace vs entry 11118 at offset 0: 11666 / 11760 columns agree; the rest
+  are tracks 5/6 (known misreads). `localbeat ctdb ALBUM` prints this
+- Next: FindOffset (other alignments: OK Computer's entry 2013), speed
+  (~24 s for npar 16 in release; fine for now), then the decoder
+- Bolero: the HP read it fine (2026-11-12; the SuperDrive was failing: it
+  also spat out good discs). So the HP rip is ground truth for repairing
+  the SuperDrive's 8 saved reads of tracks 1-4
 
 ## Bolero (test disc for repair, 2026-11-12)
 

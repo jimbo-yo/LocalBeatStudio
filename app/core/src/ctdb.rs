@@ -228,3 +228,118 @@ mod tests {
         assert!(e[1].track_crcs.is_empty());
     }
 }
+
+// ---------------------------------------------------------------- parity
+
+/// GF(2^16) with CUETools' polynomial (x^16 + x^12 + x^3 + x + 1), as log /
+/// antilog tables; `exp` is doubled so sums of two logs need no modulo.
+pub struct Gf16 {
+    pub exp: Vec<u16>,
+    pub log: Vec<u16>,
+}
+
+pub const GF_MAX: usize = 65535;
+
+pub fn gf() -> &'static Gf16 {
+    static GF: std::sync::OnceLock<Gf16> = std::sync::OnceLock::new();
+    GF.get_or_init(|| {
+        let mut exp = vec![0u16; GF_MAX * 2];
+        let mut log = vec![0u16; GF_MAX + 1];
+        let mut d: u32 = 1;
+        for i in 0..GF_MAX {
+            exp[i] = d as u16;
+            exp[GF_MAX + i] = d as u16;
+            log[d as usize] = i as u16;
+            d <<= 1;
+            if d & 0x10000 != 0 {
+                d = (d ^ 0x1100B) & 0xFFFF;
+            }
+        }
+        Gf16 { exp, log }
+    })
+}
+
+impl Gf16 {
+    pub fn mul(&self, a: u16, b: u16) -> u16 {
+        if a == 0 || b == 0 { 0 } else { self.exp[self.log[a as usize] as usize + self.log[b as usize] as usize] }
+    }
+    /// a * α^e
+    pub fn mul_exp(&self, a: u16, e: usize) -> u16 {
+        if a == 0 { 0 } else { self.exp[self.log[a as usize] as usize + e % GF_MAX] }
+    }
+    pub fn div(&self, a: u16, b: u16) -> u16 {
+        if a == 0 { 0 } else { self.exp[self.log[a as usize] as usize + GF_MAX - self.log[b as usize] as usize] }
+    }
+}
+
+/// The disc as 16-bit words (L, R, L, R...), all tracks back to back.
+pub fn disc_words(tracks: &[&[u32]]) -> Vec<u16> {
+    let mut out = Vec::with_capacity(tracks.iter().map(|t| t.len() * 2).sum());
+    for t in tracks {
+        for f in *t {
+            out.push(*f as u16);
+            out.push((*f >> 16) as u16);
+        }
+    }
+    out
+}
+
+/// Syndromes of each column of `words` (a whole disc, the layout's length),
+/// `npar` per column: syn[col * npar + i] = Σ over rows 1..=stridecount of
+/// word(row, col) · α^(i · (stridecount - row)). The lead-in row and the
+/// last row(s) aren't in the code. These are what CTDB's parity file holds
+/// for a disc it knows; ours XOR theirs is the syndrome of our errors.
+pub fn column_syndromes(words: &[u16], npar: usize) -> Vec<u16> {
+    let layout = Layout::new((words.len() / 2) as u64);
+    let g = gf();
+    let mut syn = vec![0u16; STRIDE * npar];
+    for row in 1..=layout.stridecount {
+        let base = row * STRIDE;
+        for col in 0..STRIDE {
+            let d = words[base + col];
+            let s = &mut syn[col * npar..col * npar + npar];
+            for (i, v) in s.iter_mut().enumerate() {
+                let shifted = if *v == 0 { 0 } else { g.exp[g.log[*v as usize] as usize + i] };
+                *v = shifted ^ d;
+            }
+        }
+    }
+    syn
+}
+
+/// A downloaded parity file (`npar` blocks of STRIDE little-endian words)
+/// as syn[col * npar + i], the layout of [`column_syndromes`].
+pub fn parse_parity(bytes: &[u8], npar: usize) -> Result<Vec<u16>> {
+    if bytes.len() < npar * STRIDE * 2 {
+        return Err(anyhow!("parity file too short: {} bytes for npar {npar}", bytes.len()));
+    }
+    let mut syn = vec![0u16; STRIDE * npar];
+    for i in 0..npar {
+        for col in 0..STRIDE {
+            let k = (i * STRIDE + col) * 2;
+            syn[col * npar + i] = u16::from_le_bytes([bytes[k], bytes[k + 1]]);
+        }
+    }
+    Ok(syn)
+}
+
+/// Downloads an entry's parity file.
+pub fn fetch_parity(entry: &Entry) -> Result<Vec<u16>> {
+    let url = entry.parity_url.as_ref().ok_or_else(|| anyhow!("entry {} has no parity", entry.id))?;
+    let mut body = Vec::new();
+    use std::io::Read;
+    crate::http::agent()
+        .get(url)
+        .call()
+        .context("downloading CTDB parity")?
+        .body_mut()
+        .as_reader()
+        .read_to_end(&mut body)?;
+    parse_parity(&body, entry.npar as usize)
+}
+
+/// How our disc compares with an entry's parity: columns whose syndromes
+/// agree exactly, out of STRIDE.
+pub fn matching_columns(ours: &[u16], theirs: &[u16], npar: usize) -> usize {
+    ours.chunks(npar).zip(theirs.chunks(npar)).filter(|(a, b)| a == b).count()
+}
