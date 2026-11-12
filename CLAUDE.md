@@ -668,6 +668,12 @@ exit-code-52 errors) was removed.
   Event::DiscStopped, is ejected, saved tracks stay, the loop keeps watching;
   flag cleared at the next DiscStart) and **⏏ Eject** when idle
   (engine::eject_one). Not yet tried on a real rip
+- **Rips no longer make phone copies** (2026-11-12, user's choice): phone
+  sync converts from the library at sync time (it never read ~/Music/phone),
+  and the copies kept a drive's loop busy 1-2 min after the eject; pushing a
+  disc into the SuperDrive then met resistance and likely seated Bolero
+  badly / strained the mechanism (it then rejected good discs; Bolero reads
+  fine in the HP). The loop now watches the drive again right after eject
 - **Stalls on damaged spots** (2026-11-11, HP on a cleaned disc): each read
   the drive can't finish takes cd-da-reader's 30 s READ CD timeout, then a
   USB reset (`usb 2-1: reset` in journalctl -k); chunk + per-sector retries

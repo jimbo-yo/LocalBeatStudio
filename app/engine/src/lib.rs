@@ -14,7 +14,7 @@ use localbeat_core::flac_encode::Picture;
 use localbeat_core::musicbrainz::{self, Release};
 use localbeat_core::rip::{self, Acceptance, Metadata, RipContext};
 use localbeat_core::secure_read::SectorSource;
-use localbeat_core::{cover, lock, phone_copy};
+use localbeat_core::{cover, lock};
 use localbeat_platform::drive::{self, Drive, DriveIdentity};
 
 pub mod notify;
@@ -457,19 +457,10 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
         fe.event(Event::Ejected { ok });
     }
 
-    if plan.album_dir.is_dir() {
-        if let Ok(rel) = plan.album_dir.strip_prefix(&s.flac_dir) {
-            fe.event(Event::Stage("Making phone copies".into()));
-            let _phone = lock::lock(&s.cache_dir, "phone")?;
-            let stats = phone_copy::convert_tree(&plan.album_dir, &s.phone_dir.join(rel), s.opus_kbps, &|rel, r| {
-                fe.event(Event::PhoneFile {
-                    name: rel.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
-                    error: r.as_ref().err().map(|e| format!("{e:#}")),
-                })
-            })?;
-            fe.event(Event::PhoneDone { converted: stats.converted.len(), failed: stats.failed.len() });
-        }
-    }
+    // No phone copies here any more (2026-11-12): phone sync converts from
+    // the library at sync time, and making them held the drive for a minute
+    // or two after the eject (a disc pushed into the SuperDrive then met a
+    // mechanism that wasn't ready).
     fe.event(Event::DiscDone { ok });
     Ok(ok)
 }
