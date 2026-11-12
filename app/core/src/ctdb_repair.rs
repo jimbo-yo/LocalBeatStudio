@@ -167,6 +167,77 @@ pub fn decode_column_spare(syn: &[u16], erasures: &[usize], len: usize, spare: u
     Some(fixes)
 }
 
+/// How many errors Berlekamp-Massey needs to explain these syndromes (no
+/// erasures): the error locator's degree. Random syndromes give about
+/// npar/2; a column with k wrong words gives k (if k < npar/2).
+pub fn error_count(syn: &[u16]) -> usize {
+    let g = gf();
+    let n = syn.len();
+    if syn.iter().all(|&s| s == 0) {
+        return 0;
+    }
+    let mut lambda: Vec<u16> = vec![1];
+    let mut b: Vec<u16> = vec![1];
+    let mut l = 0usize;
+    let mut m = 1usize;
+    let mut bb: u16 = 1;
+    for r in 0..n {
+        let mut delta = 0u16;
+        for (i, &c) in lambda.iter().enumerate() {
+            if i <= r {
+                delta ^= g.mul(c, syn[r - i]);
+            }
+        }
+        if delta == 0 {
+            m += 1;
+            continue;
+        }
+        let coef = g.div(delta, bb);
+        let mut t = lambda.clone();
+        if t.len() < b.len() + m {
+            t.resize(b.len() + m, 0);
+        }
+        for (i, &c) in b.iter().enumerate() {
+            t[i + m] ^= g.mul(coef, c);
+        }
+        if 2 * l <= r {
+            l = r + 1 - l;
+            b = lambda;
+            bb = delta;
+            m = 1;
+        } else {
+            m += 1;
+        }
+        lambda = t;
+    }
+    l
+}
+
+/// The shift (words) at which a damaged disc lines up with an entry: the one
+/// where probe columns need the fewest corrections in all (CUETools'
+/// FindOffset fallback). None if no shift stands out from random.
+pub fn find_shift_damaged(words: &[u16], base: &[u16], theirs: &[u16], npar: usize) -> Option<isize> {
+    let probes: Vec<usize> = (0..48).map(|i| (i * 245 + 17) % STRIDE).collect();
+    let half = (STRIDE / 2) as isize;
+    let mut scores: Vec<(usize, isize)> = Vec::new();
+    let mut k = -half + 2;
+    while k < half {
+        let mut total = 0;
+        for &c in &probes {
+            let ours = crate::ctdb::shifted_column(words, base, npar, c, k);
+            let syn: Vec<u16> = ours.iter().zip(&theirs[c * npar..c * npar + npar]).map(|(a, b)| a ^ b).collect();
+            total += error_count(&syn);
+        }
+        scores.push((total, k));
+        k += 2;
+    }
+    scores.sort();
+    let (best, k) = scores[0];
+    let random = probes.len() * (npar / 2);
+    // Clearly below what random syndromes give, and clearly the best.
+    (best * 4 < random * 3 && scores.get(1).is_none_or(|s| s.0 > best + probes.len() / 4)).then_some(k)
+}
+
 /// Erasures only: the wrong words are exactly at `erasures` (no unknown
 /// errors). Values by Forney, then every syndrome must agree. Cheap: no
 /// search over the column.
@@ -479,6 +550,25 @@ mod tests {
         assert_eq!(rep.failed_columns, 0, "{rep:?}");
         assert_eq!(rep.bad_columns, 3);
         assert_eq!(bad, good);
+    }
+
+    #[test]
+    fn finds_the_shift_of_a_damaged_disc() {
+        let good = disc(80);
+        let npar = 8;
+        let k: isize = -2468;
+        // Their disc: ours shifted (their word p = our word p + k).
+        let theirs_disc: Vec<u16> = (0..good.len() as isize).map(|p| good[(p + k).clamp(0, good.len() as isize - 1) as usize]).collect();
+        let theirs = column_syndromes(&theirs_disc, npar);
+        // Our copy: damaged in every column (2 words each).
+        let mut ours = good.clone();
+        for c in 0..STRIDE {
+            ours[(5 + c % 30) * STRIDE + c] ^= 0x1357;
+            ours[(40 + c % 20) * STRIDE + c] ^= 0x2468;
+        }
+        let base = column_syndromes(&ours, npar);
+        assert_eq!(crate::ctdb::find_shift(&ours, &base, &theirs, npar), None, "no column is exact");
+        assert_eq!(find_shift_damaged(&ours, &base, &theirs, npar), Some(k));
     }
 
     #[test]

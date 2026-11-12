@@ -147,3 +147,20 @@ ACCURATERIP, plus `CTDBREPAIR=CUETools DB entry N, confirmed by C (...)`.
 Missing tracks are written under the rejected file's name and tags.
 **Grace written 2026-11-12**: So Real and Hallelujah repaired, both
 AccurateRip 200 too; the whole album matches CTDB entry 11118.
+
+## Damaged discs at another alignment (2026-11-12)
+
+`ctdb_repair::find_shift_damaged`: when no column matches exactly at any
+shift (damage everywhere), score each shift by the Berlekamp-Massey error
+count over 48 probe columns (random syndromes need ~npar/2 each; the true
+shift only the real damage); take the clear minimum. `localbeat repair`
+then repairs the disc shifted to the entry's alignment and maps changed
+words back; CTDB checksums are taken at the entry's alignment, AccurateRip
+at ours.
+**The Smiths, Best... I** (HP, diagonal scratch from track 5 outwards; CTDB
+entry 11287614, ONE submitter, npar 8): found at -1154 samples (all 7
+AR-verified tracks then match CTDB, so the alignment and their rip are
+right). 9513 of 11084 damaged columns fixed; track 6 repaired and
+AccurateRip 68: written. Tracks 5, 7, 8, 10, 11, 14 still short (track 7:
+~54k doubtful words). Next ideas: keep reads from several sessions (a
+re-rip now overwrites read1..8.raw) and vote over all of them

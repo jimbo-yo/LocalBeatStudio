@@ -133,23 +133,45 @@ pub fn run(album: PathBuf, reads: Option<PathBuf>, write: bool) -> Result<bool> 
             break;
         }
     }
-    // A damaged disc may line up with nothing exactly: then take the entry
-    // with exactly our TOC at shift 0 (TODO: search by fewest corrections).
+    // A damaged disc may line up with nothing exactly: then the shift where
+    // the columns need the fewest corrections.
     if chosen.is_none() {
-        if let Some(e) = entries.iter().filter(|e| e.parity_url.is_some()).max_by_key(|e| e.confidence) {
-            println!("nothing lines up exactly (damage everywhere): trying CUETools entry {} (confirmed by {}) at shift 0", e.id, e.confidence);
-            chosen = Some((e.clone(), ctdb::fetch_parity(e)?, 0));
+        for e in entries.iter().filter(|e| e.parity_url.is_some()) {
+            let npar = e.npar as usize;
+            let theirs = ctdb::fetch_parity(e)?;
+            let base = ctdb::column_syndromes(&words, npar);
+            if let Some(k) = ctdb_repair::find_shift_damaged(&words, &base, &theirs, npar) {
+                println!(
+                    "CUETools entry {} (confirmed by {}, parity {npar}) lines up at a shift of {} samples (found by fewest corrections: damage everywhere)",
+                    e.id,
+                    e.confidence,
+                    k / 2
+                );
+                chosen = Some((e.clone(), theirs, k));
+                break;
+            }
         }
     }
-    let Some((entry, theirs, k)) = chosen else { bail!("no CUETools entry with parity for this disc") };
-    if k != 0 {
-        bail!("this entry is at another alignment ({} samples): repair at a shift isn't written yet", k / 2);
-    }
+    let Some((entry, theirs, k)) = chosen else { bail!("no CUETools entry's parity lines up with this disc, even allowing for damage") };
     let npar = entry.npar as usize;
-    let before = words.clone();
     let t0 = std::time::Instant::now();
-    doubts.sort();
-    let rep = ctdb_repair::repair_full(&mut words, &doubts, &alts, &theirs, npar, 1);
+    // Repair at the entry's alignment: their word p = our word p + k.
+    let len = words.len() as isize;
+    let mut shifted: Vec<u16> = (0..len).map(|p| words[(p + k).clamp(0, len - 1) as usize]).collect();
+    let mut sdoubts: Vec<(usize, Doubt)> = doubts.iter().filter_map(|&(w, d)| usize::try_from(w as isize - k).ok().filter(|&x| (x as isize) < len).map(|x| (x, d))).collect();
+    sdoubts.sort();
+    let salts: HashMap<usize, Vec<u16>> = alts.iter().filter_map(|(&w, v)| usize::try_from(w as isize - k).ok().filter(|&x| (x as isize) < len).map(|x| (x, v.clone()))).collect();
+    let before_shifted = shifted.clone();
+    let rep = ctdb_repair::repair_full(&mut shifted, &sdoubts, &salts, &theirs, npar, 1);
+    // Back to our alignment: only words the repair changed.
+    for (p, (a, b)) in shifted.iter().zip(&before_shifted).enumerate() {
+        if a != b {
+            let w = p as isize + k;
+            if (0..len).contains(&w) {
+                words[w as usize] = *a;
+            }
+        }
+    }
     println!(
         "repair: {} columns differed, {} fixed, {} couldn't be; {} words changed ({:.1} s)",
         rep.bad_columns,
@@ -158,10 +180,6 @@ pub fn run(album: PathBuf, reads: Option<PathBuf>, write: bool) -> Result<bool> 
         rep.fixed_words,
         t0.elapsed().as_secs_f64()
     );
-    let changed: usize = words.iter().zip(&before).filter(|(a, b)| a != b).count();
-    if changed != rep.fixed_words {
-        println!("(note: {changed} words differ from before the repair)");
-    }
 
     // Check each track: CUETools and AccurateRip.
     let frames: Vec<u32> = words.chunks_exact(2).map(|w| w[0] as u32 | (w[1] as u32) << 16).collect();
@@ -171,7 +189,15 @@ pub fn run(album: PathBuf, reads: Option<PathBuf>, write: bool) -> Result<bool> 
         tracks.push(&frames[pos..pos + len]);
         pos += len;
     }
-    let crcs = ctdb::track_crcs(&tracks);
+    // CUETools' checksums at its alignment, AccurateRip's at ours.
+    let sframes: Vec<u32> = shifted.chunks_exact(2).map(|w| w[0] as u32 | (w[1] as u32) << 16).collect();
+    let mut stracks: Vec<&[u32]> = Vec::new();
+    let mut spos = 0;
+    for len in &lens {
+        stracks.push(&sframes[spos..spos + len]);
+        spos += len;
+    }
+    let crcs = ctdb::track_crcs(&stracks);
     let ar = accuraterip::fetch(&toc).unwrap_or(None);
     let mut good = vec![false; n];
     for i in 0..n {
@@ -202,7 +228,7 @@ pub fn run(album: PathBuf, reads: Option<PathBuf>, write: bool) -> Result<bool> 
             if good[i] { "  -> verified" } else { "" }
         );
     }
-    let whole = ctdb::disc_crc(&tracks) == entry.crc32;
+    let whole = ctdb::disc_crc(&stracks) == entry.crc32;
     println!("whole disc: {}", if whole { "matches CUETools" } else { "differs from CUETools" });
 
     // Write verified tracks that differ from the album (or are missing).
