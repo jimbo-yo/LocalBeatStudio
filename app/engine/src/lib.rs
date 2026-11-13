@@ -332,6 +332,13 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
             ReleaseChoice::Use(i) if i < rs.len() => {
                 let n = rs.len();
                 let r = rs.swap_remove(i);
+                if r.near {
+                    fe.event(Event::Note(format!(
+                        "MusicBrainz has this release with a disc ID a sector or two off from this disc's \
+                         (another drive's reading of the TOC); same layout, so it's this disc: {}",
+                        r.summary()
+                    )));
+                }
                 fe.event(Event::Release { release: Box::new(r.clone()), alternatives: n - 1 });
                 Some(r)
             }

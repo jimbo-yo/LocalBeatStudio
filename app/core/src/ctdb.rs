@@ -162,6 +162,72 @@ pub fn lookup(toc: &str) -> Result<Vec<Entry>> {
     Ok(parse_entries(&body))
 }
 
+/// An album name another database (MusicBrainz, Discogs, freedb) gives for
+/// a disc layout, through the CUETools database.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NameHit {
+    pub artist: String,
+    pub album: String,
+    pub relevance: u32,
+    /// The MusicBrainz release, when that's the source.
+    pub mbid: Option<String>,
+}
+
+/// Album names for a disc, most relevant first. `starts` and `leadout` are
+/// absolute sectors as MusicBrainz counts them (150-sector pregap included):
+/// freedb's entries depend on the absolute positions.
+pub fn names(starts: &[u32], leadout: u32) -> Result<Vec<NameHit>> {
+    let toc: Vec<String> = starts.iter().chain(std::iter::once(&leadout)).map(|s| s.saturating_sub(150).to_string()).collect();
+    let url = format!("http://db.cuetools.net/lookup2.php?version=3&ctdb=0&fuzzy=1&metadata=extensive&toc={}", toc.join(":"));
+    let body = crate::http::agent()
+        .get(&url)
+        .call()
+        .context("CUETools database lookup")?
+        .body_mut()
+        .read_to_string()
+        .context("reading the CUETools database's answer")?;
+    Ok(parse_names(&body))
+}
+
+fn xml_unescape(s: &str) -> String {
+    s.replace("&apos;", "'").replace("&quot;", "\"").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+}
+
+/// The `<metadata .../>` elements of a lookup2.php answer, most relevant
+/// first, one per distinct artist + album.
+pub fn parse_names(xml: &str) -> Vec<NameHit> {
+    let mut out: Vec<NameHit> = Vec::new();
+    for part in xml.split("<metadata ").skip(1) {
+        let end = part.find('>').unwrap_or(part.len());
+        // Leading space so " id=" can't match inside "discid=".
+        let attrs = format!(" {}", &part[..end]);
+        let get = |name: &str| -> Option<String> {
+            let key = format!(" {name}=\"");
+            let i = attrs.find(&key)? + key.len();
+            let j = attrs[i..].find('"')? + i;
+            Some(xml_unescape(&attrs[i..j]))
+        };
+        let (Some(artist), Some(album)) = (get("artist"), get("album")) else { continue };
+        let hit = NameHit {
+            artist,
+            album,
+            relevance: get("relevance").and_then(|s| s.parse().ok()).unwrap_or(0),
+            mbid: get("source").filter(|s| s == "musicbrainz").and(get("id")),
+        };
+        match out.iter_mut().find(|h| h.artist.eq_ignore_ascii_case(&hit.artist) && h.album.eq_ignore_ascii_case(&hit.album)) {
+            Some(h) => {
+                h.relevance = h.relevance.max(hit.relevance);
+                if h.mbid.is_none() {
+                    h.mbid = hit.mbid;
+                }
+            }
+            None => out.push(hit),
+        }
+    }
+    out.sort_by(|a, b| b.relevance.cmp(&a.relevance));
+    out
+}
+
 /// The `<entry .../>` elements of a lookup2.php answer.
 pub fn parse_entries(xml: &str) -> Vec<Entry> {
     let mut out = Vec::new();
@@ -191,6 +257,22 @@ pub fn parse_entries(xml: &str) -> Vec<Entry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn album_names_from_metadata() {
+        let xml = r#"<ctdb><entry />
+ <metadata album="Timeless Classic Albums" artist="Frank Sinatra" id="14106661" relevance="50" source="discogs" year="2018"><track name="x" /></metadata>
+ <metadata album="Swing Along With Me" artist="Frank Sinatra" genre="jazz" id="jazz/8e07c90c" relevance="99" source="freedb"></metadata>
+ <metadata album="Swing along with me" artist="Frank Sinatra" id="983e1fd5-9cf7-3769-82e2-7434964f8e40" relevance="70" source="musicbrainz"></metadata>
+ <metadata album="Don&apos;t Cry Joe" artist="Frank Sinatra" relevance="10" source="freedb"></metadata></ctdb>"#;
+        let n = parse_names(xml);
+        assert_eq!(n.len(), 3);
+        assert_eq!((n[0].album.as_str(), n[0].relevance), ("Swing Along With Me", 99));
+        assert_eq!(n[0].mbid.as_deref(), Some("983e1fd5-9cf7-3769-82e2-7434964f8e40"));
+        assert_eq!(n[1].album, "Timeless Classic Albums");
+        assert_eq!(n[1].mbid, None);
+        assert_eq!(n[2].album, "Don't Cry Joe");
+    }
 
     #[test]
     fn layout_of_grace() {

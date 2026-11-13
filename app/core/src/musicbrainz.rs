@@ -37,6 +37,9 @@ pub struct Release {
     pub medium: Medium,
     /// Matched by TOC similarity only (disc ID not in MusicBrainz).
     pub fuzzy: bool,
+    /// Not our disc ID, but a disc of this release has our layout to within
+    /// a few sectors (see [`NEAR_SECTORS`]): as good as exact.
+    pub near: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -108,10 +111,72 @@ const INC: &str = "artist-credits+recordings+release-groups+labels+isrcs";
 pub fn lookup(toc: &Toc) -> Result<Vec<Release>> {
     let id = toc.musicbrainz_id().to_string();
     let path = format!("discid/{id}?toc={}&inc={INC}", toc_query(toc).replace(' ', "+"));
-    match http::musicbrainz(&path)? {
-        Some(v) => Ok(parse_lookup(&v, &id, toc.audio_len())),
-        None => Ok(Vec::new()),
+    let mut rs = match http::musicbrainz(&path)? {
+        Some(v) => parse_lookup(&v, &id, toc.audio_len()),
+        None => Vec::new(),
+    };
+    if rs.iter().all(|r| r.fuzzy) {
+        // A failed side lookup leaves the answer as it was.
+        if let Ok(near) = near_lookup(toc) {
+            rs.retain(|r| !near.iter().any(|n| n.id == r.id));
+            rs.splice(0..0, near);
+        }
     }
+    Ok(rs)
+}
+
+/// How far (sectors) each track start and the lead-out may be from a
+/// MusicBrainz disc's for it to count as the same pressing. Drives report
+/// a TOC a sector or so differently, which changes the disc ID (seen: Sinatra
+/// "Swing Along With Me", Reprise 1002-2, off by 1 on 9 of 13 positions), and
+/// MusicBrainz's own similar-TOC search didn't find it.
+pub const NEAR_SECTORS: u32 = 3;
+
+/// Whether a MusicBrainz disc (`discs[]` item: offsets + sectors) has the
+/// same layout as ours, give or take [`NEAR_SECTORS`].
+pub fn near_disc(d: &Value, starts: &[u32], leadout: u32) -> bool {
+    let Some(offs) = d["offsets"].as_array() else { return false };
+    let close = |a: u64, b: u32| a.abs_diff(b as u64) <= NEAR_SECTORS as u64;
+    offs.len() == starts.len()
+        && offs.iter().zip(starts).all(|(o, &s)| o.as_u64().is_some_and(|o| close(o, s)))
+        && d["sectors"].as_u64().is_some_and(|l| close(l, leadout))
+}
+
+/// Releases with a disc laid out like ours (see [`NEAR_SECTORS`]), found
+/// through the album names the CUETools database knows for the layout
+/// (from MusicBrainz, Discogs, freedb), then a MusicBrainz search. Counted
+/// as exact matches: the track lengths agree to a sector.
+fn near_lookup(toc: &Toc) -> Result<Vec<Release>> {
+    let (starts, leadout, n) = (toc.audio_sectors(), toc.audio_leadout(), toc.audio_len());
+    let names = crate::ctdb::names(starts, leadout)?;
+    let mut ids: Vec<String> = names.iter().filter_map(|h| h.mbid.clone()).collect();
+    for h in names.iter().take(4) {
+        let q = format!(
+            "release:{} AND artist:{} AND tracksmedium:{n}",
+            crate::enrich::phrase(&h.album),
+            crate::enrich::phrase(&h.artist)
+        );
+        let Some(v) = http::musicbrainz(&format!("release?query={}&limit=25", crate::enrich::url_encode(&q)))? else { continue };
+        for r in v["releases"].as_array().into_iter().flatten() {
+            let cd = r["media"].as_array().into_iter().flatten().any(|m| {
+                is_audio_cd(m["format"].as_str().unwrap_or("")) && m["track-count"].as_u64() == Some(n as u64)
+            });
+            if let Some(id) = r["id"].as_str().filter(|_| cd)
+                && !ids.iter().any(|x| x == id)
+            {
+                ids.push(id.to_string());
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for id in ids.iter().take(12) {
+        let Some(v) = http::musicbrainz(&format!("release/{id}?inc={INC}+discids"))? else { continue };
+        let near = |d: &Value| near_disc(d, starts, leadout);
+        if let Some(r) = parse_release_with(&v, &near, n) {
+            out.push(Release { near: !r.fuzzy, ..r });
+        }
+    }
+    Ok(out)
 }
 
 /// One release by MBID (for a user's explicit choice).
@@ -151,12 +216,15 @@ fn credit(v: &Value) -> (String, Vec<String>, String) {
 }
 
 fn parse_release(r: &Value, disc_id: &str, track_count: usize) -> Option<Release> {
+    parse_release_with(r, &|d: &Value| d["id"].as_str() == Some(disc_id), track_count)
+}
+
+/// `is_ours` picks our disc among a medium's `discs`.
+fn parse_release_with(r: &Value, is_ours: &dyn Fn(&Value) -> bool, track_count: usize) -> Option<Release> {
     let media = r["media"].as_array()?;
-    // The medium with our disc ID; else (fuzzy match) the first CD medium
+    // The medium with our disc; else (fuzzy match) the first CD medium
     // with the right number of tracks.
-    let exact = media
-        .iter()
-        .find(|m| m["discs"].as_array().into_iter().flatten().any(|d| d["id"].as_str() == Some(disc_id)));
+    let exact = media.iter().find(|m| m["discs"].as_array().into_iter().flatten().any(is_ours));
     let fuzzy = exact.is_none();
     let m = exact.or_else(|| {
         media.iter().find(|m| m["track-count"].as_u64() == Some(track_count as u64) && m["tracks"].is_array())
@@ -221,6 +289,7 @@ fn parse_release(r: &Value, disc_id: &str, track_count: usize) -> Option<Release
             tracks,
         },
         fuzzy,
+        near: false,
     })
 }
 
@@ -448,6 +517,24 @@ mod tests {
             medium: Medium { format: "CD".into(), ..Default::default() },
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn near_layout() {
+        // Sinatra, Swing Along With Me (Reprise 1002-2): MusicBrainz's disc
+        // kNcoTsJ52sHNE5R7c8wX1X1HdQI- against the HP drive's TOC.
+        let d = serde_json::json!({
+            "id": "kNcoTsJ52sHNE5R7c8wX1X1HdQI-",
+            "offsets": [183, 8865, 18688, 33010, 46625, 57433, 70588, 81008, 93443, 108795, 118980, 130783],
+            "sectors": 149673
+        });
+        let ours = [182, 8865, 18687, 33010, 46625, 57432, 70587, 81007, 93442, 108795, 118980, 130782];
+        assert!(near_disc(&d, &ours, 149672));
+        assert!(!near_disc(&d, &ours, 149690), "lead-out too far");
+        assert!(!near_disc(&d, &ours[..11], 149672), "track count differs");
+        let mut far = ours;
+        far[5] += 75;
+        assert!(!near_disc(&d, &far, 149672), "a track a second off");
     }
 
     #[test]

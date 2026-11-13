@@ -812,6 +812,24 @@ exit-code-52 errors) was removed.
 - **Next: port CTDB parity repair. Design, protocol, Grace test data and
   plan: `docs/ctdb-repair.md`** (start with the track 1/10 CRC edge rule)
 
+### Near-layout MusicBrainz match (2026-11-13)
+- Sinatra "Swing Along With Me" (Reprise 1002-2) ripped as Unknown Album
+  (12/12 AccurateRip): MusicBrainz has the CD, but its disc ID was submitted
+  from a drive that read the TOC 1 sector off on 9 of 13 positions, so the
+  disc ID differed and MusicBrainz's similar-TOC search returned nothing.
+  Now (musicbrainz::lookup) when there's no exact disc ID match: album names
+  from the CUETools database (`ctdb::names`, metadata=extensive, absolute
+  offsets - 150, else freedb names are missing), MusicBrainz search by
+  album + artist + tracksmedium, then releases whose disc offsets and
+  lead-out are all within NEAR_SECTORS (3) count as exact (`Release.near`,
+  logged as a Note). Test: `localbeat identify --cdtoc C+B6+22A1+...`
+
+### Open: replugged drive shows up twice (noted 2026-11-13, not fixed yet)
+- Unplugging a USB CD drive and plugging it back in while Studio runs: the
+  drive isn't recognised as the same one; a new entry is added to the Drives
+  strip instead (likely a new /dev/srN, and the watcher keys drives by path).
+  Fix idea: key drives by identity (udev ID_SERIAL) and drop vanished paths
+
 ## Next steps (planned 2026-11-05)
 
 1. Test a second (shorter) CD with the new Artist/Album layout
