@@ -830,6 +830,16 @@ exit-code-52 errors) was removed.
   strip instead (likely a new /dev/srN, and the watcher keys drives by path).
   Fix idea: key drives by identity (udev ID_SERIAL) and drop vanished paths
 
+## The server as the library (decided 2026-11-14, nothing built)
+
+Design and plan: **`docs/server-library.md`**. The LocalBeat server (Mac Mini,
+`/srv/music`) holds the one master copy; Studio writes rips to it over rsync
++ SSH from the home network only (a per-computer key limited by rrsync; the
+Mac's firewall already allows SSH from 192.168.1.0/24 only), queues rips
+made away from home in an outbox, and plays from the server anywhere through
+WireGuard (one merged library, original FLAC via a local song cache). Laptop
+copies are kept until the Mac's library has a backup.
+
 ## Next steps (planned 2026-11-05)
 
 1. Test a second (shorter) CD with the new Artist/Album layout
