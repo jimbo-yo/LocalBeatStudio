@@ -32,11 +32,14 @@ The server enforces this. Studio doesn't have to:
   The firewall already allows SSH only from `192.168.1.0/24`. Through
   WireGuard (10.8.0.x), even at home, SSH is refused.
 - **A key just for Studio**, in the Mac's `authorized_keys`:
-  `from="192.168.1.0/24",restrict,command="rrsync /srv/music" ssh-ed25519 …`
+  `restrict,from="192.168.1.0/24",command="/usr/bin/rrsync -munge -no-del /srv/music" ssh-ed25519 …`
   It can only rsync inside `/srv/music`: no shell, no port forwarding,
-  nowhere else. One key per computer, so a lost laptop is one line to
-  remove. Set up by a script in LocalBeatServer `host/` (like
-  `localbeat-people`).
+  nowhere else, no deleting. One key per computer, so a lost laptop is one
+  line to remove. **Built 2026-11-14:** LocalBeatServer
+  `host/localbeat-writers`; this laptop is `my-laptop` with
+  `~/.ssh/localbeat-studio`. Pushes need `--mkpath` (new folders) and
+  `--chmod=D755,F644`; checked on the Mac (LocalBeatServer CLAUDE.md,
+  "Writers").
 - **"Am I home?":** Studio tries `192.168.1.10:22` with a short timeout and
   checks the pinned host key. If that works, it's the Mac on the home
   network. Nothing else is needed.
@@ -109,9 +112,9 @@ All of these happen on the home network only, over the same channel:
 
 Each step works on its own:
 
-1. **Server:** Studio's write key (`host/` script, rrsync, LAN only),
-   `startScan`/`getScanStatus`, and a test that the key can't do anything
-   else.
+1. **Server** (**done** 2026-11-14): Studio's write key
+   (`localbeat-writers`, rrsync, LAN only), `startScan`/`getScanStatus`,
+   and a check on the Mac that the key can't do anything else.
 2. **The outbox:** push, verify, rescan after each rip; copies kept
    locally. Rips reach the server from now on.
 3. **Laptop tunnel and login** (`localbeat-people add my-laptop`,
