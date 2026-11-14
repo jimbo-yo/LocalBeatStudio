@@ -840,6 +840,13 @@ made away from home in an outbox, and plays from the server anywhere through
 WireGuard (one merged library, original FLAC via a local song cache). Laptop
 copies are kept until the Mac's library has a backup.
 
+- **Built (2026-11-14):** step 1 (LocalBeatServer `localbeat-writers`,
+  `startScan`) and step 2, the outbox: finished discs are queued and sent
+  (`core/outbox.rs`, `engine/push.rs`, `gui/server_push.rs`, sidebar
+  "Server"; CLI `localbeat server|outbox|push`). This laptop: `localbeat
+  server set --host 192.168.1.10 --user musicuser --key
+  ~/.ssh/localbeat-studio --url http://192.168.1.10:4533` (done)
+
 ## Next steps (planned 2026-11-05)
 
 1. Test a second (shorter) CD with the new Artist/Album layout

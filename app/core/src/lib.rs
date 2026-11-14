@@ -20,6 +20,7 @@ pub mod http;
 pub mod lock;
 pub mod musicbrainz;
 pub mod naming;
+pub mod outbox;
 pub mod phone_copy;
 pub mod phone_sync;
 pub mod rip;

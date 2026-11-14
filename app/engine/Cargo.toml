@@ -11,3 +11,4 @@ localbeat-platform.workspace = true
 anyhow.workspace = true
 cdtoc.workspace = true
 chrono.workspace = true
+serde_json.workspace = true

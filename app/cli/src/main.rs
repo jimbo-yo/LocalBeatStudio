@@ -7,6 +7,7 @@ mod rip_cmd;
 mod enrich_cmd;
 mod sync_cmd;
 mod superseded_cmd;
+mod server_cmd;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -160,6 +161,19 @@ enum Command {
         #[arg(long)]
         acoustid_key: Option<String>,
     },
+    /// The LocalBeat server that rips are sent to: show or set it
+    Server {
+        #[command(subcommand)]
+        action: Option<server_cmd::ServerAction>,
+    },
+    /// Albums waiting to go to the server (and recently sent); `add` queues
+    /// albums already in the library
+    Outbox {
+        #[command(subcommand)]
+        action: Option<server_cmd::OutboxAction>,
+    },
+    /// Send the albums waiting in the outbox to the server now (home network only)
+    Push,
     /// List Miscellaneous folders that are now FLAC rips; --move puts them
     /// in Music/Superseded (nothing deleted)
     Superseded {
@@ -272,6 +286,9 @@ fn main() -> ExitCode {
             Ok(true)
         })(),
         Command::Superseded { move_them } => superseded_cmd::run(move_them),
+        Command::Server { action } => server_cmd::server(action),
+        Command::Outbox { action } => server_cmd::outbox(action),
+        Command::Push => server_cmd::push(),
         Command::Play { paths, seek, volume } => play_cmd::run(paths, seek, volume),
         Command::Library { covers, list } => library_cmd::run(covers, list),
         Command::Ctdb { dirs } => ctdb_cmd::run(dirs),

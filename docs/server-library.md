@@ -115,8 +115,26 @@ Each step works on its own:
 1. **Server** (**done** 2026-11-14): Studio's write key
    (`localbeat-writers`, rrsync, LAN only), `startScan`/`getScanStatus`,
    and a check on the Mac that the key can't do anything else.
-2. **The outbox:** push, verify, rescan after each rip; copies kept
-   locally. Rips reach the server from now on.
+2. **The outbox** (**done** 2026-11-14): push, verify, rescan after each
+   rip; copies kept locally. Rips reach the server from now on. Built:
+   `core/outbox.rs` (`<config>/rip-cd/outbox.json`), `engine/push.rs`
+   (TCP check of port 22 first: away from home costs 3 s and isn't an
+   error; rsync `-a --mkpath --partial --chmod=D755,F644 --exclude=*.part`;
+   verify = `--checksum --dry-run --itemize-changes` listing nothing; a
+   changed host key or refused key is a real error), `rip_disc` queues an
+   album when the disc wrote tracks (or repaired some) and holds an
+   `album-<crc>` lock while ripping so it's never sent half done;
+   Studio's `gui/server_push.rs` pushes after each disc, every 5 min and on
+   a click of the sidebar's "Server" item (waiting count; tooltip says
+   what's happening; results in the activity log). CLI: `localbeat server
+   [set|off|check]`, `localbeat outbox [add DIR...]`, `localbeat push`.
+   Settings in localbeat.json `server` {host, user, key, url, login,
+   secret} (file now mode 600). Tested 2026-11-14 against the Mac: an
+   identical album (nothing sent, verified), a new folder with curly
+   quotes/?/brackets (arrived intact, `.part` left behind), away from home
+   (3 s, stays waiting, sent once back). `startScan` waits for the
+   laptop's login (step 3): until then the server finds albums within
+   10 minutes
 3. **Laptop tunnel and login** (`localbeat-people add my-laptop`,
    NetworkManager import).
 4. **Studio as a server client:** settings, catalogue, merged library,
