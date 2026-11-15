@@ -28,7 +28,9 @@ installer, editing tags by hand.
 
 ## Layout
 
-Cargo workspace in `app/` inside this repo (the scripts stay until replaced):
+Planned layout as drafted (the code ended up differently: crates `core`,
+`platform`, `engine`, `player`, `cli`, `gui` at the repo root, which was
+`app/` until 2026-11-14; see CLAUDE.md):
 
 ```
 app/

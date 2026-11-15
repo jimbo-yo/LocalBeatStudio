@@ -1,7 +1,3 @@
-# Python
-.venv/
-__pycache__/
-*.pyc
 
 # Rip output and logs never belong here
 *.flac
@@ -13,4 +9,4 @@ __pycache__/
 # Editor
 .vscode/
 *.swp
-app/target/
+/target/
