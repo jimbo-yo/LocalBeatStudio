@@ -26,13 +26,19 @@ navy #1B2A3A note) is also shared (`docs/brand/` in the other two).
 
 ## Machines
 
-| | Fedora laptop | Ubuntu laptop | Windows laptop |
-|---|---|---|---|
-| OS | Fedora (44, now 45), KDE Plasma, Intel Haswell | Ubuntu 26.04, GNOME | Windows, Rust MSVC |
-| Drives | sr0 built-in GU90N (broken), Apple SuperDrive, hp GTA0N | sr0 built-in GU90N, hp GTA0N | hp GTA0N on D: |
+| Machine | OS | Drives |
+|---|---|---|
+| Lenovo laptop (original) | Fedora 44, KDE Plasma, Intel Haswell | sr0 built-in GU90N (broken), Apple SuperDrive, hp GTA0N |
+| Ubuntu laptop | Ubuntu 26.04, GNOME | sr0 built-in GU90N, hp GTA0N |
+| Windows laptop | Windows, Rust MSVC | hp GTA0N on D: |
+| Microsoft Surface laptop (added 2026-11-14) | Fedora 45, KDE Plasma | none built in (USB drives only) |
 
-- Repo in `~/development/<repo>` (`~/Development` on the Fedora 45 install).
-  Editor preference: **vi** (say vi, not nano, in instructions)
+- Check `/etc/os-release` and the hardware to tell the machines apart (two
+  run Fedora)
+- Repo in `~/development/<repo>`; `~/Development/<repo>` (capital D) on the
+  Surface. Editor preference: **vi** (say vi, not nano, in instructions)
+- Surface setup (2026-11-14): fresh install, nothing built or installed yet;
+  needs the Fedora build packages below
 - The music libraries are NOT synced between machines (the server will become
   the one copy: `docs/server-library.md`)
 

@@ -26,3 +26,7 @@ code are in [CLAUDE.md](CLAUDE.md) and [docs/](docs/).
 
 This repo began as a set of rip scripts ("CDRipPipeline"); they're preserved
 at the git tag `scripts-final`.
+
+## License
+
+MIT: see [LICENSE](LICENSE).
