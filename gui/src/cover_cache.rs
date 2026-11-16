@@ -4,13 +4,14 @@
 //! least recently drawn go first.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
 use eframe::egui::{self, Color32, ColorImage, TextureHandle};
+use localbeat_core::config::Settings;
 use localbeat_core::covers;
-use localbeat_core::library::Library;
+use localbeat_core::library::{Library, Origin};
+use localbeat_core::server_library;
 
 const MAX: usize = 260;
 
@@ -43,18 +44,26 @@ pub struct CoverCache {
 }
 
 impl CoverCache {
-    pub fn new(cache_dir: PathBuf, ctx: egui::Context) -> Self {
+    pub fn new(settings: Settings, ctx: egui::Context) -> Self {
+        let cache_dir = settings.cache_dir.clone();
         let (jobs, rx) = channel::<Job>();
         let (tx, done) = channel::<Done>();
         let rx = Arc::new(Mutex::new(rx));
         for _ in 0..3 {
-            let (rx, tx, cache_dir, ctx) = (rx.clone(), tx.clone(), cache_dir.clone(), ctx.clone());
+            let (rx, tx, cache_dir, ctx, settings) = (rx.clone(), tx.clone(), cache_dir.clone(), ctx.clone(), settings.clone());
             std::thread::spawn(move || loop {
                 let job = match rx.lock().unwrap().recv() {
                     Ok(j) => j,
                     Err(_) => return,
                 };
                 let album = &job.lib.albums[job.album];
+                // A server album: its cover comes from the server, into the
+                // album's cache folder, once.
+                if album.origin == Origin::Server
+                    && let (Some(dir), Some((sub, _))) = (album.dirs.first(), server_library::client(&settings))
+                {
+                    let _ = server_library::ensure_cover(&settings, &sub, dir);
+                }
                 let result = covers::thumbnail(album, &job.lib.songs, &cache_dir, job.px)
                     .ok()
                     .flatten()

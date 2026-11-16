@@ -151,8 +151,27 @@ Each step works on its own:
    the settings; the Rip page says where each disc's album stands
 3. **Laptop tunnel and login** (`localbeat-people add my-laptop`,
    NetworkManager import).
-4. **Studio as a server client:** settings, catalogue, merged library,
-   playing via the song cache, connected/not connected.
+4. **Studio as a server client** (**done** 2026-11-16, on the Surface at
+   home: 4391 songs / 494 albums; played fine): settings, catalogue, merged
+   library, playing via the song cache, connected/not connected. Built:
+   `core/server_library.rs` (catalogue = `search3` with an empty query, 500
+   songs a page, kept in `<cache>/server-library.json` per server URL;
+   server songs are `Origin::Server` library songs whose path is their
+   cache file `<cache>/server-songs/<album id>/<song id>.<ext>`, the cover
+   fetched once into that folder as `cover.jpg`; `Fetcher` downloads the
+   song playing and the next 3 in order, writing straight to the path with
+   a `<file>.downloading` marker, and keeps the cache under 4 GB, least
+   recently wanted first). The player reads a file with that marker as it
+   grows (waits up to 60 s for more; length unknown until complete). The
+   library build prefers FLAC, then Miscellaneous, then the server for the
+   same album. At startup: local scan, then if a login is set and the
+   server answers a ping within 4 s, the kept catalogue shows at once and
+   the fresh one replaces it if different; otherwise "server not
+   connected" and only this computer's albums. Login = the music server
+   settings on the Server page (`url`, `login`, `secret`). Not yet: seeking
+   ahead in a song still downloading may restart it; a stalled server
+   holds the player up to 60 s; refreshing the catalogue only at startup
+   and after a rescan.
 5. **Library edits through the server:** enrich, repairs, superseded.
 6. **Phone sync from the server's Opus.**
 7. **Backups**, then removing laptop copies (the switch, and the move-over

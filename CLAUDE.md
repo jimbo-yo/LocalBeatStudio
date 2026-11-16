@@ -37,8 +37,9 @@ navy #1B2A3A note) is also shared (`docs/brand/` in the other two).
   run Fedora)
 - Repo in `~/development/<repo>`; `~/Development/<repo>` (capital D) on the
   Surface. Editor preference: **vi** (say vi, not nano, in instructions)
-- Surface setup (2026-11-14): fresh install, nothing built or installed yet;
-  needs the Fedora build packages below
+- Surface setup (2026-11-14): fresh install; build packages installed and
+  the workspace built 2026-11-15 (not installed with install-linux.sh yet);
+  no local music library, it plays the server's
 - The music libraries are NOT synced between machines (the server will become
   the one copy: `docs/server-library.md`)
 
@@ -54,7 +55,8 @@ Cargo workspace at the repo root (edition 2024):
   Symphonia), Opus copies (`phone_copy.rs`), phone sync plan (`phone_sync.rs`),
   library scan (`library.rs`), tag enrichment (`enrich.rs`, `enrich_review.rs`,
   `acoustid.rs`), prefs/offsets/server settings (`config.rs`), server outbox
-  (`outbox.rs`), Subsonic client (`subsonic.rs`), naming, locks, HTTP (1
+  (`outbox.rs`), Subsonic client (`subsonic.rs`), the server's albums in the
+  library + song cache (`server_library.rs`), naming, locks, HTTP (1
   req/s, 503 retries)
 - `platform/` (`localbeat-platform`): CD drives (`drive.rs`, `linux.rs`,
   `windows.rs`; reads via cd-da-reader), phone transports (`phone.rs`: adb,
@@ -125,7 +127,9 @@ app reads it: rename only together with that repo).
   `player.json` (playback session), `enrich/` (state + undo backups),
   `superseded.json`
 - Cache `~/.cache/rip-cd/`: `rejected/<Artist - Album>/` (rejected tracks,
-  their reads in `reads/`, `repair.json`), `library.json`, `covers/`, locks
+  their reads in `reads/`, `repair.json`), `library.json`, `covers/`,
+  `server-library.json` (the server's catalogue), `server-songs/` (songs
+  played from the server, max 4 GB, one folder per album id), locks
   `lock-<drive>`, `lock-phone`, `lock-server-push`, `lock-outbox`,
   `lock-album-<crc>` (a disc ripping into it), `sync-work/`
 
@@ -214,14 +218,16 @@ ID_SERIAL_SHORT as fallback.
 
 ## Open items
 
-- **Server as the library** (`docs/server-library.md`): steps 1-2 done
+- **Server as the library** (`docs/server-library.md`): steps 1, 2 and 4 done
   (2026-11-14, Server page and catalogue check 2026-11-16). Finished discs
   (and repairs) are queued in the outbox and sent to the Mac with rsync over
   SSH from the home network only; with a music server login Studio waits
   for the scan and checks the catalogue before marking an album sent.
-  Settings in localbeat.json `server`, set on the Lenovo laptop. Next: step
-  3, the laptop's tunnel and login. Laptop copies are kept until the Mac's
-  library has a backup
+  Settings in localbeat.json `server`, set on the Lenovo laptop and the
+  Surface (writer `my-linux-pc`, login `my-linux-pc`). Step 4 done
+  2026-11-16: the server's albums show and play in Studio's library (song
+  cache), at home; away from home they need step 3, the laptop's tunnel
+  (still to do). Laptop copies are kept until the Mac's library has a backup
 - Replugging a USB drive while Studio runs adds a second drive card (watcher
   keys drives by /dev path). Fix: key by udev ID_SERIAL, drop vanished paths
 - Not yet seen on a real disc: OtherPressing acceptance, per-drive Stop / Stop

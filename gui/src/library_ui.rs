@@ -7,12 +7,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::Duration;
 
 use eframe::egui::{self, Color32, Rect, Sense, Vec2, pos2, vec2};
 use localbeat_core::config::Settings;
-use localbeat_core::library::{Library, Origin, Song, norm};
+use localbeat_core::library::{Library, Origin, ScanStats, Song, norm};
+use localbeat_core::server_library::{self, Catalogue, Fetcher};
 use localbeat_player::{Player, State, Status};
 
 use crate::cover_cache::CoverCache;
@@ -64,7 +65,23 @@ struct Session {
     repeat: bool,
 }
 
-type ScanResult = Result<(Arc<Library>, localbeat_core::library::ScanStats), String>;
+/// The LocalBeat server, as the library sees it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum ServerView {
+    /// No music server login on this computer.
+    #[default]
+    Off,
+    /// Its albums are in the library (`songs` of them).
+    Connected { songs: usize },
+    /// Not reachable (away from home without the tunnel, or it's off):
+    /// only what's on this computer shows.
+    NotConnected(String),
+}
+
+/// A library to show, and what the server said. A scan can send more than
+/// one: first with the server's catalogue as kept on disk, then again if
+/// the server's own has changed.
+type ScanResult = Result<(Arc<Library>, ScanStats, ServerView), String>;
 
 pub struct LibraryUi {
     settings: Settings,
@@ -76,6 +93,12 @@ pub struct LibraryUi {
     scan: Option<Receiver<ScanResult>>,
     scan_progress: Arc<(AtomicUsize, AtomicUsize)>,
     rescan_wanted: bool,
+    pub server: ServerView,
+    /// Downloads the server songs about to play.
+    fetcher: Fetcher,
+    /// What it was last asked for.
+    wanted: Vec<PathBuf>,
+    last_fetch_error: Option<(PathBuf, String)>,
     pub covers: CoverCache,
     pub player: Arc<Player>,
     /// The library for the media-keys thread.
@@ -136,7 +159,11 @@ impl LibraryUi {
             scan: None,
             scan_progress: Arc::new((AtomicUsize::new(0), AtomicUsize::new(0))),
             rescan_wanted: false,
-            covers: CoverCache::new(settings.cache_dir.clone(), ctx.clone()),
+            server: ServerView::Off,
+            fetcher: Fetcher::start(settings.clone()),
+            wanted: Vec::new(),
+            last_fetch_error: None,
+            covers: CoverCache::new(settings.clone(), ctx.clone()),
             player,
             shared_lib,
             page: Page::Albums,
@@ -176,18 +203,49 @@ impl LibraryUi {
         let (settings, progress, ctx) = (self.settings.clone(), self.scan_progress.clone(), ctx.clone());
         let shared = self.shared_lib.clone();
         std::thread::spawn(move || {
-            let r = Library::scan(&settings, &|done, total| {
+            let send = |r: ScanResult| {
+                // The media-keys thread gets it now, even if the window is hidden.
+                if let Ok((lib, _, _)) = &r {
+                    *shared.lock().unwrap() = Some(lib.clone());
+                }
+                let _ = tx.send(r);
+                ctx.request_repaint();
+            };
+            let (lib, st) = match Library::scan(&settings, &|done, total| {
                 progress.0.store(done, Ordering::Relaxed);
                 progress.1.store(total, Ordering::Relaxed);
-            })
-            .map(|(lib, st)| (Arc::new(lib), st))
-            .map_err(|e| format!("{e:#}"));
-            // The media-keys thread gets it now, even if the window is hidden.
-            if let Ok((lib, _)) = &r {
-                *shared.lock().unwrap() = Some(lib.clone());
+            }) {
+                Ok(x) => x,
+                Err(e) => return send(Err(format!("{e:#}"))),
+            };
+            // With the server's albums, if it's there (docs/server-library.md).
+            let with = |c: &Catalogue| {
+                let mut st2 = st.clone();
+                let songs = lib.songs.iter().cloned().chain(c.songs.iter().cloned()).collect();
+                (Arc::new(Library::build(songs, &mut st2)), st2)
+            };
+            let Some((sub, url)) = server_library::client(&settings) else {
+                return send(Ok((Arc::new(lib), st, ServerView::Off)));
+            };
+            if let Err(e) = sub.reachable() {
+                return send(Ok((Arc::new(lib), st, ServerView::NotConnected(format!("{e:#}")))));
             }
-            let _ = tx.send(r);
-            ctx.request_repaint();
+            let kept = Catalogue::load(&settings, &url);
+            if let Some(c) = &kept {
+                let (l, s2) = with(c);
+                send(Ok((l, s2, ServerView::Connected { songs: c.songs.len() })));
+            }
+            match Catalogue::fetch(&settings, &sub, &url) {
+                Ok(fresh) => {
+                    if kept.as_ref().is_none_or(|k| !k.same_songs(&fresh)) {
+                        let _ = fresh.save(&settings);
+                        let (l, s2) = with(&fresh);
+                        send(Ok((l, s2, ServerView::Connected { songs: fresh.songs.len() })));
+                    }
+                }
+                Err(e) if kept.is_none() => send(Ok((Arc::new(lib), st, ServerView::NotConnected(format!("{e:#}"))))),
+                Err(_) => {}
+            }
         });
         self.scan = Some(rx);
     }
@@ -203,10 +261,34 @@ impl LibraryUi {
     /// Returns lines for the activity log.
     pub fn poll(&mut self, ctx: &egui::Context) -> Vec<String> {
         self.covers.poll(ctx);
-        if let Some(r) = self.scan.as_ref().and_then(|rx| rx.try_recv().ok()) {
+        let mut results = Vec::new();
+        let mut finished = false;
+        if let Some(rx) = &self.scan {
+            loop {
+                match rx.try_recv() {
+                    Ok(r) => results.push(r),
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        finished = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if finished {
             self.scan = None;
+        }
+        for r in results {
             match r {
-                Ok((lib, st)) => {
+                Ok((lib, st, server)) => {
+                    if server != self.server {
+                        match &server {
+                            ServerView::Connected { songs } => self.log.push(format!("Server: connected, {songs} songs")),
+                            ServerView::NotConnected(e) => self.log.push(format!("Server: not connected ({e}): only this computer's albums show")),
+                            ServerView::Off => {}
+                        }
+                        self.server = server;
+                    }
                     self.log.push(format!(
                         "Library: {} songs, {} albums ({} files read{})",
                         lib.songs.len(),
@@ -230,9 +312,9 @@ impl LibraryUi {
                 }
                 Err(e) => self.log.push(format!("Library scan failed: {e}")),
             }
-            if std::mem::take(&mut self.rescan_wanted) {
-                self.rescan(ctx);
-            }
+        }
+        if finished && std::mem::take(&mut self.rescan_wanted) {
+            self.rescan(ctx);
         }
         let s = self.player.status();
         // Volume may have been changed from the desktop's media widget.
@@ -250,6 +332,13 @@ impl LibraryUi {
         }
         if self.saved_at.elapsed() > Duration::from_secs(10) {
             self.save_session();
+        }
+        self.prefetch(&s);
+        if let Some((p, e)) = self.fetcher.status().error
+            && self.last_fetch_error.as_ref() != Some(&(p.clone(), e.clone()))
+        {
+            self.log.push(format!("Couldn't get a song from the server: {e}"));
+            self.last_fetch_error = Some((p, e));
         }
         if self.scan.is_some() {
             ctx.request_repaint_after(Duration::from_millis(250));
@@ -340,6 +429,21 @@ impl LibraryUi {
         }
     }
 
+    /// Server songs about to play: the one at `index` and the next few.
+    fn upcoming(&self, queue: &[PathBuf], index: usize) -> Vec<PathBuf> {
+        let dir = server_library::songs_dir(&self.settings);
+        queue.iter().skip(index).filter(|p| p.starts_with(&dir)).take(4).cloned().collect()
+    }
+
+    /// Keeps the server songs about to play downloading (or ready).
+    fn prefetch(&mut self, s: &Status) {
+        let want = self.upcoming(&self.player.queue(), s.index.unwrap_or(0));
+        if want != self.wanted {
+            self.fetcher.want(want.clone());
+            self.wanted = want;
+        }
+    }
+
     fn play(&mut self, songs: Vec<usize>, start: usize) {
         let Some(lib) = &self.lib else { return };
         let playable: Vec<usize> = songs.iter().copied().filter(|&i| !lib.songs[i].drm).collect();
@@ -355,7 +459,13 @@ impl LibraryUi {
             order.insert(0, first);
             at = 0;
         }
-        let paths = order.iter().map(|&i| lib.songs[i].path.clone()).collect();
+        let paths: Vec<PathBuf> = order.iter().map(|&i| lib.songs[i].path.clone()).collect();
+        // Server songs: on their way before the player opens the first one.
+        let want = self.upcoming(&paths, at);
+        if !want.is_empty() {
+            self.fetcher.want(want.clone());
+            self.wanted = want;
+        }
         self.player.load(paths, at);
     }
 
@@ -434,7 +544,15 @@ impl LibraryUi {
                         AlbumSort::Title => order.sort_by_key(|&i| localbeat_core::library::sort_name(&lib.albums[i].title)),
                         AlbumSort::Year => order.sort_by_key(|&i| (std::cmp::Reverse(lib.albums[i].year), localbeat_core::library::sort_name(&lib.albums[i].artist))),
                     }
-                    let subtitle = format!("{} albums · {} songs", lib.albums.len(), lib.songs.len());
+                    let mut subtitle = format!("{} albums · {} songs", lib.albums.len(), lib.songs.len());
+                    match &self.server {
+                        ServerView::Connected { .. } => {
+                            let n = lib.albums.iter().filter(|a| a.origin == Origin::Server).count();
+                            subtitle.push_str(&format!(" · {n} from the server"));
+                        }
+                        ServerView::NotConnected(_) => subtitle.push_str(" · server not connected"),
+                        ServerView::Off => {}
+                    }
                     let mut sort = self.sort;
                     theme::page_header(ui, "Albums", &subtitle, |ui| {
                         for (s, label) in [(AlbumSort::Year, "Year"), (AlbumSort::Title, "Title"), (AlbumSort::Artist, "Artist")] {
@@ -624,6 +742,9 @@ impl LibraryUi {
                 ui.horizontal(|ui| {
                     if album.origin == Origin::Flac {
                         theme::badge(ui, "CD RIP", theme::OK).on_hover_text("Ripped and verified with LocalBeat Studio");
+                    }
+                    if album.origin == Origin::Server {
+                        theme::badge(ui, "ON THE SERVER", theme::ACCENT).on_hover_text("Not on this computer: played from the LocalBeat server");
                     }
                     if let Some(f) = format_label(&songs) {
                         theme::badge(ui, &f, if songs.iter().all(|s| s.lossless()) { theme::prism_at(0.1) } else { p.dim });
@@ -1238,7 +1359,15 @@ impl LibraryUi {
         add("Format", fmt);
         add("Bitrate", x.bitrate.map(|b| format!("{b} kbps")).unwrap_or_default());
         add("File size", format!("{:.1} MB", x.size as f64 / 1e6));
-        add("Source", if x.origin == Origin::Flac { "CD rip (verified FLAC library)".into() } else { "Miscellaneous library".into() });
+        add(
+            "Source",
+            match x.origin {
+                Origin::Flac => "CD rip (verified FLAC library)",
+                Origin::Misc => "Miscellaneous library",
+                Origin::Server => "The LocalBeat server",
+            }
+            .into(),
+        );
         add("Added", date(x.added));
         if let Some((_, extra)) = &self.details {
             for (k, v) in extra {

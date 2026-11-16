@@ -5,7 +5,9 @@
 //! Login is the salted token (`t = md5(password + salt)`), so the secret
 //! itself never goes over the wire (the server accepts both).
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::io::Read;
+use std::sync::OnceLock;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
@@ -42,12 +44,11 @@ impl Subsonic {
         })
     }
 
-    /// Calls `method` and returns the `subsonic-response` object, or the
-    /// server's error message.
-    fn call(&self, method: &str, params: &[(&str, &str)]) -> Result<Value> {
+    /// A request for `method` with the login and `params`.
+    fn request(&self, agent: &ureq::Agent, method: &str, params: &[(&str, &str)]) -> ureq::RequestBuilder<ureq::typestate::WithoutBody> {
         let url = format!("{}/rest/{method}", self.base);
         let salt = salt();
-        let mut req = crate::http::agent()
+        let mut req = agent
             .get(&url)
             .query("u", &self.user)
             .query("t", token(&self.password, &salt))
@@ -58,13 +59,64 @@ impl Subsonic {
         for (k, v) in params {
             req = req.query(*k, *v);
         }
-        let mut resp = req.call().with_context(|| format!("asking the server ({url})"))?;
+        req
+    }
+
+    /// Calls `method` and returns the `subsonic-response` object, or the
+    /// server's error message.
+    fn call(&self, method: &str, params: &[(&str, &str)]) -> Result<Value> {
+        self.call_with(crate::http::agent(), method, params)
+    }
+
+    fn call_with(&self, agent: &ureq::Agent, method: &str, params: &[(&str, &str)]) -> Result<Value> {
+        let url = format!("{}/rest/{method}", self.base);
+        let mut resp = self.request(agent, method, params).call().with_context(|| format!("asking the server ({url})"))?;
         let v: Value = resp.body_mut().read_json().with_context(|| format!("reading the reply from {url}"))?;
         parse(v)
     }
 
     pub fn ping(&self) -> Result<()> {
         self.call("ping", &[]).map(|_| ())
+    }
+
+    /// A ping that gives up after a few seconds: is the server there now?
+    pub fn reachable(&self) -> Result<()> {
+        self.call_with(quick_agent(), "ping", &[]).map(|_| ())
+    }
+
+    /// Songs `offset..offset + count` of the whole catalogue (search3 with
+    /// an empty query lists everything), as the server's song objects.
+    pub fn songs(&self, offset: usize, count: usize) -> Result<Vec<Value>> {
+        let (o, c) = (offset.to_string(), count.to_string());
+        let v = self.call("search3", &[("query", ""), ("artistCount", "0"), ("albumCount", "0"), ("songOffset", &o), ("songCount", &c)])?;
+        Ok(v["searchResult3"]["song"].as_array().cloned().unwrap_or_default())
+    }
+
+    /// The song's original file, as it comes (for writing to disk as it
+    /// arrives).
+    pub fn download(&self, id: &str) -> Result<impl Read + use<>> {
+        let resp = self.request(transfer_agent(), "download", &[("id", id)]).call().context("downloading from the server")?;
+        let json = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).is_some_and(|c| c.contains("json"));
+        if json {
+            // An error comes back as a Subsonic reply, not as audio.
+            let v: Value = resp.into_body().read_json().context("the server's reply")?;
+            parse(v)?;
+            bail!("the server sent no file");
+        }
+        Ok(resp.into_body().into_reader())
+    }
+
+    /// The cover image `id` (an album's `coverArt`), `size` pixels.
+    pub fn cover(&self, id: &str, size: u32) -> Result<Vec<u8>> {
+        let s = size.to_string();
+        let resp = self.request(transfer_agent(), "getCoverArt", &[("id", id), ("size", &s)]).call().context("fetching a cover")?;
+        let json = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).is_some_and(|c| c.contains("json"));
+        let mut body = resp.into_body();
+        if json {
+            parse(body.read_json().context("the server's reply")?)?;
+            bail!("no cover");
+        }
+        body.with_config().limit(20 << 20).read_to_vec().context("reading a cover")
     }
 
     /// Asks the server to look for new and changed files now.
@@ -84,6 +136,33 @@ impl Subsonic {
         let v = self.call("search3", &[("query", album), ("albumCount", "100"), ("artistCount", "0"), ("songCount", "0")])?;
         Ok(albums_match(&v, artist, album))
     }
+}
+
+/// For "is it there": a few seconds at most.
+fn quick_agent() -> &'static ureq::Agent {
+    static A: OnceLock<ureq::Agent> = OnceLock::new();
+    A.get_or_init(|| {
+        ureq::Agent::config_builder()
+            .user_agent(crate::http::USER_AGENT)
+            .timeout_global(Some(Duration::from_secs(4)))
+            .build()
+            .into()
+    })
+}
+
+/// For songs and covers: no limit on the whole transfer (a long FLAC over a
+/// slow link), but give up when the server stops answering.
+fn transfer_agent() -> &'static ureq::Agent {
+    static A: OnceLock<ureq::Agent> = OnceLock::new();
+    A.get_or_init(|| {
+        ureq::Agent::config_builder()
+            .user_agent(crate::http::USER_AGENT)
+            .timeout_connect(Some(Duration::from_secs(10)))
+            .timeout_recv_response(Some(Duration::from_secs(30)))
+            .timeout_per_read(Some(Duration::from_secs(30)))
+            .build()
+            .into()
+    })
 }
 
 fn parse(v: Value) -> Result<Value> {

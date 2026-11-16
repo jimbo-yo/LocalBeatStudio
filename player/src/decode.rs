@@ -2,14 +2,16 @@
 //! in .m4a, Ogg Vorbis, WAV, AIFF), always handed on as stereo f32 frames.
 
 use std::fs::File;
-use std::path::Path;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{CODEC_TYPE_NULL, Decoder, DecoderOptions};
 use symphonia::core::errors::Error as SymError;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
-use symphonia::core::io::MediaSourceStream;
+use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::core::units::Time;
@@ -46,7 +48,7 @@ impl Source {
             bail!("protected by iTunes DRM: can't be played");
         }
         let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-        let mss = MediaSourceStream::new(Box::new(file), Default::default());
+        let mss = MediaSourceStream::new(Box::new(Growing::new(file, path)), Default::default());
         let mut hint = Hint::new();
         hint.with_extension(&ext);
         let opts = FormatOptions { enable_gapless: true, ..Default::default() };
@@ -151,6 +153,67 @@ impl Source {
     }
 }
 
+/// How long to wait for more of a song that's still downloading.
+const GROW_WAIT: Duration = Duration::from_secs(60);
+
+/// A file that may still be arriving: while `<file>.downloading` exists
+/// (LocalBeat Studio's server song cache), reaching the end means "wait for
+/// more", not "the song ends". An ordinary file reads as usual.
+struct Growing {
+    file: File,
+    marker: PathBuf,
+}
+
+impl Growing {
+    fn new(file: File, path: &Path) -> Self {
+        let mut m = path.as_os_str().to_owned();
+        m.push(".downloading");
+        Growing { file, marker: PathBuf::from(m) }
+    }
+
+    fn growing(&self) -> bool {
+        self.marker.exists()
+    }
+}
+
+impl Read for Growing {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let start = Instant::now();
+        loop {
+            let n = self.file.read(buf)?;
+            if n > 0 || buf.is_empty() {
+                return Ok(n);
+            }
+            if !self.growing() {
+                // Finished: the last piece may have landed just before the
+                // marker went.
+                return self.file.read(buf);
+            }
+            if start.elapsed() > GROW_WAIT {
+                return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "the song stopped arriving"));
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+}
+
+impl Seek for Growing {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.file.seek(pos)
+    }
+}
+
+impl MediaSource for Growing {
+    fn is_seekable(&self) -> bool {
+        true
+    }
+
+    /// Unknown until it's all here.
+    fn byte_len(&self) -> Option<u64> {
+        if self.growing() { None } else { self.file.metadata().ok().map(|m| m.len()) }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -211,6 +274,34 @@ pub(crate) mod tests {
         let mut out = Vec::new();
         assert!(s.next(&mut out).unwrap());
         assert!((out[0] * 32768.0 - 8000.0).abs() < 0.01, "first sample {}", out[0] * 32768.0);
+    }
+
+    #[test]
+    fn a_song_still_arriving_plays_to_its_end() {
+        let whole = tmp("whole.wav");
+        write_wav(&whole, 8000, 2, 16000, |n| (n % 1000) as i16);
+        let bytes = std::fs::read(&whole).unwrap();
+        let p = tmp("arriving.wav");
+        let marker = tmp("arriving.wav.downloading");
+        std::fs::write(&marker, b"").unwrap();
+        std::fs::write(&p, &bytes[..2000]).unwrap();
+        let (p2, m2) = (p.clone(), marker.clone());
+        let writer = std::thread::spawn(move || {
+            use std::io::Write;
+            let mut f = std::fs::File::options().append(true).open(&p2).unwrap();
+            for chunk in bytes[2000..].chunks(7000) {
+                std::thread::sleep(Duration::from_millis(30));
+                f.write_all(chunk).unwrap();
+                f.flush().unwrap();
+            }
+            std::fs::remove_file(&m2).unwrap();
+        });
+        let mut s = Source::open(&p).unwrap();
+        let mut out = Vec::new();
+        while s.next(&mut out).unwrap() {}
+        writer.join().unwrap();
+        assert_eq!(out.len(), 32000, "every frame, none cut off at the first end of file");
+        assert!((out[2 * 999] * 32768.0 - 999.0).abs() < 0.01);
     }
 
     #[test]

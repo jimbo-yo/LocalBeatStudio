@@ -30,6 +30,10 @@ pub enum Origin {
     Flac,
     /// Miscellaneous: older copies, as they came.
     Misc,
+    /// Only on the LocalBeat server: the path is where it's cached here
+    /// (`<cache>/server-songs/<album id>/<song id>.<ext>`, see
+    /// `server_library`), downloaded when played.
+    Server,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -286,13 +290,20 @@ impl Library {
                 format!("{album}\u{1}{}", norm(&x.album_artist))
             }
         };
-        // An album in both libraries: keep the FLAC songs only.
-        let mut has_flac: HashMap<String, bool> = HashMap::new();
+        // An album in more than one place: the FLAC copy wins, then the
+        // Miscellaneous one; the server's only shows when neither is here.
+        let rank = |o: Origin| match o {
+            Origin::Flac => 0u8,
+            Origin::Misc => 1,
+            Origin::Server => 2,
+        };
+        let mut best: HashMap<String, u8> = HashMap::new();
         for x in &songs {
-            *has_flac.entry(key_of(x)).or_default() |= x.origin == Origin::Flac;
+            let b = best.entry(key_of(x)).or_insert(u8::MAX);
+            *b = (*b).min(rank(x.origin));
         }
         let before = songs.len();
-        songs.retain(|x| x.origin == Origin::Flac || !has_flac.get(&key_of(x)).copied().unwrap_or(false));
+        songs.retain(|x| best.get(&key_of(x)).is_none_or(|&b| rank(x.origin) == b));
         stats.hidden_duplicates = before - songs.len();
 
         let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
@@ -496,6 +507,24 @@ mod tests {
         assert_eq!(lib.albums.len(), 1);
         assert_eq!(lib.albums[0].origin, Origin::Flac);
         assert_eq!(st.hidden_duplicates, 1);
+    }
+
+    #[test]
+    fn a_copy_here_hides_the_servers() {
+        let songs = vec![
+            song("/c/server-songs/a1/s1.flac", "OK Computer", "Radiohead", "Radiohead", 1, Origin::Server),
+            song("/c/server-songs/a1/s2.flac", "OK Computer", "Radiohead", "Radiohead", 2, Origin::Server),
+            song("/m/Radiohead - OK Computer/01.m4a", "OK Computer", "Radiohead", "Radiohead", 1, Origin::Misc),
+            song("/c/server-songs/a2/s3.flac", "Grace", "Jeff Buckley", "Jeff Buckley", 1, Origin::Server),
+        ];
+        let mut st = ScanStats::default();
+        let lib = Library::build(songs, &mut st);
+        assert_eq!(lib.albums.len(), 2);
+        let ok = lib.albums.iter().find(|a| a.title == "OK Computer").unwrap();
+        assert_eq!((ok.origin, ok.songs.len()), (Origin::Misc, 1));
+        let grace = lib.albums.iter().find(|a| a.title == "Grace").unwrap();
+        assert_eq!(grace.origin, Origin::Server);
+        assert_eq!(st.hidden_duplicates, 2);
     }
 
     #[test]
