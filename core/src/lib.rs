@@ -17,6 +17,7 @@ pub mod enrich_review;
 pub mod flac_encode;
 pub mod flacfile;
 pub mod http;
+pub mod join;
 pub mod lock;
 pub mod musicbrainz;
 pub mod naming;

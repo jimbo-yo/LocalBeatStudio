@@ -17,6 +17,7 @@ use localbeat_core::secure_read::SectorSource;
 use localbeat_core::{cover, lock};
 use localbeat_platform::drive::{self, Drive, DriveIdentity};
 
+pub mod join;
 pub mod notify;
 pub mod push;
 

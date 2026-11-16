@@ -28,6 +28,7 @@ mod repairs_tab;
 mod review_tab;
 mod server_tab;
 mod server_push;
+mod settings_tab;
 mod theme;
 
 #[derive(PartialEq, Clone, Copy)]
@@ -38,6 +39,7 @@ enum Tab {
     Phone,
     Review,
     Server,
+    Settings,
 }
 
 /// Seconds before the best exact release is used if nobody answers.
@@ -247,6 +249,8 @@ struct App {
     /// Sends ripped albums to the LocalBeat server (docs/server-library.md).
     pusher: server_push::Pusher,
     server: server_tab::ServerTab,
+    /// Joining the server, folders, phone, what's installed, drives.
+    settings_page: settings_tab::SettingsTab,
     drive_action: Option<(String, DriveAction)>,
 }
 
@@ -270,10 +274,13 @@ impl App {
             }),
         );
         let library = library_ui::LibraryUi::new(&settings, &ctx, hwnd);
+        // A new install (no settings file yet) opens on Settings.
+        let first_run = !Prefs::exists(&settings);
         let mut app = App {
             library,
             pusher,
             server: server_tab::ServerTab::new(&settings),
+            settings_page: settings_tab::SettingsTab::new(&settings, &prefs),
             ctx,
             settings,
             rx: None,
@@ -295,7 +302,7 @@ impl App {
             prefs,
             notifier,
             notes,
-            tab: Tab::Library,
+            tab: if first_run { Tab::Settings } else { Tab::Library },
             phone: phone_tab::PhoneTab::new(),
             review: review_tab::ReviewTab::new(),
             repairs: repairs_tab::RepairsTab::new(),
@@ -347,7 +354,8 @@ impl App {
             };
             app.library.demo = Some(demo.clone());
             app.session = vec![(true, "Radiohead – OK Computer: 12/12".into()), (false, "Lenny Kravitz – Let Love Rule: 11/12".into())];
-        } else {
+        } else if app.prefs.is_admin() {
+            // Only an admin computer rips (docs/joining.md).
             app.start();
         }
         app
@@ -587,6 +595,14 @@ impl App {
                     ui.add_space(8.0);
                     theme::section_label(ui, "Devices");
                 });
+                // Ripping and sending rips: an admin computer's pages only.
+                let admin = self.prefs.is_admin() || self.library.demo.is_some();
+                if !admin {
+                    if theme::nav_item(ui, theme::Icon::Phone, "Phone", self.tab == Tab::Phone, None).clicked() {
+                        self.tab = Tab::Phone;
+                    }
+                    return;
+                }
                 // The ripper's state at a glance.
                 let ripping: Vec<f32> = self
                     .drives
@@ -649,6 +665,14 @@ impl App {
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                 if theme::nav_item(ui, theme::Icon::Log, "Activity log", self.show_log, None).clicked() {
                     self.show_log = !self.show_log;
+                }
+                let joining = self.settings_page.waiting();
+                let status = joining.then_some(("…", theme::BRAND_GOLD));
+                if theme::nav_item(ui, theme::Icon::Gear, "Settings", self.tab == Tab::Settings, status)
+                    .on_hover_text("The server, music folders, phone, what's installed")
+                    .clicked()
+                {
+                    self.tab = Tab::Settings;
                 }
             });
         });
@@ -1030,6 +1054,18 @@ impl App {
         for line in self.phone.poll(&self.settings, &mut self.prefs, ctx) {
             self.log(line);
         }
+        for line in self.settings_page.poll(&self.settings, &mut self.prefs, ctx) {
+            self.log(line);
+        }
+        if std::mem::take(&mut self.settings_page.restart_wanted) {
+            // A fresh start reads the new folders and the server's library.
+            if let Ok(exe) = std::env::current_exe() {
+                match std::process::Command::new(exe).spawn() {
+                    Ok(_) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                    Err(e) => self.log(format!("Couldn't restart: {e}")),
+                }
+            }
+        }
         for line in self.review.poll(ctx) {
             self.log(line);
         }
@@ -1133,6 +1169,14 @@ impl App {
             egui::CentralPanel::default().frame(page).show(ui, |ui| {
                 theme::page_header(ui, "Server", "Albums ripped here go to the LocalBeat server when this computer is on the home network", |_| {});
                 self.server.ui(ui, &self.settings, &mut self.prefs, &self.pusher);
+            });
+            self.choice_window(ctx);
+            return;
+        }
+        if self.tab == Tab::Settings {
+            egui::CentralPanel::default().frame(page).show(ui, |ui| {
+                theme::page_header(ui, "Settings", "This computer and the LocalBeat server", |_| {});
+                self.settings_page.ui(ui, &self.settings, &mut self.prefs, &mut self.phone);
             });
             self.choice_window(ctx);
             return;

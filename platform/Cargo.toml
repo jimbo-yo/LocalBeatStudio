@@ -13,6 +13,7 @@ cd-da-reader = "1"
 serde_json.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+base64 = "0.22"
 windows-sys = { version = "0.60", features = [
     "Win32_Foundation",
     "Win32_Security",

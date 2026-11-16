@@ -59,24 +59,27 @@ Cargo workspace at the repo root (edition 2024):
   Symphonia), Opus copies (`phone_copy.rs`), phone sync plan (`phone_sync.rs`),
   library scan (`library.rs`), tag enrichment (`enrich.rs`, `enrich_review.rs`,
   `acoustid.rs`), prefs/offsets/server settings (`config.rs`), server outbox
-  (`outbox.rs`), Subsonic client (`subsonic.rs`), the server's albums in the
+  (`outbox.rs`), joining the server (`join.rs`: protocol, WireGuard keys), Subsonic client (`subsonic.rs`), the server's albums in the
   library + song cache (`server_library.rs`), naming, locks, HTTP (1
   req/s, 503 retries)
 - `platform/` (`localbeat-platform`): CD drives (`drive.rs`, `linux.rs`,
   `windows.rs`; reads via cd-da-reader), phone transports (`phone.rs`: adb,
-  KDE Connect mount, folder), phone notifications (`phone_notify.rs`)
+  KDE Connect mount, folder), phone notifications (`phone_notify.rs`), the WireGuard tunnel (`tunnel.rs`)
 - `engine/` (`localbeat-engine`): the rip session (rip_loop per drive,
   `Event`s, `Frontend` trait), notifications summary, sending the outbox to
-  the server (`push.rs`: rsync over SSH, scan, catalogue check)
+  the server (`push.rs`: rsync over SSH, scan, catalogue check), joining the server (`join.rs`)
 - `player/` (`localbeat-player`): playback engine, no UI (Symphonia → cpal,
   gapless, exact seek)
 - `cli/` (`localbeat`): `rip [--loop]`, `check`, `drives`, `toc`,
   `read-track`, `identify`, `offset`, `sync`, `phone`, `enrich`,
   `fingerprint`, `superseded`, `repair`, `ctdb`, `library`, `play`, `notify`,
-  `eject`, `server [set|off|check|trust]`, `outbox [add]`, `push`
+  `eject`, `server [set|off|check|trust]`, `outbox [add]`, `push`, `join`, `pair`
 - `gui/` (`localbeat-studio`, eframe/egui 0.37): pages Library, Rip, Phone,
   Server (`server_tab.rs`; sender thread `server_push.rs`), Review tags,
-  Repairs; MPRIS (`media_keys.rs`); design system "Prism" in
+  Repairs, Settings (`settings_tab.rs`: joining the server, folders, phone,
+  prerequisites, drives; opens on a new install). Rip/Server/Review/Repairs
+  and the rip watcher only on an admin computer (`Prefs::role`,
+  docs/joining.md); MPRIS (`media_keys.rs`); design system "Prism" in
   `theme.rs` (`docs/ui-redesign.md`)
 - `tools/`: `install-linux.sh`, `install-windows.ps1`, `cmake-libdir-lib` (Fedora build fix),
   `import-tunnel.py NAME` (a laptop's WireGuard tunnel to the server +
@@ -236,6 +239,9 @@ ID_SERIAL_SHORT as fallback.
 - `docs/ui-redesign.md`: "Prism" design language and the redesign chunks
 - `docs/ctdb-repair.md`: CUETools DB protocol, layout, repair algorithm
 - `docs/server-library.md`: the server as the one library (in progress)
+- `docs/joining.md`: joining the server from Studio's Settings page (request
+  + approve on the admin page, keys made on the computer, listener / admin
+  roles; the protocol shared with LocalBeatServer's `localbeat-admin`)
 - `docs/history.md`: the full project journal up to 2026-11-14
 
 ## Open items

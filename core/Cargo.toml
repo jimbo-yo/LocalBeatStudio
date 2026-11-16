@@ -26,3 +26,6 @@ walkdir = "2.5.0"
 opus-static-sys = "1.5.2"
 rusty-chromaprint = "0.3"
 md5 = "0.8"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+getrandom = "0.2"
+base64 = "0.22"

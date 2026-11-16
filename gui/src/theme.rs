@@ -327,6 +327,7 @@ pub enum Icon {
     Info,
     Back,
     Server,
+    Gear,
 }
 
 /// Draws `icon` centred in `rect`, in `color`.
@@ -528,6 +529,16 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
             let end = *pts.last().unwrap();
             painter.add(Shape::line(pts, stroke));
             painter.add(tri(vec![end + vec2(-0.32 * s, -0.05 * s), end + vec2(0.18 * s, -0.3 * s), end + vec2(0.12 * s, 0.25 * s)]));
+        }
+        Icon::Gear => {
+            // A ring with eight teeth.
+            painter.circle_stroke(c, 0.5 * s, stroke);
+            painter.circle_stroke(c, 0.18 * s, stroke);
+            for i in 0..8 {
+                let a = std::f32::consts::FRAC_PI_4 * i as f32;
+                let d = vec2(a.cos(), a.sin());
+                painter.line_segment([c + d * 0.55 * s, c + d * 0.85 * s], Stroke::new(w * 1.6, color));
+            }
         }
     }
 }

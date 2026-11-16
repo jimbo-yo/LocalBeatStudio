@@ -9,6 +9,8 @@
 
   1. Checks Rust (MSVC) and installs CMake if it's missing (winget).
   2. Installs the programs Studio uses, unless -NoTools:
+     - WireGuard for Windows (the tunnel to the server, set up when this
+       computer joins it: Settings in Studio).
      - rsync (sending albums to the server): MSYS2's rsync + ssh, in
        C:\msys64. Windows' own OpenSSH can't be used with rsync, and the
        server's key only lets rsync in.
@@ -18,11 +20,16 @@
      %LOCALAPPDATA%\Programs\LocalBeat Studio, adds that folder to your PATH
      (for the localbeat command) and makes a Start menu entry.
 
+  5. Starts Studio (unless -NoStart). A new install opens on Settings, to
+     join the server.
+
   A running Studio is fine: its exe is renamed aside, not overwritten.
 #>
 param(
-    # Don't install rsync (MSYS2) or adb.
-    [switch]$NoTools
+    # Don't install WireGuard, rsync (MSYS2) or adb.
+    [switch]$NoTools,
+    # Don't start Studio at the end.
+    [switch]$NoStart
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -48,6 +55,9 @@ if (-not (Have cmake)) {
 
 # --- 2. Programs Studio runs -------------------------------------------------
 if (-not $NoTools) {
+    if (-not (Test-Path (Join-Path $env:ProgramFiles 'WireGuard\wireguard.exe'))) { Install-Winget WireGuard.WireGuard }
+    Write-Host 'WireGuard: installed'
+
     $msysBin = 'C:\msys64\usr\bin'
     if (-not (Test-Path "$msysBin\rsync.exe") -or -not (Test-Path "$msysBin\ssh.exe")) {
         if (-not (Test-Path "$msysBin\bash.exe")) { Install-Winget MSYS2.MSYS2 }
@@ -108,3 +118,6 @@ $s.Save()
 Write-Host ''
 Write-Host "Installed to $dest"
 Write-Host 'Start menu: LocalBeat Studio. Command line (new terminal): localbeat --help'
+if (-not $NoStart -and -not (Get-Process localbeat-studio -ErrorAction SilentlyContinue)) {
+    Start-Process (Join-Path $dest 'localbeat-studio.exe')
+}

@@ -40,18 +40,37 @@ fn adb_exe() -> PathBuf {
         let on_path = std::env::var_os("PATH")
             .map(|p| std::env::split_paths(&p).any(|d| d.join("adb.exe").is_file()))
             .unwrap_or(false);
-        if !on_path
-            && let Some(local) = std::env::var_os("LOCALAPPDATA")
-        {
-            let sdk = PathBuf::from(local).join(r"Android\Sdk\platform-tools\adb.exe");
-            if sdk.is_file() {
-                return sdk;
+        if !on_path && let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            // winget's link (Studio's PATH is from before an install from
+            // Settings), then Android Studio's SDK.
+            let local = PathBuf::from(&local);
+            // winget either links it or adds its package folder to PATH.
+            let winget_pkg = std::fs::read_dir(local.join(r"Microsoft\WinGet\Packages"))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|e| e.file_name().to_string_lossy().starts_with("Google.PlatformTools"))
+                .map(|e| e.path().join(r"platform-tools\adb.exe"));
+            let known = [local.join(r"Microsoft\WinGet\Links\adb.exe"), local.join(r"Android\Sdk\platform-tools\adb.exe")];
+            if let Some(p) = known.into_iter().chain(winget_pkg).find(|p| p.is_file()) {
+                return p;
             }
         }
         PathBuf::from("adb.exe")
     }
     #[cfg(not(windows))]
     PathBuf::from("adb")
+}
+
+/// Is adb installed? Its version line, or why not.
+pub fn adb_version() -> Result<String, String> {
+    match crate::command(adb_exe()).arg("version").output() {
+        Ok(o) if o.status.success() => {
+            Ok(String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or("adb").trim().to_string())
+        }
+        Ok(o) => Err(String::from_utf8_lossy(&o.stderr).trim().to_string()),
+        Err(_) => Err("adb isn't installed".into()),
+    }
 }
 
 fn run(cmd: &mut Command) -> Result<Output> {

@@ -39,11 +39,15 @@ impl Settings {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let music = dirs::audio_dir().unwrap_or_else(|| home.join("Music"));
         let env_path = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+        let config_dir = dirs::config_dir().unwrap_or_else(|| home.join(".config")).join("rip-cd");
+        // Folders chosen in Settings (localbeat.json "folders"); the
+        // environment still wins.
+        let chosen = Prefs::folders(&config_dir);
         Settings {
-            flac_dir: env_path("FLAC_DIR").unwrap_or_else(|| music.join("FLAC")),
+            flac_dir: env_path("FLAC_DIR").or(chosen.flac).unwrap_or_else(|| music.join("FLAC")),
             phone_dir: env_path("PHONE_DIR").unwrap_or_else(|| music.join("phone")),
-            misc_dir: env_path("MISC_DIR").unwrap_or_else(|| music.join("Miscellaneous")),
-            config_dir: dirs::config_dir().unwrap_or_else(|| home.join(".config")).join("rip-cd"),
+            misc_dir: env_path("MISC_DIR").or(chosen.misc).unwrap_or_else(|| music.join("Miscellaneous")),
+            config_dir,
             cache_dir: dirs::cache_dir().unwrap_or_else(|| home.join(".cache")).join("rip-cd"),
             country: match std::env::var("COUNTRY") {
                 Ok(c) if c.is_empty() => None,
@@ -84,6 +88,18 @@ pub struct Prefs {
     pub acoustid_key: String,
     /// The LocalBeat server that holds the library (docs/server-library.md).
     pub server: ServerPrefs,
+    /// What the server approved this computer as (docs/joining.md). None on
+    /// a new install; a settings file from before roles existed is an admin
+    /// (it was set up by hand to rip).
+    pub role: Option<crate::join::Role>,
+    /// Library folders chosen in Settings (None: the OS's Music folder).
+    pub folders: Folders,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Folders {
+    pub flac: Option<PathBuf>,
+    pub misc: Option<PathBuf>,
 }
 
 /// Where rips go: the LocalBeat server, written with rsync over SSH from the
@@ -131,6 +147,8 @@ impl Default for Prefs {
             last_space: None,
             acoustid_key: String::new(),
             server: ServerPrefs::default(),
+            role: None,
+            folders: Folders::default(),
         }
     }
 }
@@ -143,7 +161,33 @@ impl Prefs {
     /// The file's text: the current name, else the name before the rename
     /// to LocalBeat Studio (saving then writes the new one).
     fn text(s: &Settings) -> Option<String> {
-        std::fs::read_to_string(Self::file(s)).ok().or_else(|| std::fs::read_to_string(s.config_dir.join("ripshelf.json")).ok())
+        Self::text_in(&s.config_dir)
+    }
+
+    fn text_in(config_dir: &Path) -> Option<String> {
+        std::fs::read_to_string(config_dir.join("localbeat.json"))
+            .ok()
+            .or_else(|| std::fs::read_to_string(config_dir.join("ripshelf.json")).ok())
+    }
+
+    /// Has this computer been set up at all (a settings file)? A new install
+    /// opens on Settings.
+    pub fn exists(s: &Settings) -> bool {
+        Self::text(s).is_some()
+    }
+
+    /// The folders from the settings file, for `Settings::load`.
+    fn folders(config_dir: &Path) -> Folders {
+        let Some(v) = Self::text_in(config_dir).and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) else {
+            return Folders::default();
+        };
+        let f = |k: &str| v["folders"].get(k).and_then(|x| x.as_str()).filter(|x| !x.is_empty()).map(PathBuf::from);
+        Folders { flac: f("flac"), misc: f("misc") }
+    }
+
+    /// May this computer rip and send to the server (pages, drives)?
+    pub fn is_admin(&self) -> bool {
+        self.role == Some(crate::join::Role::Admin)
     }
 
     pub fn load(s: &Settings) -> Self {
@@ -166,6 +210,11 @@ impl Prefs {
                 let f = |k: &str| sv.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
                 ServerPrefs { host: f("host"), user: f("user"), key: f("key"), url: f("url"), login: f("login"), secret: f("secret") }
             },
+            role: match v.get("role").and_then(|x| x.as_str()) {
+                Some(r) => crate::join::Role::parse(r),
+                None => Some(crate::join::Role::Admin), // set up before roles existed
+            },
+            folders: Self::folders(&s.config_dir),
         }
     }
 
@@ -185,6 +234,12 @@ impl Prefs {
         v["server"] = serde_json::json!({
             "host": sv.host, "user": sv.user, "key": sv.key, "url": sv.url, "login": sv.login, "secret": sv.secret,
         });
+        v["role"] = match self.role {
+            Some(r) => r.as_str().into(),
+            None => "none".into(), // set up, not joined: not the old-file admin default
+        };
+        let path = |p: &Option<PathBuf>| p.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
+        v["folders"] = serde_json::json!({"flac": path(&self.folders.flac), "misc": path(&self.folders.misc)});
         v["last_space"] = match &self.last_space {
             Some((total, free, music, date)) => serde_json::json!({"total": total, "free": free, "music": music, "date": date}),
             None => serde_json::Value::Null,
@@ -276,10 +331,18 @@ mod tests {
                 login: "my-laptop".into(),
                 secret: "s3cret".into(),
             },
+            role: Some(crate::join::Role::Listener),
+            folders: Folders { flac: Some(PathBuf::from("/music/FLAC")), misc: None },
         };
         p.save(&s).unwrap();
         assert_eq!(Prefs::load(&s), p);
+        assert_eq!(Prefs::folders(&dir), p.folders);
         assert!(std::fs::read_to_string(dir.join("localbeat.json")).unwrap().contains("\"other\": 1"));
+        // Joined as nothing yet stays nothing; an old file without "role" is an admin.
+        Prefs { role: None, ..p.clone() }.save(&s).unwrap();
+        assert_eq!(Prefs::load(&s).role, None);
+        std::fs::write(dir.join("localbeat.json"), "{\"phone_usb\": true}").unwrap();
+        assert!(Prefs::load(&s).is_admin());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

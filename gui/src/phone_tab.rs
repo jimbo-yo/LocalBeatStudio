@@ -167,9 +167,14 @@ impl PhoneTab {
         });
     }
 
+    /// The connection line and the last error (Settings shows them too).
+    pub fn status(&self) -> (&str, Option<&str>) {
+        (&self.status, self.error.as_deref())
+    }
+
     /// Pairing for Android's wireless debugging, and connecting by address
     /// when adb doesn't find the phone by itself (mDNS blocked).
-    fn wireless_ui(&mut self, ui: &mut egui::Ui) {
+    pub fn wireless_ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         egui::CollapsingHeader::new("Wi-Fi with wireless debugging")
             .default_open(!phone::KDECONNECT_STORAGE)

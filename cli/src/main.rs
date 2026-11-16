@@ -8,6 +8,7 @@ mod enrich_cmd;
 mod sync_cmd;
 mod superseded_cmd;
 mod server_cmd;
+mod join_cmd;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -217,6 +218,23 @@ enum Command {
         #[arg(long)]
         volume: Option<f32>,
     },
+    /// Join the LocalBeat server from the home network: sends a request with
+    /// this computer's own keys, shows a code, waits for the admin to approve
+    /// it on the server's admin page, then sets up the tunnel and the login
+    /// (and, with --admin, sending rips). Run again to carry on waiting.
+    Join {
+        /// This computer's name on the server (default: from its own name)
+        name: Option<String>,
+        /// Ask to rip CDs and send them to the server, not only to listen
+        #[arg(long)]
+        admin: bool,
+        /// The server's home address
+        #[arg(long, default_value = localbeat_core::join::DEFAULT_SERVER)]
+        server: String,
+        /// Withdraw a waiting request
+        #[arg(long)]
+        cancel: bool,
+    },
     /// Pair with the phone for adb over Wi-Fi (once per computer): on the
     /// phone, Developer options > Wireless debugging > Pair device with pairing
     /// code. With only an address (Wireless debugging's IP:port), connect.
@@ -303,6 +321,7 @@ fn main() -> ExitCode {
         Command::Library { covers, list } => library_cmd::run(covers, list),
         Command::Ctdb { dirs } => ctdb_cmd::run(dirs),
         Command::Repair { album, reads, write } => repair_cmd::run(album, reads, write),
+        Command::Join { name, admin, server, cancel } => join_cmd::run(join_cmd::JoinArgs { name, admin, server, cancel }),
         Command::Pair { address, code } => match code {
             Some(code) => localbeat_platform::phone::adb_pair(&address, &code).map(|msg| {
                 println!("{msg}\nlocalbeat sync --wifi now finds the phone whenever Wireless debugging is on.");
