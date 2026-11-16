@@ -2340,6 +2340,7 @@ dependencies = [
  "libflac-sys",
  "libopusenc-static-sys",
  "lofty",
+ "md5",
  "opus-static-sys",
  "rusty-chromaprint",
  "serde",
@@ -2357,6 +2358,7 @@ dependencies = [
  "anyhow",
  "cdtoc",
  "chrono",
+ "dirs",
  "localbeat-core",
  "localbeat-platform",
  "serde_json",
@@ -2456,6 +2458,12 @@ checksum = "62bb907fe88d54d8d9ce32a3cceab4218ed2f6b7d35617cafe9adf84e43919cb"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "md5"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ebb8d8732c6a6df3d8f032a82911cfc747e00efb95cc46e8d0acd5b5b88570c"
 
 [[package]]
 name = "memchr"

@@ -25,4 +25,5 @@ pub mod phone_copy;
 pub mod phone_sync;
 pub mod rip;
 pub mod secure_read;
+pub mod subsonic;
 pub mod vote;

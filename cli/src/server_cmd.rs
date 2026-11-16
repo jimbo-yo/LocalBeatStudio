@@ -8,6 +8,7 @@ use anyhow::{Result, bail};
 use clap::Subcommand;
 use localbeat_core::config::{Prefs, Settings};
 use localbeat_core::outbox::{self, Outbox, State};
+use localbeat_core::subsonic::Subsonic;
 use localbeat_engine::push::{self, PushEvent};
 
 #[derive(Subcommand)]
@@ -37,6 +38,8 @@ pub enum ServerAction {
     Off,
     /// Check that the server can be reached and written to
     Check,
+    /// Read the server's SSH host key and pin it (at home, once)
+    Trust,
 }
 
 #[derive(Subcommand)]
@@ -69,6 +72,7 @@ pub fn server(action: Option<ServerAction>) -> Result<bool> {
             return Ok(true);
         }
         Some(ServerAction::Check) => return check(&s, &prefs),
+        Some(ServerAction::Trust) => return trust(&s, &prefs),
     }
     let sv = &prefs.server;
     if !sv.enabled() {
@@ -102,12 +106,9 @@ fn check(s: &Settings, prefs: &Prefs) -> Result<bool> {
     std::fs::create_dir_all(&empty)?;
     let out = std::process::Command::new("rsync")
         .args(["-a", "--dry-run", "-e"])
-        .arg(format!(
-            "ssh -i '{}' -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10",
-            sv.key_path().display()
-        ))
+        .arg(push::ssh_command(s, sv))
         .arg(format!("{}/", empty.display()))
-        .arg(format!("{}@{}:FLAC/", sv.user, sv.host))
+        .arg(format!("{}@{}:FLAC/", sv.user, push::host_port(sv).0))
         .output()?;
     if out.status.success() {
         println!("Writing: allowed (key {})", sv.key);
@@ -115,10 +116,32 @@ fn check(s: &Settings, prefs: &Prefs) -> Result<bool> {
         println!("Writing: refused: {}", String::from_utf8_lossy(&out.stderr).lines().next().unwrap_or(""));
         return Ok(false);
     }
-    match push::start_scan(sv) {
-        Ok(()) => println!("Music server: scan request accepted"),
-        Err(e) => println!("Music server: {e:#}"),
+    match Subsonic::new(sv).map(|c| c.ping()) {
+        Some(Ok(())) => println!("Music server: login works ({})", sv.url),
+        Some(Err(e)) => println!("Music server: {e:#}"),
+        None => println!("Music server: no login set (it finds new albums within 10 minutes)"),
     }
+    Ok(true)
+}
+
+fn trust(s: &Settings, prefs: &Prefs) -> Result<bool> {
+    let sv = &prefs.server;
+    if sv.host.is_empty() {
+        bail!("no server set up (localbeat server set --host ...)");
+    }
+    let (lines, fp) = push::scan_host_key(s, sv)?;
+    println!("{} answers with this host key:\n  {fp}", sv.host);
+    println!("Compare it with the Mac's own (on the Mac: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub).");
+    print!("Same? Pin it [y/N]: ");
+    std::io::Write::flush(&mut std::io::stdout())?;
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    if !answer.trim().eq_ignore_ascii_case("y") {
+        println!("Not pinned.");
+        return Ok(false);
+    }
+    push::save_host_key(s, &lines)?;
+    println!("Pinned in {}.", push::known_hosts(s).display());
     Ok(true)
 }
 
@@ -164,7 +187,7 @@ pub fn push() -> Result<bool> {
         PushEvent::Failed { album, error } => println!("FAILED   {album}: {error}"),
         PushEvent::NotHome { waiting, why } => println!("{waiting} waiting: {why}"),
         PushEvent::Busy(a) => println!("later    {a} (a disc is being ripped into it)"),
-        PushEvent::Scan(Ok(())) => println!("The server is looking for the new albums."),
+        PushEvent::Scan(Ok(())) => println!("The server has scanned for the new albums."),
         PushEvent::Scan(Err(e)) => println!("Scan: {e}"),
     })?;
     if sum.already_running {

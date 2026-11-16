@@ -323,6 +323,15 @@ pub fn repair_disc(s: &Settings, album: &Path, cdtoc: &str, rejected: Option<&Pa
             }
         }
     }
+    // Changed here: off to the server again (also when repaired from the
+    // Repairs page or `localbeat repair`, long after the rip).
+    if out.tracks.iter().any(|t| t.written.is_some())
+        && crate::config::Prefs::load(s).server.enabled()
+        && let Ok(name) = crate::outbox::album_name(s, album)
+        && let Err(e) = crate::outbox::Outbox::update(s, |o| o.add(&name))
+    {
+        out.log.push(format!("couldn't queue {name} for the server: {e:#}"));
+    }
     Ok(out)
 }
 
