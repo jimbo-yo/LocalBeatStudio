@@ -31,12 +31,16 @@ navy #1B2A3A note) is also shared (`docs/brand/` in the other two).
 | Lenovo laptop (original) | Fedora 44, KDE Plasma, Intel Haswell | sr0 built-in GU90N (broken), Apple SuperDrive, hp GTA0N |
 | Ubuntu laptop | Ubuntu 26.04, GNOME | sr0 built-in GU90N, hp GTA0N |
 | Windows laptop | Windows, Rust MSVC | hp GTA0N on D: |
-| Microsoft Surface laptop (added 2026-11-14) | Fedora 45, KDE Plasma | none built in (USB drives only) |
+| Microsoft Surface laptop (added 2026-11-14) | Fedora 45, KDE Plasma; dual-boots Windows 11 (`MY-WINDOWS-PC`) | none built in (USB drives only) |
 
 - Check `/etc/os-release` and the hardware to tell the machines apart (two
   run Fedora)
 - Repo in `~/development/<repo>`; `~/Development/<repo>` (capital D) on the
   Surface. Editor preference: **vi** (say vi, not nano, in instructions)
+- Surface on Windows (2026-11-16): repo at `C:\Users\user\Development\
+  CDRipPipeline` (its own clone, separate from Fedora's), Studio installed
+  with `tools\install-windows.ps1`; Fedora 45 also in WSL there (no build
+  tools). Not yet set up: server settings, writer key
 - Surface setup (2026-11-14): fresh install; build packages installed and
   the workspace built 2026-11-15 (not installed with install-linux.sh yet);
   no local music library, it plays the server's
