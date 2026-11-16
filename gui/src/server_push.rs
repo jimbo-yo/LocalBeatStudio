@@ -27,6 +27,10 @@ pub struct Status {
     /// What's happening, for the sidebar's tooltip.
     pub line: String,
     pub sending: bool,
+    /// The album being sent right now.
+    pub current: Option<String>,
+    /// The last round couldn't reach the server (away from home).
+    pub away: bool,
 }
 
 pub struct Pusher {
@@ -40,9 +44,8 @@ impl Pusher {
         let status = Arc::new(Mutex::new(Status::default()));
         let st = status.clone();
         std::thread::spawn(move || run(settings, ctx, log, rx, st));
-        let p = Pusher { kick, status };
-        p.kick();
-        p
+        // The thread's first round starts at once (no kick needed).
+        Pusher { kick, status }
     }
 
     /// Look now (a disc finished, or the sidebar item was clicked).
@@ -79,12 +82,15 @@ fn run(s: Settings, ctx: egui::Context, log: Sender<String>, rx: Receiver<()>, s
         ctx.request_repaint();
         if prefs.server.enabled() && waiting > 0 {
             status.lock().unwrap().sending = true;
-            let set = |line: String| {
-                status.lock().unwrap().line = line;
+            let set = |line: String, current: Option<String>| {
+                let mut st = status.lock().unwrap();
+                st.line = line;
+                st.current = current;
                 ctx.request_repaint();
             };
+            status.lock().unwrap().away = false;
             let r = push::push_pending(&s, &prefs.server, &mut |e| match e {
-                PushEvent::Sending(a) => set(format!("Sending {a}")),
+                PushEvent::Sending(a) => set(format!("Sending {a}"), Some(a)),
                 PushEvent::Sent(a) => {
                     let _ = log.send(format!("Sent to the server: {a}"));
                     last_away = None;
@@ -97,17 +103,20 @@ fn run(s: Settings, ctx: egui::Context, log: Sender<String>, rx: Receiver<()>, s
                         let _ = log.send(format!("{waiting} album(s) waiting for the home network ({why})"));
                         last_away = Some(why.clone());
                     }
-                    set(format!("{waiting} waiting for the home network"));
+                    status.lock().unwrap().away = true;
+                    set(format!("{waiting} waiting for the home network"), None);
                 }
-                PushEvent::Busy(a) => set(format!("{a}: after the disc being ripped")),
+                PushEvent::Busy(a) => set(format!("{a}: after the disc being ripped"), None),
                 PushEvent::Scan(Ok(())) => {
-                    let _ = log.send("The server is adding the new albums".into());
+                    set("Checking the server's catalogue".into(), None);
+                    let _ = log.send("The server has scanned for the new albums".into());
                 }
                 PushEvent::Scan(Err(_)) => {} // no login yet: it finds them within 10 minutes
             });
             let (waiting, failed) = counts(&s);
             let mut st = status.lock().unwrap();
             st.sending = false;
+            st.current = None;
             st.waiting = waiting;
             st.failed = failed;
             match r {

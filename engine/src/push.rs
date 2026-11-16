@@ -267,7 +267,9 @@ pub fn push_pending(s: &Settings, sp: &ServerPrefs, ev: &mut dyn FnMut(PushEvent
         sum.already_running = true;
         return Ok(sum);
     };
-    let pending = Outbox::load(s).pending();
+    // Each album with the time it was queued (see `finish`).
+    let pending: Vec<(String, String)> =
+        Outbox::load(s).albums.into_iter().filter(|e| e.pending()).map(|e| (e.album, e.added)).collect();
     sum.waiting = pending.len();
     if pending.is_empty() {
         return Ok(sum);
@@ -276,8 +278,9 @@ pub fn push_pending(s: &Settings, sp: &ServerPrefs, ev: &mut dyn FnMut(PushEvent
         ev(PushEvent::NotHome { waiting: pending.len(), why });
         return Ok(sum);
     }
-    let mut sent = Vec::new();
-    for album in pending {
+    // Copied and verified; marked sent only once the server has them (finish).
+    let mut copied = Vec::new();
+    for (album, added) in pending {
         // A disc being ripped into it: next time.
         let Some(_ripping) = lock::try_lock(&s.cache_dir, &outbox::ripping_lock_name(&album))? else {
             ev(PushEvent::Busy(album));
@@ -285,13 +288,7 @@ pub fn push_pending(s: &Settings, sp: &ServerPrefs, ev: &mut dyn FnMut(PushEvent
         };
         ev(PushEvent::Sending(album.clone()));
         match push_album(s, sp, &album) {
-            Outcome::Sent => {
-                Outbox::update(s, |o| o.sent(&album))?;
-                sum.sent += 1;
-                sum.waiting -= 1;
-                ev(PushEvent::Sent(album.clone()));
-                sent.push(album);
-            }
+            Outcome::Sent => copied.push((album, added)),
             Outcome::NotHome(why) => {
                 // Lost the network part way: the rest waits too.
                 ev(PushEvent::NotHome { waiting: sum.waiting, why });
@@ -304,37 +301,58 @@ pub fn push_pending(s: &Settings, sp: &ServerPrefs, ev: &mut dyn FnMut(PushEvent
             }
         }
     }
-    if !sent.is_empty() {
-        scan_and_check(s, sp, &sent, &mut sum, ev);
+    if !copied.is_empty() {
+        finish(s, sp, &copied, &mut sum, ev)?;
     }
     Ok(sum)
 }
 
-/// Scans, then checks each sent album is in the catalogue: one that isn't is
-/// marked failed and sent (a no-op) and checked again next time.
-fn scan_and_check(s: &Settings, sp: &ServerPrefs, sent: &[String], sum: &mut Summary, ev: &mut dyn FnMut(PushEvent)) {
-    let Some(sub) = Subsonic::new(sp) else {
-        ev(PushEvent::Scan(Err("no music server login set: it finds the new albums within 10 minutes".into())));
-        return;
-    };
-    if let Err(e) = scan(&sub) {
-        ev(PushEvent::Scan(Err(format!("{e:#}"))));
-        return;
-    }
-    ev(PushEvent::Scan(Ok(())));
-    for album in sent {
-        let error = match in_catalogue(s, &sub, album) {
-            Ok(Some(true)) | Ok(None) => continue,
-            Ok(Some(false)) => "on the server, but not in its catalogue after the scan: checked again next time".to_string(),
-            Err(e) => format!("on the server, but checking its catalogue failed: {e:#}"),
-        };
-        if Outbox::update(s, |o| o.failed(album, &error)).is_ok() {
-            sum.sent -= 1;
-            sum.failed += 1;
-            sum.waiting += 1;
+/// After the copies: with a music server login, ask it to scan and check each
+/// album is in its catalogue; one that isn't stays failed (sent again, a
+/// no-op, and checked again next time). Without a login, or if the scan
+/// request fails, the checksum comparison has to do (the server's own rescan
+/// finds them within 10 minutes). An album only becomes "sent" here, so
+/// quitting during the scan leaves it waiting, and one queued again
+/// meanwhile (another disc of the set) stays waiting.
+fn finish(s: &Settings, sp: &ServerPrefs, copied: &[(String, String)], sum: &mut Summary, ev: &mut dyn FnMut(PushEvent)) -> Result<()> {
+    let checked = match Subsonic::new(sp) {
+        None => {
+            ev(PushEvent::Scan(Err("no music server login set: it finds the new albums within 10 minutes".into())));
+            None
         }
-        ev(PushEvent::Failed { album: album.clone(), error });
+        Some(sub) => match scan(&sub) {
+            Ok(()) => {
+                ev(PushEvent::Scan(Ok(())));
+                Some(sub)
+            }
+            Err(e) => {
+                ev(PushEvent::Scan(Err(format!("{e:#}"))));
+                None
+            }
+        },
+    };
+    for (album, added) in copied {
+        let error = match checked.as_ref().map(|sub| in_catalogue(s, sub, album)) {
+            None | Some(Ok(Some(true))) | Some(Ok(None)) => None,
+            Some(Ok(Some(false))) => Some("on the server, but not in its catalogue after the scan: checked again next time".to_string()),
+            Some(Err(e)) => Some(format!("on the server, but checking its catalogue failed: {e:#}")),
+        };
+        match error {
+            None => {
+                if Outbox::update(s, |o| o.sent_if_unchanged(album, added))? {
+                    sum.sent += 1;
+                    sum.waiting -= 1;
+                    ev(PushEvent::Sent(album.clone()));
+                }
+            }
+            Some(error) => {
+                Outbox::update(s, |o| o.failed(album, &error))?;
+                sum.failed += 1;
+                ev(PushEvent::Failed { album: album.clone(), error });
+            }
+        }
     }
+    Ok(())
 }
 
 #[cfg(all(test, unix))]

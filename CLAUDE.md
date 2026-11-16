@@ -53,21 +53,24 @@ Cargo workspace at the repo root (edition 2024):
   (`flac_encode.rs` = libFLAC, `flacfile.rs`), other formats (`audio_source.rs`,
   Symphonia), Opus copies (`phone_copy.rs`), phone sync plan (`phone_sync.rs`),
   library scan (`library.rs`), tag enrichment (`enrich.rs`, `enrich_review.rs`,
-  `acoustid.rs`), prefs/offsets (`config.rs`), naming, locks, HTTP (1 req/s,
-  503 retries)
+  `acoustid.rs`), prefs/offsets/server settings (`config.rs`), server outbox
+  (`outbox.rs`), Subsonic client (`subsonic.rs`), naming, locks, HTTP (1
+  req/s, 503 retries)
 - `platform/` (`localbeat-platform`): CD drives (`drive.rs`, `linux.rs`,
   `windows.rs`; reads via cd-da-reader), phone transports (`phone.rs`: adb,
   KDE Connect mount, folder), phone notifications (`phone_notify.rs`)
 - `engine/` (`localbeat-engine`): the rip session (rip_loop per drive,
-  `Event`s, `Frontend` trait), notifications summary
+  `Event`s, `Frontend` trait), notifications summary, sending the outbox to
+  the server (`push.rs`: rsync over SSH, scan, catalogue check)
 - `player/` (`localbeat-player`): playback engine, no UI (Symphonia → cpal,
   gapless, exact seek)
 - `cli/` (`localbeat`): `rip [--loop]`, `check`, `drives`, `toc`,
   `read-track`, `identify`, `offset`, `sync`, `phone`, `enrich`,
   `fingerprint`, `superseded`, `repair`, `ctdb`, `library`, `play`, `notify`,
-  `eject`, `set`
+  `eject`, `server [set|off|check|trust]`, `outbox [add]`, `push`
 - `gui/` (`localbeat-studio`, eframe/egui 0.37): pages Library, Rip, Phone,
-  Review tags, Repairs; MPRIS (`media_keys.rs`); design system "Prism" in
+  Server (`server_tab.rs`; sender thread `server_push.rs`), Review tags,
+  Repairs; MPRIS (`media_keys.rs`); design system "Prism" in
   `theme.rs` (`docs/ui-redesign.md`)
 - `tools/`: `install-linux.sh`, `cmake-libdir-lib` (Fedora build fix)
 - `docs/`: design notes (below) and `history.md`
@@ -116,12 +119,15 @@ app reads it: rename only together with that repo).
   Settings, old AAC/MP3/.m4p kept as they are). `~/Music/Superseded`: Misc
   albums that duplicate a FLAC album (`localbeat superseded --move`)
 - Config `~/.config/rip-cd/` (Windows `%APPDATA%\rip-cd\`): `offsets`,
-  `localbeat.json` (prefs, AcoustID application key: never in git),
+  `localbeat.json` (prefs, AcoustID application key, `server` settings with
+  the music server secret: never in git), `outbox.json` (albums for the
+  server), `server_known_hosts` (the server's pinned SSH host key),
   `player.json` (playback session), `enrich/` (state + undo backups),
   `superseded.json`
 - Cache `~/.cache/rip-cd/`: `rejected/<Artist - Album>/` (rejected tracks,
   their reads in `reads/`, `repair.json`), `library.json`, `covers/`, locks
-  `lock-<drive>` and `lock-phone`, `sync-work/`
+  `lock-<drive>`, `lock-phone`, `lock-server-push`, `lock-outbox`,
+  `lock-album-<crc>` (a disc ripping into it), `sync-work/`
 
 ## Library contract (shared with LocalBeat and LocalBeatServer)
 
@@ -209,12 +215,12 @@ ID_SERIAL_SHORT as fallback.
 ## Open items
 
 - **Server as the library** (`docs/server-library.md`): steps 1-2 done
-  (2026-11-14). Finished discs are queued in the outbox and sent to the Mac
-  with rsync over SSH from the home network only (`core/outbox.rs`,
-  `engine/push.rs`, `gui/server_push.rs`, sidebar "Server"; CLI `localbeat
-  server|outbox|push`; settings in localbeat.json `server`, set on the
-  Fedora laptop). Next: step 3, the laptop's tunnel and login (then
-  `startScan` after each push). Laptop copies are kept until the Mac's
+  (2026-11-14, Server page and catalogue check 2026-11-16). Finished discs
+  (and repairs) are queued in the outbox and sent to the Mac with rsync over
+  SSH from the home network only; with a music server login Studio waits
+  for the scan and checks the catalogue before marking an album sent.
+  Settings in localbeat.json `server`, set on the Lenovo laptop. Next: step
+  3, the laptop's tunnel and login. Laptop copies are kept until the Mac's
   library has a backup
 - Replugging a USB drive while Studio runs adds a second drive card (watcher
   keys drives by /dev path). Fix: key by udev ID_SERIAL, drop vanished paths

@@ -26,6 +26,7 @@ mod media_keys;
 mod phone_tab;
 mod repairs_tab;
 mod review_tab;
+mod server_tab;
 mod server_push;
 mod theme;
 
@@ -36,6 +37,7 @@ enum Tab {
     Rip,
     Phone,
     Review,
+    Server,
 }
 
 /// Seconds before the best exact release is used if nobody answers.
@@ -244,6 +246,7 @@ struct App {
     library: library_ui::LibraryUi,
     /// Sends ripped albums to the LocalBeat server (docs/server-library.md).
     pusher: server_push::Pusher,
+    server: server_tab::ServerTab,
     drive_action: Option<(String, DriveAction)>,
 }
 
@@ -270,6 +273,7 @@ impl App {
         let mut app = App {
             library,
             pusher,
+            server: server_tab::ServerTab::new(&settings),
             ctx,
             settings,
             rx: None,
@@ -303,6 +307,8 @@ impl App {
             let demo = std::env::var("LOCALBEAT_DEMO").unwrap_or_default();
             let mut d1 = demo_disc();
             d1.cover = Some(demo_cover(&app.ctx));
+            // In the library, so the server line shows if it's in the outbox.
+            d1.album_dir = app.settings.flac_dir.join("Radiohead").join("OK Computer").display().to_string();
             if demo == "alert" {
                 d1.alert = Some("Track 6 couldn't be read or repaired. Clean the disc, wiping straight out from the centre, and put it back in: only that one is read again, and the new reads are added to these for another repair.".into());
             }
@@ -335,6 +341,7 @@ impl App {
                 "phone" => Tab::Phone,
                 "repairs" => Tab::Repairs,
                 "review" => Tab::Review,
+                "server" => Tab::Server,
                 "1" | "sr2" | "choice" | "alert" => Tab::Rip,
                 _ => Tab::Library,
             };
@@ -534,107 +541,110 @@ impl App {
                 self.library.search.clear();
             }
             ui.add_space(16.0);
-
-            ui.horizontal(|ui| {
-                ui.add_space(8.0);
-                theme::section_label(ui, "Library");
-            });
-            let playing = self.library.playing();
-            let has_song = self.library.has_song();
-            let status = playing.then_some(("", theme::prism_at(0.3)));
-            if theme::nav_item(ui, theme::Icon::Songs, "Now Playing", self.tab == Tab::Library && self.library.now_open, status)
-                .on_hover_text(if has_song { "The song playing, big" } else { "Nothing playing yet" })
-                .clicked()
-            {
-                self.tab = Tab::Library;
-                self.library.search.clear();
-                self.library.open_now();
-            }
-            let lib_counts = self.library.lib.as_ref().map(|l| (l.albums.len(), l.artists.len(), l.songs.len()));
-            for (page, icon, label, count) in [
-                (library_ui::Page::Albums, theme::Icon::Albums, "Albums", lib_counts.map(|c| c.0)),
-                (library_ui::Page::Recent, theme::Icon::Clock, "Recently added", None),
-                (library_ui::Page::Artists, theme::Icon::Artists, "Artists", lib_counts.map(|c| c.1)),
-                (library_ui::Page::Songs, theme::Icon::Songs, "Songs", lib_counts.map(|c| c.2)),
-            ] {
-                let selected = self.tab == Tab::Library && self.library.page == page && self.library.search.is_empty() && !self.library.now_open;
-                let n = count.map(|n| n.to_string()).unwrap_or_default();
-                let status = (!n.is_empty()).then_some((n.as_str(), p.faint));
-                if theme::nav_item(ui, icon, label, selected, status).clicked() {
-                    self.tab = Tab::Library;
-                    self.library.page = page;
-                    self.library.now_open = false;
-                    self.library.album = None;
-                    self.library.search.clear();
-                }
-            }
-            ui.add_space(16.0);
-
-            ui.horizontal(|ui| {
-                ui.add_space(8.0);
-                theme::section_label(ui, "Devices");
-            });
-            // The ripper's state at a glance.
-            let ripping: Vec<f32> = self
-                .drives
-                .iter()
-                .filter_map(|(path, v)| {
-                    let d = if self.swapped && self.view.as_deref() == Some(path.as_str()) { &self.disc } else { &v.disc };
-                    d.as_ref().filter(|d| d.result.is_none() && d.total_secs > 0).map(|d| d.done_secs as f32 / d.total_secs as f32)
-                })
-                .collect();
-            let status = if !ripping.is_empty() {
-                let pct = ripping.iter().sum::<f32>() / ripping.len() as f32 * 100.0;
-                (format!("{pct:.0}%"), theme::prism_at(0.25))
-            } else if self.running {
-                (String::new(), theme::OK)
-            } else {
-                (String::new(), p.faint)
-            };
-            let hint = if !ripping.is_empty() {
-                format!("{} disc(s) ripping", ripping.len())
-            } else if self.running {
-                "Waiting for a disc".to_string()
-            } else {
-                "Ripping is stopped".to_string()
-            };
-            if theme::nav_item(ui, theme::Icon::Disc, "CD Ripper", self.tab == Tab::Rip, Some((&status.0, status.1))).on_hover_text(hint).clicked() {
-                self.tab = Tab::Rip;
-            }
-            if theme::nav_item(ui, theme::Icon::Phone, "Phone", self.tab == Tab::Phone, None).clicked() {
-                self.tab = Tab::Phone;
-            }
-            // Rips going to the LocalBeat server: how many wait. Click to try now.
-            let push = self.pusher.status();
-            if push.enabled {
-                let n = if push.sending { "…".to_string() } else { push.waiting.to_string() };
-                let colour = if push.failed > 0 { theme::WARN } else { p.faint };
-                let status = (push.waiting > 0 || push.sending).then_some((n.as_str(), colour));
-                if theme::nav_item(ui, theme::Icon::Folder, "Server", false, status)
-                    .on_hover_text(format!("{}\nClick to send what's waiting now (home network only)", push.line))
+            // The pages scroll when the window is too short for them all;
+            // the activity log stays at the bottom.
+            egui::ScrollArea::vertical()
+                .id_salt("nav-scroll")
+                .max_height((ui.available_height() - 52.0).max(80.0))
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    theme::section_label(ui, "Library");
+                });
+                let playing = self.library.playing();
+                let has_song = self.library.has_song();
+                let status = playing.then_some(("", theme::prism_at(0.3)));
+                if theme::nav_item(ui, theme::Icon::Songs, "Now Playing", self.tab == Tab::Library && self.library.now_open, status)
+                    .on_hover_text(if has_song { "The song playing, big" } else { "Nothing playing yet" })
                     .clicked()
                 {
-                    self.pusher.kick();
+                    self.tab = Tab::Library;
+                    self.library.search.clear();
+                    self.library.open_now();
                 }
-            }
-            ui.add_space(16.0);
-            ui.horizontal(|ui| {
-                ui.add_space(8.0);
-                theme::section_label(ui, "Tools");
-            });
-            if theme::nav_item(ui, theme::Icon::Tag, "Review tags", self.tab == Tab::Review, None).clicked() {
-                self.tab = Tab::Review;
-            }
-            let damaged = self.repairs.count();
-            let n = damaged.to_string();
-            let status = (damaged > 0).then_some((n.as_str(), theme::WARN));
-            if theme::nav_item(ui, theme::Icon::Refresh, "Repairs", self.tab == Tab::Repairs, status)
-                .on_hover_text("Discs with tracks that couldn't be read cleanly")
-                .clicked()
-            {
-                self.tab = Tab::Repairs;
-                self.repairs.stale = true;
-            }
+                let lib_counts = self.library.lib.as_ref().map(|l| (l.albums.len(), l.artists.len(), l.songs.len()));
+                for (page, icon, label, count) in [
+                    (library_ui::Page::Albums, theme::Icon::Albums, "Albums", lib_counts.map(|c| c.0)),
+                    (library_ui::Page::Recent, theme::Icon::Clock, "Recently added", None),
+                    (library_ui::Page::Artists, theme::Icon::Artists, "Artists", lib_counts.map(|c| c.1)),
+                    (library_ui::Page::Songs, theme::Icon::Songs, "Songs", lib_counts.map(|c| c.2)),
+                ] {
+                    let selected = self.tab == Tab::Library && self.library.page == page && self.library.search.is_empty() && !self.library.now_open;
+                    let n = count.map(|n| n.to_string()).unwrap_or_default();
+                    let status = (!n.is_empty()).then_some((n.as_str(), p.faint));
+                    if theme::nav_item(ui, icon, label, selected, status).clicked() {
+                        self.tab = Tab::Library;
+                        self.library.page = page;
+                        self.library.now_open = false;
+                        self.library.album = None;
+                        self.library.search.clear();
+                    }
+                }
+                ui.add_space(16.0);
+
+                ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    theme::section_label(ui, "Devices");
+                });
+                // The ripper's state at a glance.
+                let ripping: Vec<f32> = self
+                    .drives
+                    .iter()
+                    .filter_map(|(path, v)| {
+                        let d = if self.swapped && self.view.as_deref() == Some(path.as_str()) { &self.disc } else { &v.disc };
+                        d.as_ref().filter(|d| d.result.is_none() && d.total_secs > 0).map(|d| d.done_secs as f32 / d.total_secs as f32)
+                    })
+                    .collect();
+                let status = if !ripping.is_empty() {
+                    let pct = ripping.iter().sum::<f32>() / ripping.len() as f32 * 100.0;
+                    (format!("{pct:.0}%"), theme::prism_at(0.25))
+                } else if self.running {
+                    (String::new(), theme::OK)
+                } else {
+                    (String::new(), p.faint)
+                };
+                let hint = if !ripping.is_empty() {
+                    format!("{} disc(s) ripping", ripping.len())
+                } else if self.running {
+                    "Waiting for a disc".to_string()
+                } else {
+                    "Ripping is stopped".to_string()
+                };
+                if theme::nav_item(ui, theme::Icon::Disc, "CD Ripper", self.tab == Tab::Rip, Some((&status.0, status.1))).on_hover_text(hint).clicked() {
+                    self.tab = Tab::Rip;
+                }
+                if theme::nav_item(ui, theme::Icon::Phone, "Phone", self.tab == Tab::Phone, None).clicked() {
+                    self.tab = Tab::Phone;
+                }
+                // Rips going to the LocalBeat server: how many wait.
+                let push = self.pusher.status();
+                let n = if push.sending { "…".to_string() } else { push.waiting.to_string() };
+                let colour = if push.failed > 0 { theme::WARN } else { p.faint };
+                let status = (push.enabled && (push.waiting > 0 || push.sending)).then_some((n.as_str(), colour));
+                let hint = if push.enabled { push.line.clone() } else { "The LocalBeat server: not set up on this computer".to_string() };
+                if theme::nav_item(ui, theme::Icon::Server, "Server", self.tab == Tab::Server, status).on_hover_text(hint).clicked() {
+                    self.tab = Tab::Server;
+                }
+                ui.add_space(16.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    theme::section_label(ui, "Tools");
+                });
+                if theme::nav_item(ui, theme::Icon::Tag, "Review tags", self.tab == Tab::Review, None).clicked() {
+                    self.tab = Tab::Review;
+                }
+                let damaged = self.repairs.count();
+                let n = damaged.to_string();
+                let status = (damaged > 0).then_some((n.as_str(), theme::WARN));
+                if theme::nav_item(ui, theme::Icon::Refresh, "Repairs", self.tab == Tab::Repairs, status)
+                    .on_hover_text("Discs with tracks that couldn't be read cleanly")
+                    .clicked()
+                {
+                    self.tab = Tab::Repairs;
+                    self.repairs.stale = true;
+                }
+                });
 
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                 if theme::nav_item(ui, theme::Icon::Log, "Activity log", self.show_log, None).clicked() {
@@ -1027,6 +1037,7 @@ impl App {
         for line in self.repairs.poll(&settings, ctx) {
             self.log(line);
         }
+        self.server.poll(&settings);
         for line in self.library.poll(ctx) {
             self.log(line);
         }
@@ -1115,6 +1126,14 @@ impl App {
             for l in lines {
                 self.log(l);
             }
+            self.choice_window(ctx);
+            return;
+        }
+        if self.tab == Tab::Server {
+            egui::CentralPanel::default().frame(page).show(ui, |ui| {
+                theme::page_header(ui, "Server", "Albums ripped here go to the LocalBeat server when this computer is on the home network", |_| {});
+                self.server.ui(ui, &self.settings, &mut self.prefs, &self.pusher);
+            });
             self.choice_window(ctx);
             return;
         }
@@ -1337,7 +1356,8 @@ impl App {
                 });
                 return;
             };
-            track_list(ui, d, time);
+            let server_line = self.server.album_line(&self.settings, &self.pusher.status(), &d.album_dir);
+            track_list(ui, d, time, server_line);
         });
         if spinning && self.tab == Tab::Rip {
             ctx.request_repaint_after(Duration::from_millis(33));
@@ -1576,7 +1596,7 @@ fn deck_card(ui: &mut egui::Ui, d: &Deck, width: f32) -> Option<DeckClick> {
 
 /// The disc's tracks: one row per track with a status mark, title, status
 /// and length; the reads underneath; a progress bar on the one being read.
-fn track_list(ui: &mut egui::Ui, d: &Disc, time: f64) {
+fn track_list(ui: &mut egui::Ui, d: &Disc, time: f64, server: Option<(String, egui::Color32)>) {
     let p = theme::pal(ui);
     if let Some(alert) = &d.alert {
         egui::Frame::new()
@@ -1597,6 +1617,13 @@ fn track_list(ui: &mut egui::Ui, d: &Disc, time: f64) {
     ui.label(egui::RichText::new(summary_line(d)).font(theme::medium(15.0)).color(p.text));
     if !d.album_dir.is_empty() {
         ui.label(egui::RichText::new(&d.album_dir).small().color(p.faint)).on_hover_text("Where the FLAC files go");
+    }
+    if let Some((line, color)) = server {
+        ui.horizontal(|ui| {
+            let (r, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+            theme::paint_icon(ui.painter(), r, theme::Icon::Server, color);
+            ui.label(egui::RichText::new(line).small().color(color));
+        });
     }
     ui.add_space(8.0);
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {

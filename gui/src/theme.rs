@@ -326,6 +326,7 @@ pub enum Icon {
     Lock,
     Info,
     Back,
+    Server,
 }
 
 /// Draws `icon` centred in `rect`, in `color`.
@@ -374,6 +375,14 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
             let r = Rect::from_center_size(c, vec2(0.95 * s, 1.6 * s));
             painter.rect_stroke(r, 3.0, stroke, StrokeKind::Middle);
             painter.line_segment([pos2(c.x - 0.15 * s, r.bottom() - 0.22 * s), pos2(c.x + 0.15 * s, r.bottom() - 0.22 * s)], stroke);
+        }
+        Icon::Server => {
+            // Two stacked units, each with a status light.
+            for dy in [-0.45, 0.45] {
+                let r = Rect::from_center_size(c + vec2(0.0, dy * s), vec2(1.6 * s, 0.7 * s));
+                painter.rect_stroke(r, 2.0, stroke, StrokeKind::Middle);
+                painter.circle_filled(pos2(r.right() - 0.3 * s, r.center().y), w * 0.9, color);
+            }
         }
         Icon::Tag => {
             let pts = vec![

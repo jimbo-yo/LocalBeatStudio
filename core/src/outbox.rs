@@ -132,6 +132,18 @@ impl Outbox {
         self.set(album, State::Sent { at: now() });
     }
 
+    /// Marks `album` sent if it wasn't queued again since `added` (when the
+    /// send started): a disc ripped into it meanwhile means it goes again.
+    pub fn sent_if_unchanged(&mut self, album: &str, added: &str) -> bool {
+        match self.albums.iter_mut().find(|e| e.album == album) {
+            Some(e) if e.added == added => {
+                e.state = State::Sent { at: now() };
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub fn failed(&mut self, album: &str, error: &str) {
         self.set(album, State::Failed { at: now(), error: error.to_string() });
     }
@@ -192,6 +204,19 @@ mod tests {
         assert_eq!(o.pending(), ["B/Two", "A/One"]);
         assert_eq!(o.albums.iter().filter(|e| e.album == "A/One").count(), 1);
         std::fs::remove_dir_all(s.config_dir.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn queued_again_while_sending_stays_waiting() {
+        let mut o = Outbox::default();
+        o.add("A/B");
+        let added = o.albums[0].added.clone();
+        assert!(o.sent_if_unchanged("A/B", &added));
+        o.add("A/B");
+        o.albums[0].added = "later".into();
+        assert!(!o.sent_if_unchanged("A/B", &added));
+        assert_eq!(o.pending(), ["A/B"]);
+        assert!(!o.sent_if_unchanged("Not/There", &added));
     }
 
     #[test]

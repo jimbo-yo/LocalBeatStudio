@@ -134,7 +134,21 @@ Each step works on its own:
    quotes/?/brackets (arrived intact, `.part` left behind), away from home
    (3 s, stays waiting, sent once back). `startScan` waits for the
    laptop's login (step 3): until then the server finds albums within
-   10 minutes
+   10 minutes.
+   Added 2026-11-16 (on the Surface, tested against a stand-in sshd with an
+   rrsync key and a stand-in Subsonic server): `core/subsonic.rs` (salted
+   token login, not `p=enc:`); with a login, after the copies Studio asks
+   for a scan, waits for `getScanStatus` (max 10 min), then `search3`s each
+   album (ALBUM + ALBUMARTIST of its first FLAC) and only then marks it sent
+   (not in the catalogue = failed, checked again next round; quitting
+   during the scan leaves it waiting; queued again meanwhile = stays
+   waiting). Without a login, or if the scan request fails, verified =
+   sent. `localbeat server trust` / the Server page pin the server's host
+   key in `<config>/server_known_hosts` (read as well as
+   `~/.ssh/known_hosts`); `host` may be `host:port`. Repairs that write
+   tracks queue the album (Repairs page, `localbeat repair`). The Server
+   page (sidebar "Server") shows the outbox, recently sent, Send now and
+   the settings; the Rip page says where each disc's album stands
 3. **Laptop tunnel and login** (`localbeat-people add my-laptop`,
    NetworkManager import).
 4. **Studio as a server client:** settings, catalogue, merged library,
