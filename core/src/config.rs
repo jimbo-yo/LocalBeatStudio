@@ -82,11 +82,56 @@ pub struct Prefs {
     pub last_space: Option<(u64, u64, u64, String)>,
     /// AcoustID application key, for identifying songs by sound (enrich).
     pub acoustid_key: String,
+    /// The LocalBeat server that holds the library (docs/server-library.md).
+    pub server: ServerPrefs,
+}
+
+/// Where rips go: the LocalBeat server, written with rsync over SSH from the
+/// home network only. Empty `host` = no server (rips stay on this computer).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ServerPrefs {
+    /// The server's address on the home network (`192.168.1.10`): SSH is
+    /// only open there, which is what keeps writing to the home network.
+    pub host: String,
+    /// The SSH user that owns the music (`musicuser`).
+    pub user: String,
+    /// This computer's writer key (`~/.ssh/localbeat-studio`), limited on the
+    /// server to rsync inside the music folder (LocalBeatServer
+    /// `host/localbeat-writers`).
+    pub key: String,
+    /// The music server (`http://192.168.1.10:4533`), for asking it to scan
+    /// after a push; with no login it finds new albums within 10 minutes.
+    pub url: String,
+    /// This computer's login on the music server.
+    pub login: String,
+    pub secret: String,
+}
+
+impl ServerPrefs {
+    pub fn enabled(&self) -> bool {
+        !self.host.is_empty() && !self.user.is_empty() && !self.key.is_empty()
+    }
+
+    /// `key` with a leading `~/` expanded.
+    pub fn key_path(&self) -> PathBuf {
+        match self.key.strip_prefix("~/") {
+            Some(rest) => dirs::home_dir().unwrap_or_default().join(rest),
+            None => PathBuf::from(&self.key),
+        }
+    }
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { notify_phone: false, notify_after_secs: 60, phone_usb: true, reserve_gb: 5.0, last_space: None, acoustid_key: String::new() }
+        Prefs {
+            notify_phone: false,
+            notify_after_secs: 60,
+            phone_usb: true,
+            reserve_gb: 5.0,
+            last_space: None,
+            acoustid_key: String::new(),
+            server: ServerPrefs::default(),
+        }
     }
 }
 
@@ -116,6 +161,11 @@ impl Prefs {
             last_space: v.get("last_space").and_then(|x| {
                 Some((x["total"].as_u64()?, x["free"].as_u64()?, x["music"].as_u64()?, x["date"].as_str()?.to_string()))
             }),
+            server: {
+                let sv = &v["server"];
+                let f = |k: &str| sv.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+                ServerPrefs { host: f("host"), user: f("user"), key: f("key"), url: f("url"), login: f("login"), secret: f("secret") }
+            },
         }
     }
 
@@ -131,6 +181,10 @@ impl Prefs {
         v["phone_usb"] = self.phone_usb.into();
         v["reserve_gb"] = self.reserve_gb.into();
         v["acoustid_key"] = self.acoustid_key.clone().into();
+        let sv = &self.server;
+        v["server"] = serde_json::json!({
+            "host": sv.host, "user": sv.user, "key": sv.key, "url": sv.url, "login": sv.login, "secret": sv.secret,
+        });
         v["last_space"] = match &self.last_space {
             Some((total, free, music, date)) => serde_json::json!({"total": total, "free": free, "music": music, "date": date}),
             None => serde_json::Value::Null,
@@ -138,6 +192,12 @@ impl Prefs {
         std::fs::create_dir_all(&s.config_dir).with_context(|| format!("creating {}", s.config_dir.display()))?;
         let tmp = f.with_extension("new");
         std::fs::write(&tmp, serde_json::to_string_pretty(&v)? + "\n").with_context(|| format!("writing {}", tmp.display()))?;
+        // It may hold the music server's login: for this user only.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600)).ok();
+        }
         std::fs::rename(&tmp, &f).with_context(|| format!("replacing {}", f.display()))?;
         Ok(())
     }
@@ -208,6 +268,14 @@ mod tests {
             reserve_gb: 7.5,
             last_space: Some((117, 19, 1, "2026-11-08".into())),
             acoustid_key: "abc".into(),
+            server: ServerPrefs {
+                host: "192.168.1.10".into(),
+                user: "musicuser".into(),
+                key: "~/.ssh/localbeat-studio".into(),
+                url: "http://192.168.1.10:4533".into(),
+                login: "my-laptop".into(),
+                secret: "s3cret".into(),
+            },
         };
         p.save(&s).unwrap();
         assert_eq!(Prefs::load(&s), p);

@@ -18,6 +18,7 @@ use localbeat_core::{cover, lock};
 use localbeat_platform::drive::{self, Drive, DriveIdentity};
 
 pub mod notify;
+pub mod push;
 
 #[derive(Debug, Clone, Default)]
 pub struct Options {
@@ -382,6 +383,15 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
         })
         .collect();
     fe.event(Event::Plan { album_dir: plan.album_dir.clone(), label: plan.label.clone(), tracks: infos });
+    // Held while this disc writes into the album, so the album isn't sent to
+    // the server half done (the pusher skips it until the next round).
+    let album_name = localbeat_core::outbox::album_name(s, &plan.album_dir).ok();
+    let _ripping = match &album_name {
+        Some(a) => Some(localbeat_core::lock::lock(&s.cache_dir, &localbeat_core::outbox::ripping_lock_name(a))?),
+        None => None,
+    };
+    // Whether this disc put anything new in the album (then it goes to the server).
+    let mut wrote = false;
 
     let started = Instant::now();
     let mut ok = true;
@@ -469,6 +479,7 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
         let sum = sum?;
         ok = sum.rejected.is_empty();
         rejected_now = sum.rejected.clone();
+        wrote |= !sum.accepted.is_empty();
         fe.event(Event::RipDone {
             accepted: sum.accepted.len(),
             rejected: sum.rejected.clone(),
@@ -507,6 +518,7 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
                 for &p in &repaired {
                     fe.event(Event::Repaired { position: p });
                 }
+                wrote |= !repaired.is_empty();
                 let missing = r.still_missing();
                 ok = missing.is_empty();
                 fe.event(Event::RepairDone { repaired, missing });
@@ -514,6 +526,19 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
             Err(e) => {
                 fe.event(Event::Note(format!("CUETools repair failed: {e:#}")));
                 fe.event(Event::RepairDone { repaired: Vec::new(), missing: rejected_now.clone() });
+            }
+        }
+    }
+
+    // Off to the server (docs/server-library.md): queued here, sent by the
+    // pusher (the window's, or `localbeat push`) when on the home network.
+    if wrote {
+        if let Some(a) = &album_name {
+            if config::Prefs::load(s).server.enabled() {
+                match localbeat_core::outbox::Outbox::update(s, |o| o.add(a)) {
+                    Ok(()) => fe.event(Event::Note(format!("Queued for the server: {a}"))),
+                    Err(e) => fe.event(Event::Note(format!("couldn't queue {a} for the server: {e:#}"))),
+                }
             }
         }
     }

@@ -208,8 +208,14 @@ ID_SERIAL_SHORT as fallback.
 
 ## Open items
 
-- **Server as the library** (`docs/server-library.md`): step 1 done (write
-  key, startScan). Laptop copies are kept until the Mac's library has a backup
+- **Server as the library** (`docs/server-library.md`): steps 1-2 done
+  (2026-11-14). Finished discs are queued in the outbox and sent to the Mac
+  with rsync over SSH from the home network only (`core/outbox.rs`,
+  `engine/push.rs`, `gui/server_push.rs`, sidebar "Server"; CLI `localbeat
+  server|outbox|push`; settings in localbeat.json `server`, set on the
+  Fedora laptop). Next: step 3, the laptop's tunnel and login (then
+  `startScan` after each push). Laptop copies are kept until the Mac's
+  library has a backup
 - Replugging a USB drive while Studio runs adds a second drive card (watcher
   keys drives by /dev path). Fix: key by udev ID_SERIAL, drop vanished paths
 - Not yet seen on a real disc: OtherPressing acceptance, per-drive Stop / Stop

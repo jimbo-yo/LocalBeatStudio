@@ -26,6 +26,7 @@ mod media_keys;
 mod phone_tab;
 mod repairs_tab;
 mod review_tab;
+mod server_push;
 mod theme;
 
 #[derive(PartialEq, Clone, Copy)]
@@ -241,6 +242,8 @@ struct App {
     eject: Vec<(Option<String>, Receiver<Vec<String>>)>,
     /// The music library, the player and their pages.
     library: library_ui::LibraryUi,
+    /// Sends ripped albums to the LocalBeat server (docs/server-library.md).
+    pusher: server_push::Pusher,
     drive_action: Option<(String, DriveAction)>,
 }
 
@@ -249,6 +252,7 @@ impl App {
         let settings = Settings::load();
         let prefs = Prefs::load(&settings);
         let (note_tx, notes) = channel::<String>();
+        let pusher = server_push::Pusher::start(settings.clone(), ctx.clone(), note_tx.clone());
         let (config_dir, repaint) = (settings.config_dir.clone(), ctx.clone());
         let notifier = Notifier::new(
             prefs.notify_phone,
@@ -265,6 +269,7 @@ impl App {
         let library = library_ui::LibraryUi::new(&settings, &ctx);
         let mut app = App {
             library,
+            pusher,
             ctx,
             settings,
             rx: None,
@@ -599,6 +604,19 @@ impl App {
             if theme::nav_item(ui, theme::Icon::Phone, "Phone", self.tab == Tab::Phone, None).clicked() {
                 self.tab = Tab::Phone;
             }
+            // Rips going to the LocalBeat server: how many wait. Click to try now.
+            let push = self.pusher.status();
+            if push.enabled {
+                let n = if push.sending { "…".to_string() } else { push.waiting.to_string() };
+                let colour = if push.failed > 0 { theme::WARN } else { p.faint };
+                let status = (push.waiting > 0 || push.sending).then_some((n.as_str(), colour));
+                if theme::nav_item(ui, theme::Icon::Folder, "Server", false, status)
+                    .on_hover_text(format!("{}\nClick to send what's waiting now (home network only)", push.line))
+                    .clicked()
+                {
+                    self.pusher.kick();
+                }
+            }
             ui.add_space(16.0);
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
@@ -853,8 +871,9 @@ impl App {
                 }
             }
             Event::DiscDone { ok } => {
-                // New songs for the library.
+                // New songs for the library, and for the server.
                 self.library.rescan(&self.ctx.clone());
+                self.pusher.kick();
                 let label = self.disc_label();
                 let result = self.disc.as_ref().and_then(|d| d.result.clone()).unwrap_or_default();
                 self.session.push((ok, format!("{label}: {result}")));
