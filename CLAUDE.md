@@ -74,7 +74,9 @@ Cargo workspace at the repo root (edition 2024):
   Server (`server_tab.rs`; sender thread `server_push.rs`), Review tags,
   Repairs; MPRIS (`media_keys.rs`); design system "Prism" in
   `theme.rs` (`docs/ui-redesign.md`)
-- `tools/`: `install-linux.sh`, `cmake-libdir-lib` (Fedora build fix)
+- `tools/`: `install-linux.sh`, `cmake-libdir-lib` (Fedora build fix),
+  `import-tunnel.py NAME` (a laptop's WireGuard tunnel to the server +
+  Studio's login, step 3)
 - `docs/`: design notes (below) and `history.md`
 
 ## Build, test, install
@@ -218,7 +220,7 @@ ID_SERIAL_SHORT as fallback.
 
 ## Open items
 
-- **Server as the library** (`docs/server-library.md`): steps 1, 2 and 4 done
+- **Server as the library** (`docs/server-library.md`): steps 1-4 done
   (2026-11-14, Server page and catalogue check 2026-11-16). Finished discs
   (and repairs) are queued in the outbox and sent to the Mac with rsync over
   SSH from the home network only; with a music server login Studio waits
@@ -226,8 +228,11 @@ ID_SERIAL_SHORT as fallback.
   Settings in localbeat.json `server`, set on the Lenovo laptop and the
   Surface (writer `my-linux-pc`, login `my-linux-pc`). Step 4 done
   2026-11-16: the server's albums show and play in Studio's library (song
-  cache), at home; away from home they need step 3, the laptop's tunnel
-  (still to do). Laptop copies are kept until the Mac's library has a backup
+  cache). Step 3 (tunnel) done on the Surface (10.8.0.3, NetworkManager
+  `localbeat`, Studio on `http://10.8.0.1:4533`; not yet tried away from
+  home); the Lenovo still needs `tools/import-tunnel.py my-laptop`. The
+  Mac's WireGuard endpoint is a bare IP: switch it to
+  `vpn.example.com`. Laptop copies are kept until the Mac's library has a backup
 - Replugging a USB drive while Studio runs adds a second drive card (watcher
   keys drives by /dev path). Fix: key by udev ID_SERIAL, drop vanished paths
 - Not yet seen on a real disc: OtherPressing acceptance, per-drive Stop / Stop

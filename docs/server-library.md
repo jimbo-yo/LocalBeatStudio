@@ -150,7 +150,20 @@ Each step works on its own:
    page (sidebar "Server") shows the outbox, recently sent, Send now and
    the settings; the Rip page says where each disc's album stands
 3. **Laptop tunnel and login** (`localbeat-people add my-laptop`,
-   NetworkManager import).
+   NetworkManager import). **Done for the Surface** 2026-11-16
+   (`my-linux-pc`, 10.8.0.3; checked at home: ping and login through the
+   tunnel, Studio's catalogue fetched over it; away from home not tried
+   yet). `tools/import-tunnel.py NAME` does it in one go: runs `sudo
+   localbeat-people add NAME --json` on the Mac over SSH (password asked
+   for, not shown), imports the WireGuard config into NetworkManager as
+   `localbeat` (autoconnect, only 10.8.0.1 through it) and sets Studio's
+   music server to `http://10.8.0.1:4533` with the new login; the private
+   key is never shown or left in a file. Note `add` replaces NAME's music
+   login. The Mac's endpoint file gave the bare IP `203.0.113.10`, not
+   `vpn.example.com`: fix /etc/localbeat/wireguard-endpoint on the
+   Mac (and `endpoint=` in the laptop's
+   /etc/NetworkManager/system-connections/localbeat.nmconnection). Still
+   to do: the Lenovo (`my-laptop`).
 4. **Studio as a server client** (**done** 2026-11-16, on the Surface at
    home: 4391 songs / 494 albums; played fine): settings, catalogue, merged
    library, playing via the song cache, connected/not connected. Built:
