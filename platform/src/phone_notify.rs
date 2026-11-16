@@ -3,7 +3,6 @@
 //! ships the same command line tool.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
@@ -12,7 +11,7 @@ use anyhow::{Context, Result, bail};
 /// else the first reachable device.
 pub fn notify(config_dir: &Path, message: &str) -> Result<String> {
     let exe = kdeconnect_cli();
-    let out = Command::new(&exe)
+    let out = crate::command(&exe)
         .args(["-a", "--id-name-only"])
         .output()
         .with_context(|| format!("running {} (is KDE Connect installed?)", exe.display()))?;
@@ -25,7 +24,7 @@ pub fn notify(config_dir: &Path, message: &str) -> Result<String> {
     }
     let preferred = phone_sync_device(config_dir);
     let (id, name) = devices.iter().find(|(id, _)| Some(id) == preferred.as_ref()).unwrap_or(&devices[0]);
-    let status = Command::new(&exe)
+    let status = crate::command(&exe)
         .args(["-d", id, "--ping-msg", message])
         .status()
         .with_context(|| format!("running {}", exe.display()))?;

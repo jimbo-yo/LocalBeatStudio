@@ -120,7 +120,8 @@ enum Command {
         /// The phone over USB (adb, USB debugging on)
         #[arg(long)]
         usb: bool,
-        /// The phone over Wi-Fi (KDE Connect)
+        /// The phone over Wi-Fi (KDE Connect on Linux; adb wireless debugging
+        /// on Windows, paired once with `localbeat pair`)
         #[arg(long)]
         wifi: bool,
         /// A folder standing in for the phone's music folder (testing)
@@ -216,6 +217,15 @@ enum Command {
         #[arg(long)]
         volume: Option<f32>,
     },
+    /// Pair with the phone for adb over Wi-Fi (once per computer): on the
+    /// phone, Developer options > Wireless debugging > Pair device with pairing
+    /// code. With only an address (Wireless debugging's IP:port), connect.
+    Pair {
+        /// IP:port the phone shows
+        address: String,
+        /// The six-digit pairing code
+        code: Option<String>,
+    },
     /// Send a test notification to the phone (KDE Connect, same Wi-Fi)
     Notify {
         #[arg(default_value = "localbeat test: phone notifications work.")]
@@ -293,6 +303,16 @@ fn main() -> ExitCode {
         Command::Library { covers, list } => library_cmd::run(covers, list),
         Command::Ctdb { dirs } => ctdb_cmd::run(dirs),
         Command::Repair { album, reads, write } => repair_cmd::run(album, reads, write),
+        Command::Pair { address, code } => match code {
+            Some(code) => localbeat_platform::phone::adb_pair(&address, &code).map(|msg| {
+                println!("{msg}\nlocalbeat sync --wifi now finds the phone whenever Wireless debugging is on.");
+                true
+            }),
+            None => localbeat_platform::phone::adb_connect(&address).map(|()| {
+                println!("Connected to {address}");
+                true
+            }),
+        },
         Command::Notify { message } => {
             let s = localbeat_core::config::Settings::load();
             localbeat_platform::phone_notify::notify(&s.config_dir, &message).map(|phone| {

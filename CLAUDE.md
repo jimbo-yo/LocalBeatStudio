@@ -74,7 +74,7 @@ Cargo workspace at the repo root (edition 2024):
   Server (`server_tab.rs`; sender thread `server_push.rs`), Review tags,
   Repairs; MPRIS (`media_keys.rs`); design system "Prism" in
   `theme.rs` (`docs/ui-redesign.md`)
-- `tools/`: `install-linux.sh`, `cmake-libdir-lib` (Fedora build fix),
+- `tools/`: `install-linux.sh`, `install-windows.ps1`, `cmake-libdir-lib` (Fedora build fix),
   `import-tunnel.py NAME` (a laptop's WireGuard tunnel to the server +
   Studio's login, step 3)
 - `docs/`: design notes (below) and `history.md`
@@ -90,6 +90,22 @@ Cargo workspace at the repo root (edition 2024):
 - Install on Linux: `tools/install-linux.sh` (release build, ~10-13 min the
   first time) → `~/.local/bin/localbeat{,-studio}`, menu entry, icons. It uses
   `install` (new inode), so a running copy is undisturbed
+- Install on Windows: `pwsh -File tools\install-windows.ps1` (installs CMake,
+  MSYS2's rsync + ssh in `C:\msys64`, adb via Google.PlatformTools; release
+  build) → `%LOCALAPPDATA%\Programs\LocalBeat Studio\` (on the user PATH),
+  Start menu entry. A running exe is renamed aside (`*.old-*`, cleaned next
+  time). The exe icon is `gui/assets/localbeat.ico`, embedded by `gui/build.rs`
+- Windows specifics (2026-11-16):
+  - Server push needs an MSYS2/Cygwin/cwRsync rsync run with the ssh from
+    its own folder (`push::Rsync::find`; Windows' OpenSSH hangs with it, and
+    rrsync on the server rules out scp/sftp). Paths go as `/c/...`
+    (`PathStyle`). `ssh-keyscan`/`ssh-keygen` are Windows' own OpenSSH
+  - Phone over Wi-Fi = adb wireless debugging (KDE Connect for Windows can't
+    mount storage; `phone::KDECONNECT_STORAGE` is false there). Pair once on
+    the Phone page or `localbeat pair IP:PORT CODE`
+  - Media keys: SMTC via souvlaki with the main window's HWND
+  - Console programs are started with `localbeat_platform::command` (no
+    console window flashing up from the GUI)
 - Screenshots / layout work without a disc: `LOCALBEAT_DEMO=1` (also `phone`,
   `review`, `sr2`, `choice`, `alert`, `repairs`)
 - Build quirks:

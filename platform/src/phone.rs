@@ -1,6 +1,8 @@
 //! Reaching the phone's music folder, for the phone sync
-//! (`localbeat_core::phone_sync`): USB through adb, or Wi-Fi through KDE
-//! Connect's mount of the phone's storage. Ported from phone-sync.py.
+//! (`localbeat_core::phone_sync`): adb, over USB or Android's wireless
+//! debugging (paired once with [`adb_pair`]), or on Linux Wi-Fi through KDE
+//! Connect's mount of the phone's storage (KDE Connect for Windows can't
+//! mount it). Ported from phone-sync.py.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -26,14 +28,40 @@ fn sh(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
+/// Can KDE Connect reach the phone's storage here? Only on Linux (its mount
+/// goes through D-Bus); elsewhere Wi-Fi means adb's wireless debugging.
+pub const KDECONNECT_STORAGE: bool = cfg!(target_os = "linux");
+
 fn adb_exe() -> PathBuf {
-    PathBuf::from(if cfg!(windows) { "adb.exe" } else { "adb" })
+    #[cfg(windows)]
+    {
+        // On PATH (winget's Google.PlatformTools links it), else Android
+        // Studio's SDK, which doesn't put it on PATH.
+        let on_path = std::env::var_os("PATH")
+            .map(|p| std::env::split_paths(&p).any(|d| d.join("adb.exe").is_file()))
+            .unwrap_or(false);
+        if !on_path
+            && let Some(local) = std::env::var_os("LOCALAPPDATA")
+        {
+            let sdk = PathBuf::from(local).join(r"Android\Sdk\platform-tools\adb.exe");
+            if sdk.is_file() {
+                return sdk;
+            }
+        }
+        PathBuf::from("adb.exe")
+    }
+    #[cfg(not(windows))]
+    PathBuf::from("adb")
 }
 
 fn run(cmd: &mut Command) -> Result<Output> {
     let out = cmd.output().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            anyhow!("adb isn't installed (Fedora: sudo dnf install android-tools; Ubuntu: sudo apt install adb)")
+            if cfg!(windows) {
+                anyhow!("adb isn't installed (winget install Google.PlatformTools, then restart Studio)")
+            } else {
+                anyhow!("adb isn't installed (Fedora: sudo dnf install android-tools; Ubuntu: sudo apt install adb)")
+            }
         } else {
             anyhow!(e)
         }
@@ -46,10 +74,40 @@ fn run(cmd: &mut Command) -> Result<Output> {
     Ok(out)
 }
 
+/// Pairs with a phone for wireless debugging (once per computer). On the
+/// phone: Developer options > Wireless debugging > Pair device with pairing
+/// code, which shows `address` (IP:port) and the six-digit `code`. After that
+/// adb finds the phone by itself whenever Wireless debugging is on.
+pub fn adb_pair(address: &str, code: &str) -> Result<String> {
+    let (address, code) = (address.trim(), code.trim());
+    if !address.contains(':') || code.is_empty() {
+        bail!("give the pairing address (IP:port) and the six-digit code the phone shows");
+    }
+    let out = run(crate::command(adb_exe()).args(["pair", address, code]))?;
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // adb exits 0 even when pairing fails.
+    if !text.contains("Successfully paired") {
+        bail!("{}", if text.is_empty() { "pairing failed".to_string() } else { text });
+    }
+    Ok(text)
+}
+
+/// Connects to a paired phone at `address` (Wireless debugging's IP:port,
+/// not the pairing one). Only needed when adb doesn't find it by itself.
+pub fn adb_connect(address: &str) -> Result<()> {
+    let out = run(crate::command(adb_exe()).args(["connect", address.trim()]))?;
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if !text.contains("connected to") {
+        bail!("{}", if text.is_empty() { "couldn't connect".to_string() } else { text });
+    }
+    Ok(())
+}
+
 impl AdbPhone {
-    /// The first phone connected over USB with debugging allowed.
+    /// The first phone connected over USB with debugging allowed, else one on
+    /// wireless debugging.
     pub fn connect(root: &str) -> Result<Self> {
-        let out = run(Command::new(adb_exe()).arg("devices"))?;
+        let out = run(crate::command(adb_exe()).arg("devices"))?;
         let text = String::from_utf8_lossy(&out.stdout);
         let devices: Vec<(&str, &str)> = text
             .lines()
@@ -67,7 +125,10 @@ impl AdbPhone {
             if devices.iter().any(|(_, s)| *s == "unauthorized") {
                 bail!("unlock the phone and tap Allow on the \"Allow USB debugging?\" prompt");
             }
-            bail!("no phone found over USB: plug it in and turn on USB debugging (Settings > System > Developer options)");
+            bail!(
+                "no phone found: plug it in with USB debugging on, or turn on Wireless debugging \
+                 (both in Settings > System > Developer options; pair once for Wi-Fi)"
+            );
         };
         let mut p = AdbPhone { serial: serial.to_string(), root: root.trim_end_matches('/').to_string(), model: String::new() };
         p.shell(&format!("mkdir -p {}", sh(&p.root)))?;
@@ -76,7 +137,7 @@ impl AdbPhone {
     }
 
     fn adb(&self) -> Command {
-        let mut c = Command::new(adb_exe());
+        let mut c = crate::command(adb_exe());
         c.args(["-s", &self.serial]);
         c
     }
@@ -177,7 +238,7 @@ impl PhoneFs for AdbPhone {
 impl Reconnect for AdbPhone {
     fn reconnect(&self) -> Result<()> {
         // Not wait-for-device: that blocks forever; the caller retries.
-        let out = run(Command::new(adb_exe()).args(["-s", &self.serial, "get-state"]))?;
+        let out = run(crate::command(adb_exe()).args(["-s", &self.serial, "get-state"]))?;
         if String::from_utf8_lossy(&out.stdout).trim() == "device" { Ok(()) } else { bail!("the phone isn't connected") }
     }
 }
@@ -194,9 +255,9 @@ pub struct KdeConnectPhone {
 fn qdbus(path: &str, method: &str) -> Result<String> {
     let exe = ["qdbus-qt6", "qdbus6", "qdbus"]
         .into_iter()
-        .find(|e| Command::new(e).arg("--version").output().is_ok())
+        .find(|e| crate::command(e).arg("--version").output().is_ok())
         .ok_or_else(|| anyhow!("qdbus not found (Fedora: qt6-qttools; Ubuntu: qdbus-qt6)"))?;
-    let out = run(Command::new(exe).args(["org.kde.kdeconnect", path, method]))?;
+    let out = run(crate::command(exe).args(["org.kde.kdeconnect", path, method]))?;
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
@@ -204,7 +265,7 @@ impl KdeConnectPhone {
     /// Mounts the phone's storage through KDE Connect. `preferred` is a
     /// device id (Phone Sync's choice), else the first reachable phone.
     pub fn connect(preferred: Option<&str>, subfolder: &str) -> Result<Self> {
-        let out = Command::new("kdeconnect-cli")
+        let out = crate::command("kdeconnect-cli")
             .args(["-a", "--id-name-only"])
             .output()
             .context("running kdeconnect-cli (is KDE Connect installed?)")?;

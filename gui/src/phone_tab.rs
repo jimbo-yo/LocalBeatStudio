@@ -30,6 +30,8 @@ enum Msg {
     Event(SyncEvent),
     Waiting(String),
     Done(Result<SyncSummary, String>),
+    /// Wireless debugging: paired, or connected by address.
+    Wireless(Result<String, String>),
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -63,6 +65,10 @@ pub struct PhoneTab {
     waiting: Option<String>,
     confirm: bool,
     result: Option<String>,
+    /// Wireless debugging: the pairing address and code, the connect address.
+    pair_addr: String,
+    pair_code: String,
+    wifi_addr: String,
 }
 
 fn size(b: u64) -> String {
@@ -94,7 +100,33 @@ impl PhoneTab {
             waiting: None,
             confirm: false,
             result: None,
+            pair_addr: String::new(),
+            pair_code: String::new(),
+            wifi_addr: String::new(),
         }
+    }
+
+    /// Wireless debugging: pairs (with a code) or connects to an address, in
+    /// the background (adb can take a few seconds).
+    fn wireless(&mut self, pair: bool, ctx: &egui::Context) {
+        if self.busy {
+            return;
+        }
+        let (tx, rx) = channel();
+        self.rx = Some(rx);
+        self.busy = true;
+        self.error = None;
+        self.status = if pair { "Pairing…" } else { "Connecting over Wi-Fi…" }.into();
+        let (addr, code, wifi, ctx) = (self.pair_addr.clone(), self.pair_code.clone(), self.wifi_addr.clone(), ctx.clone());
+        std::thread::spawn(move || {
+            let r = if pair {
+                phone::adb_pair(&addr, &code).map(|_| "Paired. Now Connect / refresh (it can take a few seconds to show up)".to_string())
+            } else {
+                phone::adb_connect(&wifi).map(|_| format!("Connected to {}", wifi.trim()))
+            };
+            let _ = tx.send(Msg::Wireless(r.map_err(|e| format!("{e:#}"))));
+            ctx.request_repaint();
+        });
     }
 
     /// Connects (over USB or Wi-Fi) and scans the library and the phone.
@@ -102,6 +134,8 @@ impl PhoneTab {
         if self.busy {
             return;
         }
+        // Without KDE Connect's mount (Windows), Wi-Fi is adb's wireless debugging.
+        let usb = usb || !phone::KDECONNECT_STORAGE;
         let (tx, rx) = channel();
         self.rx = Some(rx);
         self.busy = true;
@@ -131,6 +165,42 @@ impl PhoneTab {
             let _ = tx.send(Msg::Loaded(r.map_err(|e| format!("{e:#}"))));
             ctx.request_repaint();
         });
+    }
+
+    /// Pairing for Android's wireless debugging, and connecting by address
+    /// when adb doesn't find the phone by itself (mDNS blocked).
+    fn wireless_ui(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        egui::CollapsingHeader::new("Wi-Fi with wireless debugging")
+            .default_open(!phone::KDECONNECT_STORAGE)
+            .show(ui, |ui| {
+                ui.small(
+                    "Once per computer: on the phone, Settings > System > Developer options > Wireless debugging > \
+                     Pair device with pairing code, then type what it shows here.",
+                );
+                ui.add_enabled_ui(!self.busy, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Pairing address");
+                        ui.add(egui::TextEdit::singleline(&mut self.pair_addr).hint_text("192.168.1.20:37000").desired_width(160.0));
+                        ui.label("Code");
+                        ui.add(egui::TextEdit::singleline(&mut self.pair_code).hint_text("123456").desired_width(90.0));
+                        if crate::theme::button(ui, None, "Pair", crate::theme::Kind::Secondary).clicked() {
+                            self.wireless(true, &ctx);
+                        }
+                    });
+                    ui.small(
+                        "After that, Connect / refresh finds the phone whenever Wireless debugging is on. If it doesn't, \
+                         connect with the IP address & port on the Wireless debugging screen:",
+                    );
+                    ui.horizontal(|ui| {
+                        ui.label("IP address & port");
+                        ui.add(egui::TextEdit::singleline(&mut self.wifi_addr).hint_text("192.168.1.20:41000").desired_width(160.0));
+                        if crate::theme::button(ui, None, "Connect", crate::theme::Kind::Secondary).clicked() {
+                            self.wireless(false, &ctx);
+                        }
+                    });
+                });
+            });
     }
 
     fn replan(&mut self) {
@@ -178,8 +248,8 @@ impl PhoneTab {
                 Msg::Loaded(Ok(l)) => {
                     self.busy = false;
                     self.status = format!("Connected: {}", l.desc);
-                    if let (true, Some((total, free))) = (prefs.phone_usb, l.phone.space) {
-                        // Remembered for Wi-Fi, which can't tell.
+                    if let Some((total, free)) = l.phone.space {
+                        // Remembered for KDE Connect, which can't tell.
                         let date = chrono_date();
                         prefs.last_space = Some((total, free, l.phone.music_bytes(), date));
                         let _ = prefs.save(s);
@@ -204,6 +274,19 @@ impl PhoneTab {
                 }
                 Msg::Event(SyncEvent::Failed { file, error }) => log.push(format!("Phone sync: couldn't convert {file}: {error}")),
                 Msg::Waiting(w) => self.waiting = Some(w),
+                Msg::Wireless(r) => {
+                    self.busy = false;
+                    match r {
+                        Ok(msg) => {
+                            self.status = msg;
+                            self.pair_code.clear();
+                        }
+                        Err(e) => {
+                            self.status = "Not connected".into();
+                            self.error = Some(e);
+                        }
+                    }
+                }
                 Msg::Done(r) => {
                     self.busy = false;
                     self.syncing = false;
@@ -245,12 +328,17 @@ impl PhoneTab {
         ui.horizontal(|ui| {
             ui.label("Phone:");
             let before = prefs.phone_usb;
-            ui.add_enabled_ui(!self.busy, |ui| {
-                ui.radio_value(&mut prefs.phone_usb, true, "adb")
-                    .on_hover_text("USB cable, or Android's wireless debugging: fastest, and shows free space");
-                ui.radio_value(&mut prefs.phone_usb, false, "KDE Connect")
-                    .on_hover_text("Wi-Fi through KDE Connect: no setup on the phone beyond pairing, but slower and can't show free space");
-            });
+            if phone::KDECONNECT_STORAGE {
+                ui.add_enabled_ui(!self.busy, |ui| {
+                    ui.radio_value(&mut prefs.phone_usb, true, "adb")
+                        .on_hover_text("USB cable, or Android's wireless debugging: fastest, and shows free space");
+                    ui.radio_value(&mut prefs.phone_usb, false, "KDE Connect")
+                        .on_hover_text("Wi-Fi through KDE Connect: no setup on the phone beyond pairing, but slower and can't show free space");
+                });
+            } else {
+                ui.label("adb (USB or Wi-Fi)")
+                    .on_hover_text("USB cable, or Android's wireless debugging (pair once below)");
+            }
             if before != prefs.phone_usb {
                 let _ = prefs.save(s);
                 self.loaded = None;
@@ -271,8 +359,15 @@ impl PhoneTab {
             ui.add_space(12.0);
             if !self.busy {
                 ui.label("Connect the phone to choose what's on it.");
-                ui.small("USB: phone plugged in with USB debugging on. Wi-Fi: phone paired in KDE Connect, same network.");
+                ui.small(if phone::KDECONNECT_STORAGE {
+                    "USB: phone plugged in with USB debugging on. Wi-Fi: phone paired in KDE Connect, same network \
+                     (or adb's wireless debugging, below)."
+                } else {
+                    "USB: phone plugged in with USB debugging on. Wi-Fi: Wireless debugging on, same network, paired once (below)."
+                });
             }
+            ui.add_space(12.0);
+            self.wireless_ui(ui);
             return;
         }
 
@@ -398,7 +493,7 @@ impl PhoneTab {
                         (room < 0).then_some(ui.visuals().error_fg_color),
                     );
                 }
-                None => tile(ui, "Free on the phone", "?".into(), "Wi-Fi can't tell: connect by USB once".into(), None),
+                None => tile(ui, "Free on the phone", "?".into(), "KDE Connect can't tell: connect with adb once".into(), None),
             }
         });
         ui.horizontal(|ui| {

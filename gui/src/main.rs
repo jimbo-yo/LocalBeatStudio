@@ -62,7 +62,7 @@ fn main() -> eframe::Result {
     };
     eframe::run_native("LocalBeat Studio", options, Box::new(|cc| {
         theme::apply(&cc.egui_ctx);
-        Ok(Box::new(App::new(cc.egui_ctx.clone())))
+        Ok(Box::new(App::new(cc.egui_ctx.clone(), media_keys::window_handle(cc))))
     }))
 }
 
@@ -251,7 +251,7 @@ struct App {
 }
 
 impl App {
-    fn new(ctx: egui::Context) -> Self {
+    fn new(ctx: egui::Context, hwnd: Option<media_keys::Hwnd>) -> Self {
         let settings = Settings::load();
         let prefs = Prefs::load(&settings);
         let (note_tx, notes) = channel::<String>();
@@ -269,7 +269,7 @@ impl App {
                 repaint.request_repaint();
             }),
         );
-        let library = library_ui::LibraryUi::new(&settings, &ctx);
+        let library = library_ui::LibraryUi::new(&settings, &ctx, hwnd);
         let mut app = App {
             library,
             pusher,

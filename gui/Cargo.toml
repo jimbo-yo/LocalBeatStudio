@@ -9,6 +9,9 @@ license.workspace = true
 name = "localbeat-studio"
 path = "src/main.rs"
 
+[build-dependencies]
+winresource = "0.1"
+
 [dependencies]
 localbeat-core.workspace = true
 localbeat-engine.workspace = true
@@ -19,4 +22,5 @@ serde_json.workspace = true
 souvlaki = { version = "0.9", default-features = false, features = ["use_zbus"] }
 anyhow.workspace = true
 eframe = "0.37"
+raw-window-handle = "0.6"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }

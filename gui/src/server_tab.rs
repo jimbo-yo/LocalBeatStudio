@@ -214,11 +214,14 @@ impl ServerTab {
                 field(ui, "This computer's key", "~/.ssh/localbeat-studio", &mut edit.key, false);
             });
             if !edit.key.is_empty() && !edit.key_path().is_file() {
+                // Windows' ssh-keygen doesn't expand ~, and PowerShell 5 drops -N ''.
+                let make = if cfg!(windows) {
+                    format!("ssh-keygen -t ed25519 -f \"{}\"  (Enter twice for no passphrase)", edit.key_path().display())
+                } else {
+                    format!("ssh-keygen -t ed25519 -f {} -N ''", edit.key)
+                };
                 ui.label(
-                    RichText::new(format!(
-                        "No key there yet. Make one with: ssh-keygen -t ed25519 -f {} -N ''  and add it on the server with localbeat-writers.",
-                        edit.key
-                    ))
+                    RichText::new(format!("No key there yet. Make one with: {make}  and add it on the server with localbeat-writers."))
                     .small()
                     .color(theme::WARN),
                 );

@@ -81,15 +81,109 @@ pub fn reachable(sp: &ServerPrefs) -> Result<(), String> {
     Err(format!("{} can't be reached ({last}): not on the home network?", sp.host))
 }
 
+/// How an rsync program spells this computer's paths.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PathStyle {
+    /// As they are (Linux, macOS).
+    Native,
+    /// MSYS2 / Git for Windows: `C:\Users\me` is `/c/Users/me`.
+    Msys,
+    /// Cygwin / cwRsync: `C:\Users\me` is `/cygdrive/c/Users/me`.
+    Cygwin,
+}
+
+impl PathStyle {
+    /// `p` as this rsync (and the ssh beside it) understands it. A bare
+    /// `C:\…` would look like a remote `host:path` to rsync.
+    pub fn path(self, p: &Path) -> String {
+        let s = p.to_string_lossy();
+        if self == PathStyle::Native {
+            return s.into_owned();
+        }
+        let s = s.strip_prefix(r"\\?\").unwrap_or(&s).replace('\\', "/");
+        let b = s.as_bytes();
+        if b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic() {
+            let drive = (b[0] as char).to_ascii_lowercase();
+            let rest = &s[2..];
+            let rest = if rest.starts_with('/') { rest.to_string() } else { format!("/{rest}") };
+            return match self {
+                PathStyle::Msys => format!("/{drive}{rest}"),
+                _ => format!("/cygdrive/{drive}{rest}"),
+            };
+        }
+        s // UNC (//server/share) and relative paths read the same
+    }
+}
+
+/// The rsync program to run. On Windows it's an MSYS2, Cygwin or cwRsync
+/// build, run with the ssh from its own folder: rsync talking to Windows'
+/// own OpenSSH over pipes is known to hang, and the server's key only lets
+/// rsync in (rrsync), so scp/sftp aren't an option.
+#[derive(Debug, Clone)]
+pub struct Rsync {
+    pub exe: std::path::PathBuf,
+    pub style: PathStyle,
+}
+
+impl Rsync {
+    /// Finds rsync: on PATH, else where MSYS2, Cygwin, cwRsync or Git for
+    /// Windows put it.
+    pub fn find() -> Result<Rsync> {
+        if !cfg!(windows) {
+            return Ok(Rsync { exe: "rsync".into(), style: PathStyle::Native });
+        }
+        let mut dirs: Vec<std::path::PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+        let pf = std::env::var_os("ProgramFiles").map(std::path::PathBuf::from).unwrap_or_else(|| r"C:\Program Files".into());
+        dirs.extend([
+            std::path::PathBuf::from(r"C:\msys64\usr\bin"),
+            r"C:\cygwin64\bin".into(),
+            pf.join(r"cwRsync\bin"),
+            pf.join(r"Git\usr\bin"),
+        ]);
+        let dir = dirs
+            .into_iter()
+            .find(|d| d.join("rsync.exe").is_file())
+            .context("rsync isn't installed: run tools\\install-windows.ps1 (it installs MSYS2's rsync), or put an MSYS2/Cygwin rsync on PATH")?;
+        if !dir.join("ssh.exe").is_file() {
+            bail!("{} has rsync.exe but no ssh.exe beside it (rsync needs the ssh from its own runtime)", dir.display());
+        }
+        let style = if dir.join("cygwin1.dll").is_file() { PathStyle::Cygwin } else { PathStyle::Msys };
+        Ok(Rsync { exe: dir.join("rsync.exe"), style })
+    }
+
+    /// A command running rsync. On Windows its folder goes first on PATH, so
+    /// the `ssh` in [`ssh_command`] is the one beside it, and HOME is the
+    /// user's profile (else ssh looks for a home inside MSYS2/Cygwin).
+    pub fn command(&self) -> Command {
+        let mut c = localbeat_platform::command(&self.exe);
+        if let (true, Some(dir)) = (cfg!(windows), self.exe.parent()) {
+            let mut path = std::ffi::OsString::from(dir.as_os_str());
+            if let Some(old) = std::env::var_os("PATH") {
+                path.push(";");
+                path.push(old);
+            }
+            c.env("PATH", path);
+            if let Some(home) = dirs::home_dir() {
+                c.env("HOME", home);
+            }
+        }
+        c
+    }
+
+    pub fn path(&self, p: &Path) -> String {
+        self.style.path(p)
+    }
+}
+
 /// The ssh command rsync runs: this key only, never ask anything (no
 /// password, no unknown host key: the server's key must already be known,
 /// in `~/.ssh/known_hosts` or pinned in [`known_hosts`]).
-pub fn ssh_command(s: &Settings, sp: &ServerPrefs) -> String {
-    let key = sp.key_path().to_string_lossy().replace('\'', r"'\''");
+pub fn ssh_command(s: &Settings, sp: &ServerPrefs, rs: &Rsync) -> String {
+    let key = rs.path(&sp.key_path()).replace('\'', r"'\''");
     let home = dirs::home_dir().unwrap_or_default().join(".ssh").join("known_hosts");
     // One -o with both files, each in double quotes for ssh (rsync keeps
     // double quotes inside single quotes as they are).
-    let files = format!("UserKnownHostsFile=\"{}\" \"{}\"", home.display(), known_hosts(s).display());
+    let files = format!("UserKnownHostsFile=\"{}\" \"{}\"", rs.path(&home), rs.path(&known_hosts(s)));
     format!(
         "ssh -p {} -i '{key}' -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o '{files}' -o ConnectTimeout=10",
         host_port(sp).1
@@ -101,7 +195,7 @@ pub fn ssh_command(s: &Settings, sp: &ServerPrefs) -> String {
 /// (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` there).
 pub fn scan_host_key(s: &Settings, sp: &ServerPrefs) -> Result<(String, String)> {
     let (host, port) = host_port(sp);
-    let out = Command::new("ssh-keyscan")
+    let out = localbeat_platform::command("ssh-keyscan")
         .args(["-T", "5", "-t", "ed25519", "-p", &port.to_string(), host])
         .output()
         .context("running ssh-keyscan (is openssh-clients installed?)")?;
@@ -116,7 +210,7 @@ pub fn scan_host_key(s: &Settings, sp: &ServerPrefs) -> Result<(String, String)>
     let tmp = known_hosts(s).with_extension("scan");
     std::fs::create_dir_all(&s.config_dir).with_context(|| format!("creating {}", s.config_dir.display()))?;
     std::fs::write(&tmp, &lines).with_context(|| format!("writing {}", tmp.display()))?;
-    let fp = Command::new("ssh-keygen").arg("-lf").arg(&tmp).output();
+    let fp = localbeat_platform::command("ssh-keygen").arg("-lf").arg(&tmp).output();
     std::fs::remove_file(&tmp).ok();
     let fp = fp.context("running ssh-keygen")?;
     Ok((lines, String::from_utf8_lossy(&fp.stdout).trim().to_string()))
@@ -128,9 +222,14 @@ pub fn save_host_key(s: &Settings, lines: &str) -> Result<()> {
     std::fs::write(&f, lines).with_context(|| format!("writing {}", f.display()))
 }
 
-fn rsync_args(s: &Settings, sp: &ServerPrefs, local: &Path, album: &str, check: bool) -> Vec<OsString> {
-    let mut src = local.as_os_str().to_owned();
-    src.push("/");
+fn rsync_args(s: &Settings, sp: &ServerPrefs, rs: &Rsync, local: &Path, album: &str, check: bool) -> Vec<OsString> {
+    let src: OsString = if rs.style == PathStyle::Native {
+        let mut src = local.as_os_str().to_owned();
+        src.push("/");
+        src
+    } else {
+        format!("{}/", rs.path(local)).into()
+    };
     let mut a: Vec<OsString> = ["-a", "--mkpath", "--partial", "--chmod=D755,F644", "--exclude=*.part", "--exclude=*.new"]
         .iter()
         .map(OsString::from)
@@ -139,14 +238,14 @@ fn rsync_args(s: &Settings, sp: &ServerPrefs, local: &Path, album: &str, check: 
         a.extend(["--checksum", "--dry-run", "--itemize-changes"].map(OsString::from));
     }
     a.push("-e".into());
-    a.push(ssh_command(s, sp).into());
+    a.push(ssh_command(s, sp, rs).into());
     a.push(src);
     a.push(format!("{}@{}:{REMOTE_FLAC}/{album}/", sp.user, host_port(sp).0).into());
     a
 }
 
-fn rsync(args: &[OsString]) -> Result<Output> {
-    Command::new("rsync").args(args).output().context("running rsync (is it installed?)")
+fn rsync(rs: &Rsync, args: &[OsString]) -> Result<Output> {
+    rs.command().args(args).output().with_context(|| format!("running {} (is it installed?)", rs.exe.display()))
 }
 
 /// What rsync's failure means: away from home, or a real problem.
@@ -179,7 +278,11 @@ pub fn push_album(s: &Settings, sp: &ServerPrefs, album: &str) -> Outcome {
     if !local.is_dir() {
         return Outcome::Failed(format!("{} isn't on this computer any more", local.display()));
     }
-    let out = match rsync(&rsync_args(s, sp, &local, album, false)) {
+    let rs = match Rsync::find() {
+        Ok(r) => r,
+        Err(e) => return Outcome::Failed(format!("{e:#}")),
+    };
+    let out = match rsync(&rs, &rsync_args(s, sp, &rs, &local, album, false)) {
         Ok(o) => o,
         Err(e) => return Outcome::Failed(format!("{e:#}")),
     };
@@ -187,7 +290,7 @@ pub fn push_album(s: &Settings, sp: &ServerPrefs, album: &str) -> Outcome {
         return classify(&out);
     }
     // Check: comparing checksums, rsync must find nothing left to send.
-    let out = match rsync(&rsync_args(s, sp, &local, album, true)) {
+    let out = match rsync(&rs, &rsync_args(s, sp, &rs, &local, album, true)) {
         Ok(o) => o,
         Err(e) => return Outcome::Failed(format!("{e:#}")),
     };
@@ -355,14 +458,41 @@ fn finish(s: &Settings, sp: &ServerPrefs, copied: &[(String, String)], sum: &mut
     Ok(())
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::process::ExitStatusExt;
     use std::process::ExitStatus;
 
+    #[cfg(unix)]
+    fn status(code: i32) -> ExitStatus {
+        std::os::unix::process::ExitStatusExt::from_raw(code << 8)
+    }
+
+    #[cfg(windows)]
+    fn status(code: i32) -> ExitStatus {
+        std::os::windows::process::ExitStatusExt::from_raw(code as u32)
+    }
+
     fn out(code: i32, stderr: &str) -> Output {
-        Output { status: ExitStatus::from_raw(code << 8), stdout: vec![], stderr: stderr.as_bytes().to_vec() }
+        Output { status: status(code), stdout: vec![], stderr: stderr.as_bytes().to_vec() }
+    }
+
+    fn native() -> Rsync {
+        Rsync { exe: "rsync".into(), style: PathStyle::Native }
+    }
+
+    #[test]
+    fn windows_paths_for_msys_and_cygwin_rsync() {
+        let p = Path::new(r"C:\Users\me\Music\FLAC\AC／DC\Back in Black");
+        assert_eq!(PathStyle::Msys.path(p), "/c/Users/me/Music/FLAC/AC／DC/Back in Black");
+        assert_eq!(PathStyle::Cygwin.path(p), "/cygdrive/c/Users/me/Music/FLAC/AC／DC/Back in Black");
+        assert_eq!(PathStyle::Msys.path(Path::new(r"\\?\D:\x")), "/d/x");
+        assert_eq!(PathStyle::Msys.path(Path::new(r"\\nas\music\a")), "//nas/music/a");
+        assert_eq!(PathStyle::Native.path(Path::new("/home/me/a")), "/home/me/a");
+        let s = Settings::load();
+        let rs = Rsync { exe: "rsync.exe".into(), style: PathStyle::Msys };
+        let a = rsync_args(&s, &prefs(), &rs, p, "AC／DC/Back in Black", false);
+        assert_eq!(a[a.len() - 2], "/c/Users/me/Music/FLAC/AC／DC/Back in Black/");
     }
 
     fn prefs() -> ServerPrefs {
@@ -389,7 +519,7 @@ mod tests {
     #[test]
     fn rsync_arguments() {
         let s = Settings::load();
-        let a = rsync_args(&s, &prefs(), Path::new("/m/FLAC/Bob Dylan/Blood on the Tracks"), "Bob Dylan/Blood on the Tracks", false);
+        let a = rsync_args(&s, &prefs(), &native(), Path::new("/m/FLAC/Bob Dylan/Blood on the Tracks"), "Bob Dylan/Blood on the Tracks", false);
         let a: Vec<String> = a.iter().map(|x| x.to_string_lossy().into_owned()).collect();
         assert!(a.contains(&"--mkpath".to_string()) && a.contains(&"--exclude=*.part".to_string()));
         assert!(!a.iter().any(|x| x.contains("--delete")), "never deletes (the key couldn't anyway)");
@@ -397,11 +527,11 @@ mod tests {
         assert_eq!(a[a.len() - 1], "musicuser@192.168.1.10:FLAC/Bob Dylan/Blood on the Tracks/");
         let ssh = &a[a.len() - 3];
         assert!(ssh.contains(r"-i '/home/me/.ssh/it'\''s'") && ssh.contains("BatchMode=yes") && ssh.contains("StrictHostKeyChecking=yes"), "{ssh}");
-        let c = rsync_args(&s, &prefs(), Path::new("/m/A/B"), "A/B", true);
+        let c = rsync_args(&s, &prefs(), &native(), Path::new("/m/A/B"), "A/B", true);
         assert!(ssh.contains("-p 22 ") && ssh.contains("server_known_hosts"), "{ssh}");
         let other = ServerPrefs { host: "127.0.0.1:2222".into(), ..prefs() };
         assert_eq!(host_port(&other), ("127.0.0.1", 2222));
-        let o = rsync_args(&s, &other, Path::new("/m/A/B"), "A/B", false);
+        let o = rsync_args(&s, &other, &native(), Path::new("/m/A/B"), "A/B", false);
         assert_eq!(o[o.len() - 1].to_string_lossy(), "musicuser@127.0.0.1:FLAC/A/B/");
         assert!(c.iter().any(|x| x == "--checksum") && c.iter().any(|x| x == "--dry-run"));
     }

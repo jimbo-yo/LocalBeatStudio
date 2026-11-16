@@ -29,7 +29,8 @@ pub fn sync(a: SyncArgs) -> Result<bool> {
             let p = FolderPhone { root: dir.clone() };
             run(&p, &format!("folder {}", dir.display()), &s, &a)
         }
-        (None, true, false) => {
+        // Windows: Wi-Fi is adb's wireless debugging (KDE Connect can't mount there).
+        (None, true, false) | (None, false, true) if a.usb || !phone::KDECONNECT_STORAGE => {
             let p = AdbPhone::connect(phone::ADB_MUSIC)?;
             run(&p, &p.describe(), &s, &a)
         }

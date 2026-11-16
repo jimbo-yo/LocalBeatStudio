@@ -135,7 +135,7 @@ pub struct LibraryUi {
 }
 
 impl LibraryUi {
-    pub fn new(settings: &Settings, ctx: &egui::Context) -> Self {
+    pub fn new(settings: &Settings, ctx: &egui::Context, hwnd: Option<crate::media_keys::Hwnd>) -> Self {
         let player = Arc::new(Player::new());
         let session: Session = std::fs::read(settings.config_dir.join("player.json"))
             .ok()
@@ -149,7 +149,7 @@ impl LibraryUi {
         }
         player.set_repeat(session.repeat);
         let shared_lib: SharedLibrary = Default::default();
-        let media_err = crate::media_keys::spawn(player.clone(), shared_lib.clone(), settings.cache_dir.clone(), ctx.clone()).err();
+        let media_err = crate::media_keys::spawn(player.clone(), shared_lib.clone(), settings.cache_dir.clone(), ctx.clone(), hwnd).err();
         let mut me = LibraryUi {
             settings: settings.clone(),
             lib: None,

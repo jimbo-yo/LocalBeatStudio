@@ -4,7 +4,8 @@
 //!
 //! Runs on its own thread, talking to the player directly: a hidden or
 //! minimised window gets no frames, and media keys must work then too.
-//! Windows needs the window handle (SMTC); not wired up yet.
+//! On Windows the same thread drives the System Media Transport Controls
+//! (the volume overlay, lock screen and media keys), tied to our window.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -19,13 +20,39 @@ use souvlaki::{MediaControlEvent as E, MediaControls, MediaMetadata, MediaPlayba
 /// The library as last scanned, shared with the UI.
 pub type SharedLibrary = Arc<Mutex<Option<Arc<Library>>>>;
 
+/// The main window's handle (HWND), which Windows' media controls attach to.
+#[derive(Clone, Copy)]
+pub struct Hwnd(#[allow(dead_code)] isize);
+
+/// The window handle on Windows; None elsewhere (MPRIS needs none).
+pub fn window_handle(cc: &eframe::CreationContext) -> Option<Hwnd> {
+    #[cfg(windows)]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        if let Ok(h) = cc.window_handle()
+            && let RawWindowHandle::Win32(w) = h.as_raw()
+        {
+            return Some(Hwnd(w.hwnd.get()));
+        }
+    }
+    let _ = cc;
+    None
+}
+
 /// Starts the media-controls thread. Err if the desktop has none.
-pub fn spawn(player: Arc<Player>, library: SharedLibrary, cache_dir: PathBuf, ctx: eframe::egui::Context) -> Result<(), String> {
-    if !cfg!(target_os = "linux") {
+pub fn spawn(player: Arc<Player>, library: SharedLibrary, cache_dir: PathBuf, ctx: eframe::egui::Context, hwnd: Option<Hwnd>) -> Result<(), String> {
+    if !cfg!(any(target_os = "linux", windows)) {
         return Ok(());
     }
+    #[cfg(windows)]
+    let hwnd = Some(hwnd.ok_or("media keys unavailable: no window handle")?.0 as *mut std::ffi::c_void);
+    #[cfg(not(windows))]
+    let hwnd = {
+        let _ = hwnd;
+        None
+    };
     let (tx, events) = channel();
-    let config = PlatformConfig { display_name: "LocalBeat Studio", dbus_name: "localbeat", hwnd: None };
+    let config = PlatformConfig { display_name: "LocalBeat Studio", dbus_name: "localbeat", hwnd };
     let mut controls = MediaControls::new(config).map_err(|e| format!("media keys unavailable: {e:?}"))?;
     let repaint = ctx.clone();
     controls

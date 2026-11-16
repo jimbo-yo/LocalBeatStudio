@@ -104,10 +104,12 @@ fn check(s: &Settings, prefs: &Prefs) -> Result<bool> {
     // An empty, dry-run push of an empty folder proves the key works.
     let empty = s.cache_dir.join("server-check");
     std::fs::create_dir_all(&empty)?;
-    let out = std::process::Command::new("rsync")
+    let rs = push::Rsync::find()?;
+    let out = rs
+        .command()
         .args(["-a", "--dry-run", "-e"])
-        .arg(push::ssh_command(s, sv))
-        .arg(format!("{}/", empty.display()))
+        .arg(push::ssh_command(s, sv, &rs))
+        .arg(format!("{}/", rs.path(&empty)))
         .arg(format!("{}@{}:FLAC/", sv.user, push::host_port(sv).0))
         .output()?;
     if out.status.success() {
