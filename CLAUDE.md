@@ -28,19 +28,30 @@ navy #1B2A3A note) is also shared (`docs/brand/` in the other two).
 
 | Machine | OS | Drives |
 |---|---|---|
-| Lenovo laptop (original) | Fedora 44, KDE Plasma, Intel Haswell | sr0 built-in GU90N (broken), Apple SuperDrive, hp GTA0N |
+| Lenovo laptop (original; being retired, user moving to the Surface, 2026-11-16) | Fedora 44, KDE Plasma, Intel Haswell | sr0 built-in GU90N (broken), Apple SuperDrive, hp GTA0N |
 | Ubuntu laptop | Ubuntu 26.04, GNOME | sr0 built-in GU90N, hp GTA0N |
 | Windows laptop | Windows, Rust MSVC | hp GTA0N on D: |
-| Microsoft Surface laptop (added 2026-11-14) | Fedora 45, KDE Plasma; dual-boots Windows 11 (`MY-WINDOWS-PC`) | none built in (USB drives only) |
+| Microsoft Surface laptop (added 2026-11-14; the main machine now) | three setups, below | none built in (USB drives only) |
 
-- Check `/etc/os-release` and the hardware to tell the machines apart (two
-  run Fedora)
+- **The Surface has three setups** (user, 2026-11-16): (1) native Fedora 45
+  on its own partition, KDE Plasma: the user's SSH login key for the Mac,
+  Studio joined as `my-linux-pc`; (2) Windows 11 (`MY-WINDOWS-PC`), where
+  Claude Code usually runs; (3) Fedora 45 in **WSL** inside that Windows
+  (`wsl -d FedoraLinux-45`, user musicuser): a Linux build/test box (Rust,
+  cmake, gcc, alsa, gawk, wireguard-tools, openssl, qrencode), its own
+  CDRipPipeline clone in `~/Development`, **no SSH key for the Mac**. Anything
+  that logs in to the Mac (setup.sh, localbeat-writers by hand) needs the
+  native Fedora (or the Lenovo while it lasts). "Fedora on the Surface"
+  is ambiguous: say native or WSL
+- Check `/etc/os-release` and the hardware to tell the machines apart
 - Repo in `~/development/<repo>`; `~/Development/<repo>` (capital D) on the
   Surface. Editor preference: **vi** (say vi, not nano, in instructions)
-- Surface on Windows (2026-11-16): repo at `C:\Users\user\Development\
-  CDRipPipeline` (its own clone, separate from Fedora's), Studio installed
-  with `tools\install-windows.ps1`; Fedora 45 also in WSL there (no build
-  tools). Not yet set up: server settings, writer key
+- Surface on Windows (2026-11-16): repos at `C:\Users\user\Development\`
+  (CDRipPipeline, LocalBeatServer; their own clones, separate from Fedora's),
+  Studio installed with `tools\install-windows.ps1`, WireGuard installed,
+  writer key `~/.ssh/localbeat-studio` made (not on the Mac yet). Not yet
+  joined to the server. Running bash scripts from these clones in WSL needs
+  CRLF stripped (Windows checkouts); the committed files are LF
 - Surface setup (2026-11-14): fresh install; build packages installed and
   the workspace built 2026-11-15 (not installed with install-linux.sh yet);
   no local music library, it plays the server's
@@ -83,7 +94,8 @@ Cargo workspace at the repo root (edition 2024):
   `theme.rs` (`docs/ui-redesign.md`)
 - `tools/`: `install-linux.sh`, `install-windows.ps1`, `cmake-libdir-lib` (Fedora build fix),
   `import-tunnel.py NAME` (a laptop's WireGuard tunnel to the server +
-  Studio's login, step 3)
+  Studio's login, step 3), `import-tunnel.ps1 [NAME] [-Admin]` (Windows:
+  wraps `localbeat join`)
 - `docs/`: design notes (below) and `history.md`
 
 ## Build, test, install
