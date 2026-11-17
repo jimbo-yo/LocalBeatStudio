@@ -52,9 +52,14 @@ navy #1B2A3A note) is also shared (`docs/brand/` in the other two).
   Surface. Editor preference: **vi** (say vi, not nano, in instructions)
 - Surface on Windows (2026-11-16): repos at `C:\Users\user\Development\`
   (CDRipPipeline, LocalBeatServer; their own clones, separate from Fedora's),
-  Studio installed with `tools\install-windows.ps1`, WireGuard installed,
-  writer key `~/.ssh/localbeat-studio` made (not on the Mac yet). Not yet
-  joined to the server. Running bash scripts from these clones in WSL needs
+  Studio installed with `tools\install-windows.ps1`, WireGuard installed.
+  Joined the Mac 2026-11-16 as **`my-windows-pc` (admin)** with `localbeat join
+  my-windows-pc --admin`: tunnel 10.8.0.4 (service `WireGuardTunnel$localbeat`),
+  music login `my-windows-pc`, rips to `musicuser@192.168.1.10` with
+  `~/.ssh/localbeat-studio`; `localbeat server check` all good. The admin
+  page needs the admin password (`sudo localbeat-admin set-password` on the
+  Mac); Claude's browser pane can't open it (self-made certificate), so
+  open it in Edge. Running bash scripts from these clones in WSL needs
   CRLF stripped (Windows checkouts); the committed files are LF
 - Surface setup (2026-11-14): fresh install; build packages installed and
   the workspace built 2026-11-15 (not installed with install-linux.sh yet);
@@ -272,9 +277,11 @@ ID_SERIAL_SHORT as fallback.
   2026-11-16: the server's albums show and play in Studio's library (song
   cache). Step 3 (tunnel) done on the Surface (10.8.0.3, NetworkManager
   `localbeat`, Studio on `http://10.8.0.1:4533`; not yet tried away from
-  home); the Lenovo still needs `tools/import-tunnel.py my-laptop`. The
-  Mac's WireGuard endpoint is a bare IP: switch it to
-  `vpn.example.com`. Laptop copies are kept until the Mac's library has a backup
+  home); the Surface's Windows side joined through Studio's join
+  (`my-windows-pc`, 10.8.0.4); the Lenovo still needs `tools/import-tunnel.py
+  my-laptop`. The Mac now hands out `vpn.example.com:51820` as the
+  endpoint (seen in the 2026-11-16 join); tunnels made earlier may still
+  have the bare IP. Laptop copies are kept until the Mac's library has a backup
 - Replugging a USB drive while Studio runs adds a second drive card (watcher
   keys drives by /dev path). Fix: key by udev ID_SERIAL, drop vanished paths
 - Not yet seen on a real disc: OtherPressing acceptance, per-drive Stop / Stop
