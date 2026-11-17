@@ -1,0 +1,48 @@
+# LocalBeat Studio (the app) and localbeat (the command line) for Arch Linux
+# and Arch-based systems (Manjaro, EndeavourOS…). tools/build-arch.sh puts a
+# snapshot of this repo (git archive of HEAD) next to this file and runs
+# makepkg -> localbeat-studio-<ver>-<rel>-x86_64.pkg.tar.zst
+# Install: sudo pacman -U localbeat-studio-*.pkg.tar.zst
+# Same files as the Fedora RPM (packaging/localbeat-studio.spec).
+
+pkgname=localbeat-studio
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="LocalBeat Studio: music library, player, CD ripper and phone sync, with the localbeat command"
+arch=('x86_64')
+url="https://github.com/jimbo-yo/CDRipPipeline"
+license=('MIT')
+depends=('alsa-lib' 'gcc-libs' 'glibc' 'hicolor-icon-theme')
+makedepends=('cargo' 'cmake' 'gcc')
+optdepends=(
+    'rsync: send rips to the music server'
+    'openssh: send rips to the music server (rsync over SSH)'
+    'android-tools: the phone over USB or wireless debugging'
+    'networkmanager: the WireGuard tunnel to the music server'
+    'wireguard-tools: the WireGuard tunnel to the music server'
+    'xdg-utils: open folders and links'
+    'kdeconnect: the phone over Wi-Fi (its storage mount)'
+    'sg3_utils: wake the Apple SuperDrive'
+)
+# Rust release build. No LTO from makepkg: the opus libraries set up their
+# own (.cargo/config.toml), and makepkg's -flto clashes with it.
+options=('!lto' '!debug')
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "$pkgname-$pkgver"
+    # Built like a developer build (tools/install-linux.sh).
+    unset CFLAGS CXXFLAGS LDFLAGS RUSTFLAGS
+    cargo build --release --locked -p localbeat -p localbeat-studio
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    install -Dm755 target/release/localbeat "$pkgdir/usr/bin/localbeat"
+    install -Dm755 target/release/localbeat-studio "$pkgdir/usr/bin/localbeat-studio"
+    install -Dm644 packaging/localbeat-studio.desktop "$pkgdir/usr/share/applications/localbeat-studio.desktop"
+    install -Dm644 gui/assets/localbeat.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/localbeat-studio.svg"
+    install -Dm644 gui/assets/localbeat-256.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/localbeat-studio.png"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
