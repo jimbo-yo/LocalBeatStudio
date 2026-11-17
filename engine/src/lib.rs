@@ -346,7 +346,9 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
         Some(musicbrainz::release(rid, &toc)?)
     } else {
         fe.event(Event::Stage("Looking up the disc on MusicBrainz".into()));
-        let mut rs = musicbrainz::lookup(&toc)?;
+        let mut rs = musicbrainz::lookup_with(&toc, &|secs| {
+            fe.event(Event::Stage(format!("MusicBrainz is busy; trying again in {secs} s")))
+        })?;
         musicbrainz::rank(&mut rs, s.country.as_deref());
         match fe.choose_release(&rs) {
             ReleaseChoice::Use(i) if i < rs.len() => {

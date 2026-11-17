@@ -109,15 +109,21 @@ const INC: &str = "artist-credits+recordings+release-groups+labels+isrcs";
 /// Releases containing this disc: exact disc ID matches, or if the disc ID
 /// isn't in MusicBrainz, releases with a similar TOC (`fuzzy`).
 pub fn lookup(toc: &Toc) -> Result<Vec<Release>> {
+    lookup_with(toc, &|_| {})
+}
+
+/// [`lookup`], telling `waiting` the seconds of each wait while MusicBrainz
+/// is busy (see [`http::musicbrainz_with`]).
+pub fn lookup_with(toc: &Toc, waiting: &dyn Fn(u64)) -> Result<Vec<Release>> {
     let id = toc.musicbrainz_id().to_string();
     let path = format!("discid/{id}?toc={}&inc={INC}", toc_query(toc).replace(' ', "+"));
-    let mut rs = match http::musicbrainz(&path)? {
+    let mut rs = match http::musicbrainz_with(&path, waiting)? {
         Some(v) => parse_lookup(&v, &id, toc.audio_len()),
         None => Vec::new(),
     };
     if rs.iter().all(|r| r.fuzzy) {
         // A failed side lookup leaves the answer as it was.
-        if let Ok(near) = near_lookup(toc) {
+        if let Ok(near) = near_lookup(toc, waiting) {
             rs.retain(|r| !near.iter().any(|n| n.id == r.id));
             rs.splice(0..0, near);
         }
@@ -146,7 +152,7 @@ pub fn near_disc(d: &Value, starts: &[u32], leadout: u32) -> bool {
 /// through the album names the CUETools database knows for the layout
 /// (from MusicBrainz, Discogs, freedb), then a MusicBrainz search. Counted
 /// as exact matches: the track lengths agree to a sector.
-fn near_lookup(toc: &Toc) -> Result<Vec<Release>> {
+fn near_lookup(toc: &Toc, waiting: &dyn Fn(u64)) -> Result<Vec<Release>> {
     let (starts, leadout, n) = (toc.audio_sectors(), toc.audio_leadout(), toc.audio_len());
     let names = crate::ctdb::names(starts, leadout)?;
     let mut ids: Vec<String> = names.iter().filter_map(|h| h.mbid.clone()).collect();
@@ -156,7 +162,7 @@ fn near_lookup(toc: &Toc) -> Result<Vec<Release>> {
             crate::enrich::phrase(&h.album),
             crate::enrich::phrase(&h.artist)
         );
-        let Some(v) = http::musicbrainz(&format!("release?query={}&limit=25", crate::enrich::url_encode(&q)))? else { continue };
+        let Some(v) = http::musicbrainz_with(&format!("release?query={}&limit=25", crate::enrich::url_encode(&q)), waiting)? else { continue };
         for r in v["releases"].as_array().into_iter().flatten() {
             let cd = r["media"].as_array().into_iter().flatten().any(|m| {
                 is_audio_cd(m["format"].as_str().unwrap_or("")) && m["track-count"].as_u64() == Some(n as u64)
@@ -170,7 +176,7 @@ fn near_lookup(toc: &Toc) -> Result<Vec<Release>> {
     }
     let mut out = Vec::new();
     for id in ids.iter().take(12) {
-        let Some(v) = http::musicbrainz(&format!("release/{id}?inc={INC}+discids"))? else { continue };
+        let Some(v) = http::musicbrainz_with(&format!("release/{id}?inc={INC}+discids"), waiting)? else { continue };
         let near = |d: &Value| near_disc(d, starts, leadout);
         if let Some(r) = parse_release_with(&v, &near, n) {
             out.push(Release { near: !r.fuzzy, ..r });
