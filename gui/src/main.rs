@@ -24,6 +24,7 @@ mod cover_cache;
 mod library_ui;
 mod media_keys;
 mod phone_tab;
+mod playlists_ui;
 mod repairs_tab;
 mod review_tab;
 mod server_tab;
@@ -577,7 +578,12 @@ impl App {
                     (library_ui::Page::Recent, theme::Icon::Clock, "Recently added", None),
                     (library_ui::Page::Artists, theme::Icon::Artists, "Artists", lib_counts.map(|c| c.1)),
                     (library_ui::Page::Songs, theme::Icon::Songs, "Songs", lib_counts.map(|c| c.2)),
+                    // The music server's playlists (shared with the phone): with a server login only.
+                    (library_ui::Page::Playlists, theme::Icon::Queue, "Playlists", None),
                 ] {
+                    if page == library_ui::Page::Playlists && !self.library.playlists.available() {
+                        continue;
+                    }
                     let selected = self.tab == Tab::Library && self.library.page == page && self.library.search.is_empty() && !self.library.now_open;
                     let n = count.map(|n| n.to_string()).unwrap_or_default();
                     let status = (!n.is_empty()).then_some((n.as_str(), p.faint));
@@ -586,6 +592,7 @@ impl App {
                         self.library.page = page;
                         self.library.now_open = false;
                         self.library.album = None;
+                        self.library.playlist = None;
                         self.library.search.clear();
                     }
                 }

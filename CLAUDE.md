@@ -101,7 +101,7 @@ Cargo workspace at the repo root (edition 2024):
   MCP server over stdio for AI tools, `claude mcp add localbeat -- localbeat mcp`)
 - `gui/` (`localbeat-studio`, eframe/egui 0.37): pages Library, Rip, Phone,
   Server (`server_tab.rs`; sender thread `server_push.rs`), Review tags,
-  Repairs, Settings (`settings_tab.rs`: joining the server, folders, phone,
+  Repairs, Playlists (`playlists_ui.rs`, server playlists), Settings (`settings_tab.rs`: joining the server, folders, phone,
   prerequisites, drives; opens on a new install). Rip/Server/Review/Repairs
   and the rip watcher only on an admin computer (`Prefs::role`,
   docs/joining.md); MPRIS (`media_keys.rs`); design system "Prism" in
@@ -140,7 +140,7 @@ Cargo workspace at the repo root (edition 2024):
   - Console programs are started with `localbeat_platform::command` (no
     console window flashing up from the GUI)
 - Screenshots / layout work without a disc: `LOCALBEAT_DEMO=1` (also `phone`,
-  `review`, `sr2`, `choice`, `alert`, `repairs`)
+  `review`, `sr2`, `choice`, `alert`, `repairs`, `playlists`, `playlist`)
 - Build quirks:
   - Fedora: `.cargo/config.toml` points `CMAKE_x86_64_unknown_linux_gnu` at
     `tools/cmake-libdir-lib` (adds `-DCMAKE_INSTALL_LIBDIR=lib` and turns off
@@ -307,7 +307,7 @@ one under `%LOCALAPPDATA%\Claude-Data\…\claude-code\<version>\…\claude.exe`)
 checked with a `claude -p` question. LocalBeat 0.9.7 (step 4, 2026-11-17)
 shows and plays the server playlists on the phone; 0.9.8/0.9.9 (step 5)
 edits them there (queued while out of reach) and moves the phone's own
-playlists in. Next: Studio's Library page (step 6). Live phone control (adb) comes after the
+playlists in. Step 6 done 2026-11-17: Library page "Playlists" (`gui/src/playlists_ui.rs`: fetched and changed on a background thread; list, a playlist's page with Play/Shuffle/Rename/Delete or Make a copy, right-click Add to playlist / Move / Remove; only the server's songs can go in; no offline queue in Studio yet). Screens checked with LOCALBEAT_DEMO=playlists / playlist against the Mac; the editing clicks not yet tried. Live phone control (adb) comes after the
 phone shows server playlists.
 
 ## Open items

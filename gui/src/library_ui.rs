@@ -26,6 +26,20 @@ pub enum Page {
     Recent,
     Artists,
     Songs,
+    /// The user's playlists on the music server.
+    Playlists,
+}
+
+/// LOCALBEAT_DEMO=playlist opens the first playlist once the list is fetched.
+const DEMO_FIRST_PLAYLIST: &str = "\u{0}first";
+
+/// The name box for a new playlist or a renamed one.
+struct NameDialog {
+    title: &'static str,
+    text: String,
+    /// New: these songs (library indices) go in it. Rename: this playlist.
+    new_with: Option<Vec<usize>>,
+    rename: Option<String>,
 }
 
 /// The Now Playing view's right-hand tab.
@@ -52,6 +66,13 @@ enum Action {
     OpenAlbum(usize),
     OpenArtist(usize),
     OpenFolder(PathBuf),
+    /// Add these songs to the playlist with this ID.
+    AddToPlaylist(String, Vec<usize>),
+    /// Ask for a name, then make a playlist of these songs.
+    NewPlaylist(Vec<usize>),
+    /// In the open playlist: take out the song at this position, or move it by this much.
+    PlaylistRemove(usize),
+    PlaylistMove(usize, isize),
 }
 
 /// What's kept between runs (`<config>/player.json`).
@@ -132,6 +153,15 @@ pub struct LibraryUi {
     pub bar_top: Option<f32>,
     saved: Option<Session>,
     saved_at: std::time::Instant,
+    /// The music server's playlists (fetched in the background).
+    pub playlists: crate::playlists_ui::Playlists,
+    /// Open playlist page (its ID).
+    pub playlist: Option<String>,
+    name_dialog: Option<NameDialog>,
+    /// A playlist waiting for "delete?" to be confirmed.
+    confirm_delete: Option<String>,
+    /// For starting background work from actions.
+    ctx: Option<egui::Context>,
 }
 
 impl LibraryUi {
@@ -188,6 +218,11 @@ impl LibraryUi {
             bar_top: None,
             saved: Some(session),
             saved_at: std::time::Instant::now(),
+            playlists: crate::playlists_ui::Playlists::new(settings),
+            playlist: None,
+            name_dialog: None,
+            confirm_delete: None,
+            ctx: None,
         };
         me.rescan(ctx);
         me
@@ -261,6 +296,14 @@ impl LibraryUi {
     /// Returns lines for the activity log.
     pub fn poll(&mut self, ctx: &egui::Context) -> Vec<String> {
         self.covers.poll(ctx);
+        if self.ctx.is_none() {
+            self.ctx = Some(ctx.clone());
+            // Fetched once at start (for "Add to playlist"), then on the page's Refresh and after each change.
+            if self.playlists.available() {
+                self.playlists.refresh(ctx);
+            }
+        }
+        self.playlists.poll();
         let mut results = Vec::new();
         let mut finished = false;
         if let Some(rx) = &self.scan {
@@ -392,6 +435,11 @@ impl LibraryUi {
             "artists" => self.page = Page::Artists,
             "songs" => self.page = Page::Songs,
             "recent" => self.page = Page::Recent,
+            "playlists" => self.page = Page::Playlists,
+            "playlist" => {
+                self.page = Page::Playlists;
+                self.playlist = Some(DEMO_FIRST_PLAYLIST.into());
+            }
             _ => {}
         }
     }
@@ -507,8 +555,61 @@ impl LibraryUi {
                     self.search.clear();
                 }
                 Action::OpenFolder(p) => open_folder(&p),
+                Action::AddToPlaylist(id, v) => {
+                    let ids: Vec<String> = v.iter().filter_map(|&i| self.playlists.song_id(&lib.songs[i].path)).collect();
+                    let name = self.playlists.get(&id).map(|p| p.name.clone()).unwrap_or_default();
+                    let left = v.len() - ids.len();
+                    if ids.is_empty() {
+                        self.playlists.notice = Some("Only the music server's songs can go in its playlists: these are only on this computer.".into());
+                    } else if let Some(ctx) = self.ctx.clone() {
+                        let done = format!(
+                            "Added {} to {name}{}",
+                            if ids.len() == 1 { "1 song".to_string() } else { format!("{} songs", ids.len()) },
+                            if left > 0 { format!(" ({left} only on this computer left out)") } else { String::new() }
+                        );
+                        self.playlists.edit(&ctx, crate::playlists_ui::Edit::Add { id, songs: ids }, done);
+                    }
+                }
+                Action::NewPlaylist(v) => {
+                    self.name_dialog = Some(NameDialog { title: "New playlist", text: String::new(), new_with: Some(v), rename: None });
+                }
+                Action::PlaylistRemove(pos) => {
+                    if let (Some(id), Some(ctx)) = (self.playlist.clone(), self.ctx.clone()) {
+                        self.playlists.edit(&ctx, crate::playlists_ui::Edit::Remove { id, positions: vec![pos] }, "Removed from the playlist");
+                    }
+                }
+                Action::PlaylistMove(pos, by) => {
+                    let (Some(id), Some(ctx)) = (self.playlist.clone(), self.ctx.clone()) else { continue };
+                    let Some(p) = self.playlists.get(&id) else { continue };
+                    let mut songs = p.songs.clone();
+                    let to = pos as isize + by;
+                    if pos < songs.len() && to >= 0 && (to as usize) < songs.len() {
+                        let s = songs.remove(pos);
+                        songs.insert(to as usize, s);
+                        self.playlists.edit(&ctx, crate::playlists_ui::Edit::SetSongs { id, songs }, "Moved");
+                    }
+                }
             }
         }
+    }
+
+    /// The extra items for song rows' menus: "Add to playlist" when this
+    /// computer has a music server login; Move/Remove on a playlist's page.
+    fn row_menu(&self, in_playlist: Option<(usize, usize)>) -> RowMenu {
+        RowMenu { playlists: self.playlists.available().then(|| self.playlists.mine()), in_playlist }
+    }
+
+    /// What a song row's menu asks for, as an action.
+    fn menu_action(&mut self, m: MenuChoice, si: usize, path: &std::path::Path) {
+        self.actions.push(match m {
+            MenuChoice::PlayNext => Action::PlayNext(vec![si]),
+            MenuChoice::Append => Action::Append(vec![si]),
+            MenuChoice::Folder => Action::OpenFolder(path.parent().map(|d| d.to_path_buf()).unwrap_or_default()),
+            MenuChoice::AddTo(id) => Action::AddToPlaylist(id, vec![si]),
+            MenuChoice::NewPlaylist => Action::NewPlaylist(vec![si]),
+            MenuChoice::Remove(pos) => Action::PlaylistRemove(pos),
+            MenuChoice::Move(pos, by) => Action::PlaylistMove(pos, by),
+        });
     }
 
     /// The song playing now (library index).
@@ -570,9 +671,256 @@ impl LibraryUi {
                 }
                 Page::Artists => self.artists_page(ui, &lib),
                 Page::Songs => self.songs_page(ui, &lib),
+                Page::Playlists => self.playlists_page(ui, &lib),
             }
         }
+        self.playlist_dialogs(ui.ctx());
         self.run_actions();
+    }
+
+    // ------------------------------------------------------------ playlists
+
+    /// What the last playlist change said, or why the server couldn't be asked.
+    fn playlist_messages(&mut self, ui: &mut egui::Ui) {
+        let p = theme::pal(ui);
+        if let Some(e) = &self.playlists.error {
+            ui.label(egui::RichText::new(format!("Couldn't reach the music server: {e}")).color(theme::WARN));
+        }
+        if let Some(n) = self.playlists.notice.clone() {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(n).color(p.dim));
+                if ui.small_button("OK").clicked() {
+                    self.playlists.notice = None;
+                }
+            });
+        }
+    }
+
+    /// One playlist in the list: name, then songs, length and whose.
+    fn playlist_row(ui: &mut egui::Ui, name: &str, sub: &str) -> egui::Response {
+        let p = theme::pal(ui);
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 54.0), Sense::click());
+        if resp.hovered() {
+            ui.painter().rect_filled(rect, 8.0, p.card);
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        let icon = Rect::from_center_size(pos2(rect.left() + 24.0, rect.center().y), Vec2::splat(20.0));
+        theme::paint_icon(ui.painter(), icon, Icon::Queue, p.dim);
+        let w = rect.width() - 64.0;
+        let t = theme::one_line(ui, name, theme::medium(15.0), p.text, w);
+        ui.painter().galley(pos2(rect.left() + 52.0, rect.top() + 8.0), t, p.text);
+        let s = theme::one_line(ui, sub, egui::FontId::proportional(13.0), p.dim, w);
+        ui.painter().galley(pos2(rect.left() + 52.0, rect.top() + 30.0), s, p.dim);
+        resp
+    }
+
+    /// The user's playlists on the music server (theirs, then shared with them).
+    fn playlists_page(&mut self, ui: &mut egui::Ui, lib: &Arc<Library>) {
+        // LOCALBEAT_DEMO=playlist: the first playlist, once they're fetched.
+        if self.playlist.as_deref() == Some(DEMO_FIRST_PLAYLIST) && self.playlists.loaded {
+            self.playlist = self.playlists.lists.first().map(|p| p.id.clone());
+        }
+        if let Some(id) = self.playlist.clone() {
+            if let Some(pl) = self.playlists.get(&id).cloned() {
+                self.playlist_page(ui, lib, &pl);
+                return;
+            }
+            // Gone (deleted, here or elsewhere) once the list is fresh.
+            if self.playlists.loaded && !self.playlists.busy {
+                self.playlist = None;
+            }
+        }
+        let ctx = ui.ctx().clone();
+        let available = self.playlists.available();
+        let lists = self.playlists.lists.clone();
+        let subtitle = if !available {
+            "This computer has no music server login: join the server on the Settings page".to_string()
+        } else if !self.playlists.loaded {
+            "Loading…".to_string()
+        } else {
+            format!("{} playlists · the same on your phone and to an AI (localbeat mcp)", lists.len())
+        };
+        theme::page_header(ui, "Playlists", &subtitle, |ui| {
+            if available && theme::button(ui, Some(Icon::Plus), "New playlist", Kind::Primary).clicked() {
+                self.actions.push(Action::NewPlaylist(Vec::new()));
+            }
+            if available && theme::button(ui, Some(Icon::Refresh), "Refresh", Kind::Secondary).clicked() {
+                self.playlists.refresh(&ctx);
+            }
+        });
+        self.playlist_messages(ui);
+        let p = theme::pal(ui);
+        let summary = |pl: &crate::playlists_ui::Playlist, me: &mut Self| {
+            let rows = me.playlists.songs_in(pl, &lib.songs);
+            let secs: f64 = rows.iter().map(|&(_, si)| lib.songs[si].seconds).sum();
+            let mut s = format!("{} songs · {}", rows.len(), long_duration(secs));
+            if pl.readonly && !pl.owner.is_empty() {
+                s.push_str(&format!(" · from {}", pl.owner));
+            }
+            s
+        };
+        egui::ScrollArea::vertical().id_salt("playlists").auto_shrink([false, false]).show(ui, |ui| {
+            let (mine, shared): (Vec<_>, Vec<_>) = lists.iter().partition(|pl| !pl.readonly);
+            if self.playlists.loaded && lists.is_empty() && available {
+                ui.label(egui::RichText::new("No playlists yet. Make one here, or right-click songs: Add to playlist.").color(p.dim));
+            }
+            for (title, group) in [(None, mine), (Some("Shared with you"), shared)] {
+                if group.is_empty() {
+                    continue;
+                }
+                if let Some(t) = title {
+                    ui.add_space(12.0);
+                    theme::section_label(ui, t);
+                }
+                for pl in group {
+                    let sub = summary(pl, self);
+                    if Self::playlist_row(ui, &pl.name, &sub).clicked() {
+                        self.playlist = Some(pl.id.clone());
+                    }
+                }
+            }
+        });
+    }
+
+    /// One playlist's songs, in order.
+    fn playlist_page(&mut self, ui: &mut egui::Ui, lib: &Arc<Library>, pl: &crate::playlists_ui::Playlist) {
+        let p = theme::pal(ui);
+        if ui.add(egui::Label::new(egui::RichText::new("‹  Playlists").color(p.dim)).sense(Sense::click())).clicked() {
+            self.playlist = None;
+        }
+        ui.add_space(8.0);
+        let rows = self.playlists.songs_in(pl, &lib.songs);
+        let order: Vec<usize> = rows.iter().map(|&(_, si)| si).collect();
+        let mut subtitle = format!("{} songs · {}", order.len(), long_duration(order.iter().map(|&si| lib.songs[si].seconds).sum()));
+        let not_here = pl.songs.len() - rows.len() + pl.missing as usize;
+        if not_here > 0 {
+            subtitle.push_str(&format!(" · {not_here} not available"));
+        }
+        if pl.readonly && !pl.owner.is_empty() {
+            subtitle.push_str(&format!(" · from {}", pl.owner));
+        }
+        let ctx = ui.ctx().clone();
+        theme::page_header(ui, &pl.name, &subtitle, |ui| {
+            if pl.readonly {
+                if theme::button(ui, None, "Make a copy", Kind::Secondary).clicked() {
+                    self.playlists.edit(&ctx, crate::playlists_ui::Edit::Create { name: pl.name.clone(), songs: pl.songs.clone() }, format!("Copied {}: it's yours to change", pl.name));
+                }
+            } else {
+                if theme::button(ui, None, "Delete", Kind::Danger).clicked() {
+                    self.confirm_delete = Some(pl.id.clone());
+                }
+                if theme::button(ui, None, "Rename", Kind::Secondary).clicked() {
+                    self.name_dialog = Some(NameDialog { title: "Rename playlist", text: pl.name.clone(), new_with: None, rename: Some(pl.id.clone()) });
+                }
+            }
+            if !order.is_empty() && theme::button(ui, Some(Icon::Shuffle), "Shuffle", Kind::Secondary).clicked() {
+                self.actions.push(Action::Shuffle(order.clone()));
+            }
+            if !order.is_empty() && theme::button(ui, Some(Icon::Play), "Play", Kind::Primary).clicked() {
+                self.actions.push(Action::Play(order.clone(), 0));
+            }
+        });
+        if !pl.comment.is_empty() {
+            ui.label(egui::RichText::new(&pl.comment).color(p.dim));
+        }
+        self.playlist_messages(ui);
+        let now = self.now();
+        let time = ui.input(|i| i.time);
+        let playing = self.last.state == State::Playing;
+        let len = pl.songs.len();
+        egui::ScrollArea::vertical().id_salt(("playlist", &pl.id)).auto_shrink([false, false]).show_rows(ui, 38.0, rows.len(), |ui, range| {
+            for k in range {
+                let (pos, si) = rows[k];
+                let s = &lib.songs[si];
+                let menu = self.row_menu(if pl.readonly { None } else { Some((pos, len)) });
+                let album = if s.album.is_empty() { None } else { Some(s.album.as_str()) };
+                if let Some(click) = song_row(ui, s, k + 1, true, now == Some(si), playing, time, album, &menu) {
+                    match click {
+                        RowClick::Play => self.actions.push(Action::Play(order.clone(), k)),
+                        RowClick::Menu(m) => self.menu_action(m, si, &s.path),
+                    }
+                }
+            }
+        });
+    }
+
+    /// The name box (new / rename) and "delete?" for playlists.
+    fn playlist_dialogs(&mut self, ctx: &egui::Context) {
+        if let Some(d) = &mut self.name_dialog {
+            let (mut ok, mut cancel) = (false, false);
+            egui::Window::new(d.title)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    let r = ui.add(egui::TextEdit::singleline(&mut d.text).hint_text("Name").desired_width(300.0));
+                    if !r.has_focus() && d.text.is_empty() {
+                        r.request_focus();
+                    }
+                    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        ok = true;
+                    }
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        let label = if d.rename.is_some() { "Rename" } else { "Create" };
+                        if theme::button(ui, Some(Icon::Check), label, Kind::Primary).clicked() {
+                            ok = true;
+                        }
+                        if theme::button(ui, None, "Cancel", Kind::Secondary).clicked() {
+                            cancel = true;
+                        }
+                    });
+                });
+            let name = d.text.trim().to_string();
+            if ok && !name.is_empty() {
+                let d = self.name_dialog.take().unwrap();
+                if let Some(id) = d.rename {
+                    self.playlists.edit(ctx, crate::playlists_ui::Edit::Rename { id, name: name.clone() }, format!("Renamed to {name}"));
+                } else {
+                    let songs = d.new_with.unwrap_or_default();
+                    let ids: Vec<String> = match &self.lib {
+                        Some(lib) => songs.iter().filter_map(|&i| self.playlists.song_id(&lib.songs[i].path)).collect(),
+                        None => Vec::new(),
+                    };
+                    let left = songs.len() - ids.len();
+                    let done = format!(
+                        "Made {name} with {} songs{}",
+                        ids.len(),
+                        if left > 0 { format!(" ({left} only on this computer left out)") } else { String::new() }
+                    );
+                    self.playlists.edit(ctx, crate::playlists_ui::Edit::Create { name, songs: ids }, done);
+                }
+            } else if cancel {
+                self.name_dialog = None;
+            }
+        }
+        if let Some(id) = self.confirm_delete.clone() {
+            let name = self.playlists.get(&id).map(|p| p.name.clone()).unwrap_or_default();
+            let (mut yes, mut no) = (false, false);
+            egui::Window::new("Delete playlist?")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(format!("Delete “{name}” from all your devices? The songs stay in the library."));
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if theme::button(ui, None, "Delete", Kind::Danger).clicked() {
+                            yes = true;
+                        }
+                        if theme::button(ui, None, "Cancel", Kind::Secondary).clicked() {
+                            no = true;
+                        }
+                    });
+                });
+            if yes {
+                self.confirm_delete = None;
+                self.playlist = None;
+                self.playlists.edit(ctx, crate::playlists_ui::Edit::Delete { id }, format!("Deleted {name}"));
+            } else if no {
+                self.confirm_delete = None;
+            }
+        }
     }
 
     fn loading(&self, ui: &mut egui::Ui) {
@@ -692,6 +1040,22 @@ impl LibraryUi {
             self.actions.push(Action::Append(songs.clone()));
             ui.close();
         }
+        if self.playlists.available() {
+            let mine = self.playlists.mine();
+            ui.menu_button("Add to playlist", |ui| {
+                for (id, name) in mine {
+                    if ui.button(name).clicked() {
+                        self.actions.push(Action::AddToPlaylist(id, songs.clone()));
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                if ui.button("New playlist…").clicked() {
+                    self.actions.push(Action::NewPlaylist(songs.clone()));
+                    ui.close();
+                }
+            });
+        }
         if let Some(d) = dir {
             ui.separator();
             if ui.button("Show in folder").clicked() {
@@ -723,6 +1087,7 @@ impl LibraryUi {
             Page::Artists => "Artists",
             Page::Songs => "Songs",
             Page::Albums => "Albums",
+            Page::Playlists => "Playlists",
         };
         if ui.add(egui::Label::new(egui::RichText::new(format!("‹  {back}")).color(p.dim)).sense(Sense::click())).clicked() {
             self.album = None;
@@ -787,6 +1152,7 @@ impl LibraryUi {
         let now = self.now();
         let time = ui.input(|i| i.time);
         let playing = self.last.state == State::Playing;
+        let menu = self.row_menu(None);
         egui::ScrollArea::vertical().id_salt(("album", a)).auto_shrink([false, false]).show(ui, |ui| {
             let mut disc = None;
             for (k, &si) in album.songs.iter().enumerate() {
@@ -797,14 +1163,10 @@ impl LibraryUi {
                     theme::section_label(ui, &format!("Disc {}", s.disc.unwrap_or(1)));
                 }
                 let show_artist = !s.artist.is_empty() && norm(&s.artist) != norm(&album.artist);
-                if let Some(click) = song_row(ui, s, k + 1, show_artist, now == Some(si), playing, time, None) {
+                if let Some(click) = song_row(ui, s, k + 1, show_artist, now == Some(si), playing, time, None, &menu) {
                     match click {
                         RowClick::Play => self.actions.push(Action::Play(album.songs.clone(), k)),
-                        RowClick::Menu(m) => self.actions.push(match m {
-                            MenuChoice::PlayNext => Action::PlayNext(vec![si]),
-                            MenuChoice::Append => Action::Append(vec![si]),
-                            MenuChoice::Folder => Action::OpenFolder(s.path.parent().map(|d| d.to_path_buf()).unwrap_or_default()),
-                        }),
+                        RowClick::Menu(m) => self.menu_action(m, si, &s.path),
                     }
                 }
             }
@@ -882,19 +1244,16 @@ impl LibraryUi {
         let now = self.now();
         let time = ui.input(|i| i.time);
         let playing = self.last.state == State::Playing;
+        let menu = self.row_menu(None);
         egui::ScrollArea::vertical().id_salt(id).auto_shrink([false, false]).show_rows(ui, 38.0, order.len(), |ui, range| {
             for k in range {
                 let si = order[k];
                 let s = &lib.songs[si];
                 let album = if s.album.is_empty() { None } else { Some(s.album.as_str()) };
-                if let Some(click) = song_row(ui, s, 0, true, now == Some(si), playing, time, album) {
+                if let Some(click) = song_row(ui, s, 0, true, now == Some(si), playing, time, album, &menu) {
                     match click {
                         RowClick::Play => self.actions.push(Action::Play(order.to_vec(), k)),
-                        RowClick::Menu(m) => self.actions.push(match m {
-                            MenuChoice::PlayNext => Action::PlayNext(vec![si]),
-                            MenuChoice::Append => Action::Append(vec![si]),
-                            MenuChoice::Folder => Action::OpenFolder(s.path.parent().map(|d| d.to_path_buf()).unwrap_or_default()),
-                        }),
+                        RowClick::Menu(m) => self.menu_action(m, si, &s.path),
                     }
                 }
             }
@@ -1300,7 +1659,7 @@ impl LibraryUi {
                 let Some(&si) = self.by_path.get(path) else { continue };
                 let x = &lib.songs[si];
                 let is_now = k == cur;
-                let r = song_row(ui, x, k + 1, true, is_now, playing, time, None);
+                let r = song_row(ui, x, k + 1, true, is_now, playing, time, None, &RowMenu::default());
                 if is_now && scroll {
                     ui.scroll_to_rect(ui.min_rect().with_min_y(ui.min_rect().bottom() - 38.0), Some(egui::Align::Center));
                 }
@@ -1452,6 +1811,21 @@ enum MenuChoice {
     PlayNext,
     Append,
     Folder,
+    /// Add to the playlist with this ID.
+    AddTo(String),
+    NewPlaylist,
+    /// In the open playlist: remove the song at this position, or move it.
+    Remove(usize),
+    Move(usize, isize),
+}
+
+/// What a song row's right-click menu offers besides playing.
+#[derive(Default)]
+struct RowMenu {
+    /// "Add to playlist": the user's playlists (ID, name); None without a music server login.
+    playlists: Option<Vec<(String, String)>>,
+    /// On a playlist's page: the row's position and the playlist's length (Move, Remove).
+    in_playlist: Option<(usize, usize)>,
 }
 
 enum RowClick {
@@ -1462,7 +1836,7 @@ enum RowClick {
 /// One song in a list: number (or the playing bars), title, artist,
 /// album, length. Click plays; right-click for more.
 #[allow(clippy::too_many_arguments)]
-fn song_row(ui: &mut egui::Ui, s: &Song, number: usize, show_artist: bool, is_now: bool, playing: bool, time: f64, album: Option<&str>) -> Option<RowClick> {
+fn song_row(ui: &mut egui::Ui, s: &Song, number: usize, show_artist: bool, is_now: bool, playing: bool, time: f64, album: Option<&str>, menu: &RowMenu) -> Option<RowClick> {
     let p = theme::pal(ui);
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::click());
     if !ui.is_rect_visible(rect) {
@@ -1526,6 +1900,38 @@ fn song_row(ui: &mut egui::Ui, s: &Song, number: usize, show_artist: bool, is_no
         if ui.add_enabled(!s.drm, egui::Button::new("Add to Up Next")).clicked() {
             out = Some(RowClick::Menu(MenuChoice::Append));
             ui.close();
+        }
+        if let Some(lists) = &menu.playlists {
+            ui.menu_button("Add to playlist", |ui| {
+                for (id, name) in lists {
+                    if ui.button(name).clicked() {
+                        out = Some(RowClick::Menu(MenuChoice::AddTo(id.clone())));
+                        ui.close();
+                    }
+                }
+                if !lists.is_empty() {
+                    ui.separator();
+                }
+                if ui.button("New playlist…").clicked() {
+                    out = Some(RowClick::Menu(MenuChoice::NewPlaylist));
+                    ui.close();
+                }
+            });
+        }
+        if let Some((pos, len)) = menu.in_playlist {
+            ui.separator();
+            if ui.add_enabled(pos > 0, egui::Button::new("Move up")).clicked() {
+                out = Some(RowClick::Menu(MenuChoice::Move(pos, -1)));
+                ui.close();
+            }
+            if ui.add_enabled(pos + 1 < len, egui::Button::new("Move down")).clicked() {
+                out = Some(RowClick::Menu(MenuChoice::Move(pos, 1)));
+                ui.close();
+            }
+            if ui.button("Remove from playlist").clicked() {
+                out = Some(RowClick::Menu(MenuChoice::Remove(pos)));
+                ui.close();
+            }
         }
         ui.separator();
         if ui.button("Show in folder").clicked() {
