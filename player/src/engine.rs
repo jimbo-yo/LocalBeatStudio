@@ -281,10 +281,14 @@ impl Engine {
             if self.state != State::Playing {
                 return;
             }
+            // Device first: closing it stops the callback (cpal waits for
+            // it), so the clock read next is exactly where the sound
+            // stopped; read before, a last callback would be heard twice.
+            // The ring goes with the device, so there's nothing to flush.
+            self.out = None;
             let at = self.current();
             self.flush();
             self.src = None;
-            self.out = None;
             self.draining = false;
             self.reopen_pending = None;
             self.shared.paused.store(false, Ordering::Relaxed);

@@ -101,10 +101,15 @@ pub mod fake {
         pub only_rate: Option<u32>,
     }
 
-    struct Handle(Arc<AtomicBool>);
+    /// Stops the device thread and, like dropping a cpal stream, waits for
+    /// it: nothing is rendered after the handle is gone.
+    struct Handle(Arc<AtomicBool>, Option<std::thread::JoinHandle<()>>);
     impl Drop for Handle {
         fn drop(&mut self) {
             self.0.store(true, Ordering::Relaxed);
+            if let Some(t) = self.1.take() {
+                let _ = t.join();
+            }
         }
     }
 
@@ -115,7 +120,7 @@ pub mod fake {
             let mut r = make(2);
             let stop = Arc::new(AtomicBool::new(false));
             let (s, played) = (stop.clone(), self.played.clone());
-            std::thread::spawn(move || {
+            let thread = std::thread::spawn(move || {
                 let mut out = vec![0.0f32; 512];
                 while !s.load(Ordering::Relaxed) {
                     let n = r.render(&mut out);
@@ -123,7 +128,7 @@ pub mod fake {
                     std::thread::sleep(std::time::Duration::from_micros(300));
                 }
             });
-            Ok((rate, Box::new(Handle(stop))))
+            Ok((rate, Box::new(Handle(stop, Some(thread)))))
         }
     }
 }

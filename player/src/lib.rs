@@ -233,7 +233,9 @@ mod tests {
         fake.played.lock().unwrap().clear();
         p.seek(5.0);
         p.play();
-        let s = wait(&p, "position after seek", |s| s.position >= 5.0);
+        // Playing, not just paused at the seek target (status reports that
+        // too, before the engine has taken the Play).
+        let s = wait(&p, "position after seek", |s| s.state == State::Playing && s.position >= 5.0);
         assert!(s.position < 6.0, "{}", s.position);
         assert_eq!(s.duration, Some(10.0));
         // The first frame heard after the seek is frame 40000 (= 0 here).
