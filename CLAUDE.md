@@ -304,8 +304,9 @@ songs (9 found; playlist "Road trip (Time Out 50)" left on the server).
 Installed on the Surface's Windows side and registered with Claude Code at
 user scope (2026-11-17; no `claude` on PATH there: the desktop app bundles
 one under `%LOCALAPPDATA%\Claude-Data\…\claude-code\<version>\…\claude.exe`);
-checked with a `claude -p` question. Next: the phone (LocalBeat step 4), later the
-Library page. Live phone control (adb) comes after the
+checked with a `claude -p` question. LocalBeat 0.9.7 (step 4, 2026-11-17)
+shows and plays the server playlists on the phone. Next: editing them on
+the phone (step 5), later Studio's Library page. Live phone control (adb) comes after the
 phone shows server playlists.
 
 ## Open items
