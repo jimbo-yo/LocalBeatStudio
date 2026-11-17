@@ -39,10 +39,14 @@ navy #1B2A3A note) is also shared (`docs/brand/` in the other two).
   Claude Code usually runs; (3) Fedora 45 in **WSL** inside that Windows
   (`wsl -d FedoraLinux-45`, user musicuser): a Linux build/test box (Rust,
   cmake, gcc, alsa, gawk, wireguard-tools, openssl, qrencode), its own
-  CDRipPipeline clone in `~/Development`, **no SSH key for the Mac**. Anything
-  that logs in to the Mac (setup.sh, localbeat-writers by hand) needs the
-  native Fedora (or the Lenovo while it lasts). "Fedora on the Surface"
-  is ambiguous: say native or WSL
+  CDRipPipeline + LocalBeatServer clones in `~/Development` (branch
+  `joining`). Since 2026-11-16 it logs in to the Mac too (key
+  `~/.ssh/id_ed25519`, "musicuser@surface-wsl"; `ssh musicuser@192.168.1.10`),
+  so Claude Code can reach the Mac from Windows with
+  `wsl -d FedoraLinux-45 -- ssh musicuser@192.168.1.10 ...`. The server's
+  `host/setup.sh` was run on the Mac from there 2026-11-16 (the Mac's
+  localbeat-admin = the joining version). "Fedora on the Surface" is
+  ambiguous: say native or WSL
 - Check `/etc/os-release` and the hardware to tell the machines apart
 - Repo in `~/development/<repo>`; `~/Development/<repo>` (capital D) on the
   Surface. Editor preference: **vi** (say vi, not nano, in instructions)
