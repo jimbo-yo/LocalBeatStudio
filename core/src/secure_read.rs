@@ -334,7 +334,7 @@ mod tests {
         let r = read_track_limited(&mut d, 26..200, 400, 0, lim, &mut noop);
         // The stalled chunk (26..52) and one skip (52..78) are lost, untried.
         assert_eq!(r.unreadable, (26..78).collect::<Vec<_>>());
-        assert!(!d.reads.iter().any(|&(lba, n)| n == 1 || (lba >= 52 && lba < 78)), "{:?}", d.reads);
+        assert!(!d.reads.iter().any(|&(lba, n)| n == 1 || (52..78).contains(&lba)), "{:?}", d.reads);
         // Reading resumed after the skip.
         assert_eq!(r.frames[(78 - 26) * 588], 78 * 588 + 1);
         assert_eq!(*r.frames.last().unwrap(), 200 * 588);

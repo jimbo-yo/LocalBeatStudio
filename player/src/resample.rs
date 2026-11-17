@@ -20,7 +20,7 @@ impl Linear {
 
     /// Converts interleaved stereo `input`, appending to `out`.
     pub fn process(&mut self, input: &[f32], out: &mut Vec<f32>) {
-        for frame in input.chunks_exact(2) {
+        for frame in input.as_chunks::<2>().0 {
             let x = [frame[0], frame[1]];
             if !self.primed {
                 self.prev = x;

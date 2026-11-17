@@ -99,10 +99,8 @@ pub fn read_pictures(path: &Path) -> Result<Vec<FlacPicture>> {
         let len = u32::from_be_bytes([0, h[1], h[2], h[3]]) as usize;
         let mut block = vec![0u8; len];
         f.read_exact(&mut block)?;
-        if kind == 6 {
-            if let Some(p) = parse_picture(&block) {
-                out.push(p);
-            }
+        if kind == 6 && let Some(p) = parse_picture(&block) {
+            out.push(p);
         }
         if last {
             break;

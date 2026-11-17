@@ -224,7 +224,7 @@ pub fn parse_names(xml: &str) -> Vec<NameHit> {
             None => out.push(hit),
         }
     }
-    out.sort_by(|a, b| b.relevance.cmp(&a.relevance));
+    out.sort_by_key(|h| std::cmp::Reverse(h.relevance));
     out
 }
 

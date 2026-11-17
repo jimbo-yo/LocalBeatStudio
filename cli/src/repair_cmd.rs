@@ -15,10 +15,8 @@ pub fn run(album: PathBuf, reads: Option<PathBuf>, write: bool) -> Result<bool> 
     let s = Settings::load();
     let rejected = reads.as_ref().and_then(|r| r.parent().map(|p| p.to_path_buf()));
     let mut tocs = repair_disc::cdtocs_in(&album)?;
-    if tocs.is_empty() {
-        if let Some(r) = &rejected {
-            tocs = repair_disc::cdtocs_in(r)?;
-        }
+    if tocs.is_empty() && let Some(r) = &rejected {
+        tocs = repair_disc::cdtocs_in(r)?;
     }
     if tocs.is_empty() {
         bail!("no CDTOC tag in the album's (or the rejected) files: can't tell the disc's layout");
@@ -27,10 +25,8 @@ pub fn run(album: PathBuf, reads: Option<PathBuf>, write: bool) -> Result<bool> 
     for toc in tocs {
         let t0 = std::time::Instant::now();
         let r = repair_disc::repair_disc(&s, &album, &toc, rejected.as_deref(), write)?;
-        if write {
-            if let Some(rej) = &rejected {
-                repair_disc::save_record(&r, &album, rej, "")?;
-            }
+        if write && let Some(rej) = &rejected {
+            repair_disc::save_record(&r, &album, rej, "")?;
         }
         for l in &r.log {
             println!("{l}");

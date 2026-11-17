@@ -328,18 +328,14 @@ pub fn rank(releases: &mut [Release], country: Option<&str>) {
 /// Up to 3 genres, most votes first, Title Case: the release group's, else
 /// the album artist's (same as mb-enrich.py).
 pub fn genres(release: &Release) -> Result<Vec<String>> {
-    if !release.release_group_id.is_empty() {
-        if let Some(v) = http::musicbrainz(&format!("release-group/{}?inc=genres", release.release_group_id))? {
-            let g = top_genres(&v);
-            if !g.is_empty() {
-                return Ok(g);
-            }
+    if !release.release_group_id.is_empty() && let Some(v) = http::musicbrainz(&format!("release-group/{}?inc=genres", release.release_group_id))? {
+        let g = top_genres(&v);
+        if !g.is_empty() {
+            return Ok(g);
         }
     }
-    if let Some(artist) = release.artist_ids.first() {
-        if let Some(v) = http::musicbrainz(&format!("artist/{artist}?inc=genres"))? {
-            return Ok(top_genres(&v));
-        }
+    if let Some(artist) = release.artist_ids.first() && let Some(v) = http::musicbrainz(&format!("artist/{artist}?inc=genres"))? {
+        return Ok(top_genres(&v));
     }
     Ok(Vec::new())
 }

@@ -63,7 +63,7 @@ impl DiscRepair {
 
 fn read_raw(p: &Path) -> Result<Vec<u32>> {
     let b = std::fs::read(p).with_context(|| format!("reading {}", p.display()))?;
-    Ok(b.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
+    Ok(b.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
 }
 
 /// FLACs of this disc (same CDTOC tag) by track number.
@@ -78,10 +78,8 @@ fn flacs_by_track(dir: &Path, cdtoc: &str) -> Result<HashMap<usize, PathBuf>> {
             continue;
         }
         let f = flacfile::read_tags(&p)?;
-        if f.tag("CDTOC").is_some_and(|t| t.eq_ignore_ascii_case(cdtoc)) {
-            if let Some(n) = f.track_number() {
-                out.insert(n, p);
-            }
+        if f.tag("CDTOC").is_some_and(|t| t.eq_ignore_ascii_case(cdtoc)) && let Some(n) = f.track_number() {
+            out.insert(n, p);
         }
     }
     Ok(out)
@@ -92,12 +90,11 @@ pub fn cdtocs_in(dir: &Path) -> Result<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     for e in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
         let p = e?.path();
-        if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("flac")) {
-            if let Some(t) = flacfile::read_tags(&p)?.tag("CDTOC") {
-                if !out.iter().any(|o| o.eq_ignore_ascii_case(t)) {
-                    out.push(t.to_string());
-                }
-            }
+        if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("flac"))
+            && let Some(t) = flacfile::read_tags(&p)?.tag("CDTOC")
+            && !out.iter().any(|o| o.eq_ignore_ascii_case(t))
+        {
+            out.push(t.to_string());
         }
     }
     Ok(out)
@@ -265,7 +262,7 @@ pub fn repair_disc(s: &Settings, album: &Path, cdtoc: &str, rejected: Option<&Pa
 
     // Check each track: CUETools at its alignment, AccurateRip at ours.
     let split = |w: &[u16]| -> Vec<Vec<u32>> {
-        let frames: Vec<u32> = w.chunks_exact(2).map(|x| x[0] as u32 | (x[1] as u32) << 16).collect();
+        let frames: Vec<u32> = w.as_chunks::<2>().0.iter().map(|x| x[0] as u32 | (x[1] as u32) << 16).collect();
         let mut v = Vec::new();
         let mut pos = 0;
         for l in &lens {
@@ -365,8 +362,7 @@ fn write_track(dest: &Path, tag_source: &Path, frames: &[u32], note: &str, backu
             .or_else(|_| std::fs::copy(dest, &keep).map(|_| ()).and_then(|_| std::fs::remove_file(dest)))
             .with_context(|| format!("moving the original to {}", keep.display()))?;
     }
-    std::fs::rename(&tmp, dest).with_context(|| format!("putting {name} in place"))?;
-    Ok(())
+    flac_encode::put_in_place(&tmp, dest).with_context(|| format!("putting {name} in place"))
 }
 
 // ---------------------------------------------------------------- records

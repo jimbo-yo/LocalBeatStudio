@@ -438,6 +438,9 @@ fn combinations(n: usize, k: usize) -> impl Iterator<Item = Vec<usize>> {
     })
 }
 
+/// Voted words, the doubtful ones, and the alternatives seen per word.
+pub type WordVote = (Vec<u16>, Vec<(usize, Doubt)>, Vec<Vec<u16>>);
+
 /// Votes per 16-bit word over several reads of a track (frames, as
 /// `secure_read` gives them): the majority value, and which words were
 /// doubtful (`index into the returned words`, strength).
@@ -450,7 +453,7 @@ pub fn vote_words(reads: &[Vec<u32>]) -> (Vec<u16>, Vec<(usize, Doubt)>) {
 /// per read): only the reads that have a word vote on it. A word no read
 /// has is 0 and maximally doubtful (an erasure); a word only one read has
 /// is doubtful too.
-pub fn vote_words_gaps(reads: &[Vec<u32>], gaps: &[Vec<(usize, usize)>]) -> (Vec<u16>, Vec<(usize, Doubt)>, Vec<Vec<u16>>) {
+pub fn vote_words_gaps(reads: &[Vec<u32>], gaps: &[Vec<(usize, usize)>]) -> WordVote {
     if gaps.iter().all(|g| g.is_empty()) {
         return vote_words_alts(reads);
     }
@@ -506,7 +509,7 @@ pub fn vote_words_gaps(reads: &[Vec<u32>], gaps: &[Vec<(usize, usize)>]) -> (Vec
 }
 
 /// [`vote_words`], plus each doubtful word's distinct values across the reads.
-pub fn vote_words_alts(reads: &[Vec<u32>]) -> (Vec<u16>, Vec<(usize, Doubt)>, Vec<Vec<u16>>) {
+pub fn vote_words_alts(reads: &[Vec<u32>]) -> WordVote {
     let mut alts = Vec::new();
     let n = reads.iter().map(Vec::len).min().unwrap_or(0);
     let mut words = Vec::with_capacity(n * 2);

@@ -139,10 +139,8 @@ pub fn norm(s: &str) -> String {
 pub fn sort_name(s: &str) -> String {
     let n = norm(s);
     for article in ["the ", "a ", "an "] {
-        if let Some(rest) = n.strip_prefix(article) {
-            if !rest.is_empty() {
-                return rest.to_string();
-            }
+        if let Some(rest) = n.strip_prefix(article) && !rest.is_empty() {
+            return rest.to_string();
         }
     }
     n
@@ -356,7 +354,7 @@ impl Library {
                 }
             })
             .collect();
-        albums.sort_by(|a, b| (sort_name(&a.artist), a.year, sort_name(&a.title)).cmp(&(sort_name(&b.artist), b.year, sort_name(&b.title))));
+        albums.sort_by_key(|a| (sort_name(&a.artist), a.year, sort_name(&a.title)));
 
         let mut by_artist: BTreeMap<String, Artist> = BTreeMap::new();
         for (i, a) in albums.iter().enumerate() {
@@ -449,6 +447,43 @@ fn read_song(p: &Path, origin: Origin, size: u64, mtime: i64, added: i64) -> Res
     // iTunes keeps the art outside the file sometimes; a picture in any tag counts.
     song.picture |= tf.tags().iter().any(|t| !t.pictures().is_empty());
     Ok(song)
+}
+
+/// Extra tags for a song's details view, as (label, value), in a fixed
+/// order: what the library index doesn't keep. Unknown or empty ones are
+/// left out.
+pub fn song_details(path: &Path) -> Vec<(String, String)> {
+    let opts = lofty::config::ParseOptions::new().parsing_mode(lofty::config::ParsingMode::Relaxed);
+    let Ok(tf) = lofty::probe::Probe::open(path).and_then(|pr| pr.options(opts).read()) else { return Vec::new() };
+    let Some(tag) = tf.primary_tag().or_else(|| tf.first_tag()) else { return Vec::new() };
+    let get = |k: ItemKey| tag.get_string(k).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    // Free-form keys (Vorbis comments we write ourselves): FLAC only.
+    let flac_tags = path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("flac"))
+        .then(|| crate::flacfile::read_tags(path).ok())
+        .flatten();
+    let free = |name: &str| flac_tags.as_ref().and_then(|f| f.tag(name)).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let mut out = Vec::new();
+    let mut add = |label: &str, v: Option<String>| {
+        if let Some(v) = v {
+            out.push((label.to_string(), v));
+        }
+    };
+    add("Composer", get(ItemKey::Composer));
+    add("Conductor", get(ItemKey::Conductor));
+    add("Label", get(ItemKey::Label));
+    add("Catalogue number", get(ItemKey::CatalogNumber));
+    add("Release date", get(ItemKey::RecordingDate).or_else(|| get(ItemKey::Year)));
+    add("Original date", get(ItemKey::OriginalReleaseDate));
+    add("Release country", free("RELEASECOUNTRY"));
+    add("ISRC", get(ItemKey::Isrc));
+    add("AccurateRip", free("ACCURATERIP"));
+    add("CUETools repair", free("CTDBREPAIR"));
+    add("MusicBrainz release", get(ItemKey::MusicBrainzReleaseId));
+    add("MusicBrainz recording", get(ItemKey::MusicBrainzRecordingId));
+    add("Comment", get(ItemKey::Comment));
+    out
 }
 
 #[cfg(test)]
@@ -565,41 +600,4 @@ mod tests {
         assert_eq!(sort_name("The Smiths"), "smiths");
         assert_eq!(sort_name("The"), "the");
     }
-}
-
-/// Extra tags for a song's details view, as (label, value), in a fixed
-/// order: what the library index doesn't keep. Unknown or empty ones are
-/// left out.
-pub fn song_details(path: &Path) -> Vec<(String, String)> {
-    let opts = lofty::config::ParseOptions::new().parsing_mode(lofty::config::ParsingMode::Relaxed);
-    let Ok(tf) = lofty::probe::Probe::open(path).and_then(|pr| pr.options(opts).read()) else { return Vec::new() };
-    let Some(tag) = tf.primary_tag().or_else(|| tf.first_tag()) else { return Vec::new() };
-    let get = |k: ItemKey| tag.get_string(k).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
-    // Free-form keys (Vorbis comments we write ourselves): FLAC only.
-    let flac_tags = path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("flac"))
-        .then(|| crate::flacfile::read_tags(path).ok())
-        .flatten();
-    let free = |name: &str| flac_tags.as_ref().and_then(|f| f.tag(name)).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
-    let mut out = Vec::new();
-    let mut add = |label: &str, v: Option<String>| {
-        if let Some(v) = v {
-            out.push((label.to_string(), v));
-        }
-    };
-    add("Composer", get(ItemKey::Composer));
-    add("Conductor", get(ItemKey::Conductor));
-    add("Label", get(ItemKey::Label));
-    add("Catalogue number", get(ItemKey::CatalogNumber));
-    add("Release date", get(ItemKey::RecordingDate).or_else(|| get(ItemKey::Year)));
-    add("Original date", get(ItemKey::OriginalReleaseDate));
-    add("Release country", free("RELEASECOUNTRY"));
-    add("ISRC", get(ItemKey::Isrc));
-    add("AccurateRip", free("ACCURATERIP"));
-    add("CUETools repair", free("CTDBREPAIR"));
-    add("MusicBrainz release", get(ItemKey::MusicBrainzReleaseId));
-    add("MusicBrainz recording", get(ItemKey::MusicBrainzRecordingId));
-    add("Comment", get(ItemKey::Comment));
-    out
 }

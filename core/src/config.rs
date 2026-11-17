@@ -275,7 +275,7 @@ pub fn lookup_offset(file: &Path, key: &str, serial: &str) -> Option<i32> {
             let id = strip_lun(id);
             (id == want || (!serial.is_empty() && id == serial)).then_some(off)
         })
-        .last()
+        .next_back()
 }
 
 pub fn save_offset(file: &Path, key: &str, offset: i32) -> Result<()> {

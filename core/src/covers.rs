@@ -110,7 +110,7 @@ pub fn thumbnail(album: &Album, songs: &[Song], cache_dir: &Path, px: u32) -> Re
 /// pixels, kept dark enough to sit behind white text. RGBA input.
 pub fn accent_color(rgba: &[u8]) -> [u8; 3] {
     let (mut sum, mut weight) = ([0f64; 3], 0f64);
-    for px in rgba.chunks_exact(4).step_by(7) {
+    for px in rgba.as_chunks::<4>().0.iter().step_by(7) {
         let (r, g, b) = (px[0] as f64, px[1] as f64, px[2] as f64);
         let max = r.max(g).max(b);
         let min = r.min(g).min(b);

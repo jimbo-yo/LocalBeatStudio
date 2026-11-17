@@ -212,7 +212,7 @@ pub(crate) fn url_encode(s: &str) -> String {
 
 /// A Lucene phrase for MusicBrainz search.
 pub(crate) fn phrase(s: &str) -> String {
-    format!("\"{}\"", s.replace('\\', " ").replace('"', " "))
+    format!("\"{}\"", s.replace(['\\', '"'], " "))
 }
 
 fn is_various(artist: &str) -> bool {
@@ -657,7 +657,7 @@ fn apply_file(t: &LocalTrack, ct: &CandTrack, c: &Candidate, genres: &[String], 
         // Old values first.
         let mut old = serde_json::Map::new();
         for k in TEXT_KEYS {
-            old.insert(key_name(&k), tag.get_string(k.clone()).map(|v| json!(v)).unwrap_or(Value::Null));
+            old.insert(key_name(&k), tag.get_string(k).map(|v| json!(v)).unwrap_or(Value::Null));
         }
         old.insert("track".into(), json!(tag.track()));
         old.insert("track_total".into(), json!(tag.track_total()));

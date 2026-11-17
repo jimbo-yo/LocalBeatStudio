@@ -45,12 +45,31 @@ pub fn write_flac(
     let file = File::create(path).with_context(|| format!("creating {}", path.display()))?;
     let mut sink = Sink { out: BufWriter::new(file), error: None };
     let result = encode(&mut sink, frames, tags, cover, compression);
-    let flushed = sink.out.flush();
+    // Flushed and synced, so a rename that follows can't survive a crash
+    // while the audio doesn't (an empty file under the real name).
+    let flushed = sink.out.flush().and_then(|()| sink.out.get_ref().sync_all());
     let result = result.and_then(|()| flushed.map_err(Into::into));
     if result.is_err() {
         let _ = std::fs::remove_file(path);
     }
     result.with_context(|| format!("encoding {}", path.display()))
+}
+
+/// Renames a finished (synced) `tmp` to `dest` and, on Unix, syncs the
+/// folder so the new name itself is on disk.
+pub fn put_in_place(tmp: &Path, dest: &Path) -> Result<()> {
+    std::fs::rename(tmp, dest).with_context(|| format!("renaming to {}", dest.display()))?;
+    #[cfg(unix)]
+    if let Some(dir) = dest.parent() {
+        File::open(dir).and_then(|d| d.sync_all()).with_context(|| format!("syncing {}", dir.display()))?;
+    }
+    Ok(())
+}
+
+/// A library file counts as present only if it has content: a crash before
+/// the data reached the disk can leave an empty file under the real name.
+pub fn present(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() > 0)
 }
 
 struct Sink {

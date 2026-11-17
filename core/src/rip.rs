@@ -105,7 +105,7 @@ pub fn plan(toc: &Toc, meta: &Metadata, flac_dir: &Path) -> DiscPlan {
                 sectors: t.sector_range_normalized(),
                 first: pos.is_first(),
                 last: pos.is_last(),
-                exists: dest.exists(),
+                exists: flac_encode::present(&dest),
                 dest,
                 tags,
             }
@@ -193,13 +193,16 @@ fn try_vote(reads: &[Vec<u32>], t: &TrackPlan, db: &DiscEntries) -> Result<(u8, 
     }
 }
 
+/// One read of a track and its unreadable stretches (frames, track-relative).
+type KeptRead = (Vec<u32>, Vec<(usize, usize)>);
+
 /// Saves the clean reads of a track that couldn't be verified, as raw PCM
 /// (16-bit stereo, 44.1 kHz), for the CUETools repair. Reads from earlier
 /// rips of the disc are kept: new ones take the next free numbers, so a
 /// re-rip after cleaning adds to them and the repair votes over all.
 /// A read with unreadable sectors also gets `readK.gaps`: one "start end"
 /// line (frames, track-relative, end exclusive) per unreadable stretch.
-fn keep_reads(dir: &Path, t: &TrackPlan, reads: &[(Vec<u32>, Vec<(usize, usize)>)]) -> Result<PathBuf> {
+fn keep_reads(dir: &Path, t: &TrackPlan, reads: &[KeptRead]) -> Result<PathBuf> {
     let dir = dir.join(format!("track{:02}", t.position));
     std::fs::create_dir_all(&dir)?;
     let mut next = 1;
@@ -304,7 +307,7 @@ pub fn rip(
         let mut clean_reads: Vec<Vec<u32>> = Vec::new();
         // Every read, with its unreadable stretches (frames, track-relative),
         // for the CUETools repair: gaps are known erasures there.
-        let mut all_reads: Vec<(Vec<u32>, Vec<(usize, usize)>)> = Vec::new();
+        let mut all_reads: Vec<KeptRead> = Vec::new();
         let mut voted: Option<Vec<u32>> = None;
 
         let mut limit = s.reads.max(1);
@@ -358,7 +361,7 @@ pub fn rip(
                     on(Event::Note(format!("track {}: matches AccurateRip for another pressing (shifted {shift:+} frames)", t.position)));
                     accepted = Some(Acceptance::OtherPressing { confidence, shift });
                 } else if let Some((confidence, v)) = (clean_reads.len() >= 3 && !repeat)
-                    .then(|| ctx.accuraterip)
+                    .then_some(ctx.accuraterip)
                     .flatten()
                     .and_then(|db| match try_vote(&clean_reads, t, db) {
                         Ok(x) => Some(x),
@@ -432,7 +435,7 @@ pub fn rip(
 
         match accepted {
             Some(how) => {
-                if t.dest.exists() {
+                if flac_encode::present(&t.dest) {
                     on(Event::Note(format!("track {} appeared in the library meanwhile; not replaced", t.position)));
                     sum.skipped.push(t.position);
                     continue;
@@ -471,10 +474,8 @@ pub fn rip(
     // Cover file next to the tracks (for players that look for one).
     if let Some(p) = ctx.cover {
         let path = plan.album_dir.join(cover::file_name(p));
-        if plan.album_dir.is_dir() && !path.exists() {
-            if let Err(e) = std::fs::write(&path, &p.data) {
-                on(Event::Note(format!("couldn't save {}: {e}", path.display())));
-            }
+        if plan.album_dir.is_dir() && !path.exists() && let Err(e) = std::fs::write(&path, &p.data) {
+            on(Event::Note(format!("couldn't save {}: {e}", path.display())));
         }
     }
 
@@ -517,8 +518,7 @@ fn write_atomically(
     let name = dest.file_name().expect("file name").to_string_lossy();
     let tmp = dest.with_file_name(format!("{name}.part"));
     flac_encode::write_flac(&tmp, &r.frames, tags, cover, compression)?;
-    std::fs::rename(&tmp, dest).with_context(|| format!("renaming to {}", dest.display()))?;
-    Ok(())
+    flac_encode::put_in_place(&tmp, dest)
 }
 
 /// Appends to `<Album>[ CDn].log` in the album folder (one section per run).
@@ -647,6 +647,16 @@ mod tests {
         // Second run: only track 2 is missing.
         let p2 = plan(&toc, &meta, &s.flac_dir);
         assert_eq!(p2.missing().map(|t| t.position).collect::<Vec<_>>(), [2]);
+
+        // An empty file left by a crash counts as missing and is replaced.
+        std::fs::write(&p.tracks[2].dest, b"").unwrap();
+        let p3 = plan(&toc, &meta, &s.flac_dir);
+        assert_eq!(p3.missing().map(|t| t.position).collect::<Vec<_>>(), [2, 3]);
+        let mut disc = FakeDisc { sectors: 120, flaky: vec![], bad: vec![], reads: 0 };
+        let sum = rip(&mut disc, &p3, &ctx, &mut |_| {}).unwrap();
+        assert_eq!(sum.accepted, [2, 3]);
+        let (_, frames) = crate::flacfile::read_cd_audio(&p.tracks[2].dest).unwrap();
+        assert_eq!(frames.len(), 40 * 588);
         std::fs::remove_dir_all(&root).ok();
     }
 

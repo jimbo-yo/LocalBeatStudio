@@ -401,10 +401,8 @@ fn scan_root(root: &Path, origin: Origin) -> Vec<Album> {
         return Vec::new();
     }
     for e in walkdir::WalkDir::new(root).min_depth(1).into_iter().filter_map(|e| e.ok()) {
-        if e.file_type().is_file() {
-            if let Some(parent) = e.path().parent() {
-                dirs.entry(parent.to_path_buf()).or_default().push(e);
-            }
+        if e.file_type().is_file() && let Some(parent) = e.path().parent() {
+            dirs.entry(parent.to_path_buf()).or_default().push(e);
         }
     }
     let mut albums = Vec::new();
@@ -791,10 +789,8 @@ pub fn execute(
     for (file, _) in &plan.remove_files {
         on(SyncEvent::Removing(file.clone()));
         fs.remove_file(file)?;
-        if let Some((dir, name)) = file.rsplit_once('/') {
-            if let Some(rec) = manifest.albums.get_mut(dir) {
-                rec.files.remove(name);
-            }
+        if let Some((dir, name)) = file.rsplit_once('/') && let Some(rec) = manifest.albums.get_mut(dir) {
+            rec.files.remove(name);
         }
         sum.removed_files += 1;
     }

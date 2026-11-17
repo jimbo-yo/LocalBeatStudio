@@ -47,7 +47,7 @@ pub fn vote(reads: &[Vec<u32>]) -> Vote {
                 None => groups.push((c, 1)),
             }
         }
-        groups.sort_by(|a, b| b.1.cmp(&a.1));
+        groups.sort_by_key(|g| std::cmp::Reverse(g.1));
         let clear = groups[0].1 >= 2 && groups.get(1).is_none_or(|g| g.1 < groups[0].1);
         if clear {
             frames.extend_from_slice(groups[0].0);
@@ -65,7 +65,7 @@ pub fn vote(reads: &[Vec<u32>]) -> Vote {
                     None => counts.push((r[f], 1)),
                 }
             }
-            counts.sort_by(|a, b| b.1.cmp(&a.1));
+            counts.sort_by_key(|c| std::cmp::Reverse(c.1));
             if counts[0].1 >= 2 && counts.get(1).is_none_or(|c| c.1 < counts[0].1) {
                 sector.push(counts[0].0);
             } else {

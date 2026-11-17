@@ -61,7 +61,7 @@ impl ReviewTab {
         let mut lines = Vec::new();
         if self.items.is_none() {
             let mut items = enrich_review::list(s);
-            items.sort_by(|a, b| a.rel.to_lowercase().cmp(&b.rel.to_lowercase()));
+            items.sort_by_key(|a| a.rel.to_lowercase());
             self.items = Some(items);
         }
         let total = self.items.as_ref().map_or(0, Vec::len);

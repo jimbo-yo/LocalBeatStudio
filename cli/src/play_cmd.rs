@@ -88,13 +88,13 @@ pub fn run(paths: Vec<PathBuf>, seek: Option<f64>, volume: Option<f32>) -> Resul
             println!("\nEnd of the queue.");
             return Ok(last_error.is_none());
         }
-        if s.index != last_index && s.index.is_some() {
+        if let Some(index) = s.index && s.index != last_index {
             let name = s.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let fmt = s.format.as_ref().map(|f| match f.bits {
                 Some(b) => format!("{} {}/{:.1} kHz", f.codec, b, f.sample_rate as f64 / 1000.0),
                 None => format!("{} {:.1} kHz", f.codec, f.sample_rate as f64 / 1000.0),
             });
-            println!("\n▶ {}/{}  {name}  [{}]", s.index.unwrap() + 1, s.queue_len, fmt.unwrap_or_default());
+            println!("\n▶ {}/{}  {name}  [{}]", index + 1, s.queue_len, fmt.unwrap_or_default());
             last_index = s.index;
         }
         let state = match s.state {

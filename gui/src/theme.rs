@@ -467,8 +467,8 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
             }
         }
         Icon::Queue => {
-            for (i, y) in [-0.5f32, 0.0, 0.5].iter().enumerate() {
-                let x0 = if i == 0 { -0.75 } else { -0.75 };
+            for y in [-0.5f32, 0.0, 0.5] {
+                let x0 = -0.75;
                 painter.line_segment([c + vec2(x0 * s, y * s), c + vec2(0.3 * s, y * s)], stroke);
             }
             painter.add(tri(vec![c + vec2(0.45 * s, 0.2 * s), c + vec2(0.85 * s, 0.5 * s), c + vec2(0.45 * s, 0.8 * s)]));
@@ -862,10 +862,8 @@ pub fn seek_bar(ui: &mut Ui, width: f32, fraction: f32, preview: &mut Option<f32
     let p = pal(ui);
     let at = |pos: Pos2| ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
     let mut result = None;
-    if resp.dragged() {
-        if let Some(pos) = resp.interact_pointer_pos() {
-            *preview = Some(at(pos));
-        }
+    if resp.dragged() && let Some(pos) = resp.interact_pointer_pos() {
+        *preview = Some(at(pos));
     }
     if resp.drag_stopped() || resp.clicked() {
         if let Some(pos) = resp.interact_pointer_pos() {
@@ -895,11 +893,9 @@ pub fn mini_slider(ui: &mut Ui, width: f32, value: f32) -> Option<f32> {
     let p = pal(ui);
     let mut v = value;
     let mut changed = None;
-    if resp.dragged() || resp.clicked() {
-        if let Some(pos) = resp.interact_pointer_pos() {
-            v = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
-            changed = Some(v);
-        }
+    if (resp.dragged() || resp.clicked()) && let Some(pos) = resp.interact_pointer_pos() {
+        v = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+        changed = Some(v);
     }
     let track = Rect::from_center_size(rect.center(), vec2(rect.width(), 4.0));
     ui.painter().rect_filled(track, 2.0, p.line);

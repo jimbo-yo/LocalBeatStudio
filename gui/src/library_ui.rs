@@ -322,10 +322,8 @@ impl LibraryUi {
         if (v - self.volume).abs() > 0.001 && self.volume > 0.0 {
             self.volume = v;
         }
-        if s.error != self.last.error {
-            if let Some(e) = &s.error {
-                self.log.push(format!("Player: {e}"));
-            }
+        if s.error != self.last.error && let Some(e) = &s.error {
+            self.log.push(format!("Player: {e}"));
         }
         if s.state == State::Playing {
             ctx.request_repaint_after(Duration::from_millis(200));
@@ -753,10 +751,8 @@ impl LibraryUi {
                 ui.add_space(4.0);
                 ui.label(egui::RichText::new(&album.title).font(theme::bold(34.0)).color(p.text));
                 let artist = ui.add(egui::Label::new(egui::RichText::new(&album.artist).font(theme::medium(19.0)).color(theme::prism_at(0.3))).sense(Sense::click()));
-                if artist.clicked() {
-                    if let Some(i) = lib.artists.iter().position(|x| x.albums.contains(&a)) {
-                        self.actions.push(Action::OpenArtist(i));
-                    }
+                if artist.clicked() && let Some(i) = lib.artists.iter().position(|x| x.albums.contains(&a)) {
+                    self.actions.push(Action::OpenArtist(i));
                 }
                 if artist.hovered() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -781,10 +777,8 @@ impl LibraryUi {
                     if theme::button(ui, Some(Icon::Plus), "Up Next", Kind::Secondary).on_hover_text("Add the album to the end of Up Next").clicked() {
                         self.actions.push(Action::Append(album.songs.clone()));
                     }
-                    if let Some(d) = album.dirs.first() {
-                        if theme::icon_button(ui, Icon::Folder, 32.0, "Show in folder").clicked() {
-                            self.actions.push(Action::OpenFolder(d.clone()));
-                        }
+                    if let Some(d) = album.dirs.first() && theme::icon_button(ui, Icon::Folder, 32.0, "Show in folder").clicked() {
+                        self.actions.push(Action::OpenFolder(d.clone()));
                     }
                 });
             });
@@ -1080,10 +1074,8 @@ impl LibraryUi {
                 ui.label(label(pos));
                 let w = ui.available_width() - 48.0;
                 let frac = if dur > 0.0 { (s.position / dur) as f32 } else { 0.0 };
-                if let Some(f) = theme::seek_bar(ui, w, frac, &mut self.seek_preview) {
-                    if dur > 0.0 {
-                        self.player.seek(f as f64 * dur);
-                    }
+                if let Some(f) = theme::seek_bar(ui, w, frac, &mut self.seek_preview) && dur > 0.0 {
+                    self.player.seek(f as f64 * dur);
                 }
                 ui.label(label(dur));
             });
@@ -1168,20 +1160,16 @@ impl LibraryUi {
             ui.label(theme::one_line(ui, &x.title, theme::bold(26.0), p.text, w));
             let artist = if x.artist.is_empty() { x.album_artist.clone() } else { x.artist.clone() };
             let ar = ui.add(egui::Label::new(theme::one_line(ui, &artist, theme::medium(17.0), theme::prism_at(0.3), w)).sense(Sense::click()));
-            if ar.clicked() {
-                if let Some(i) = album.and_then(|a| lib.artists.iter().position(|ar| ar.albums.contains(&a))) {
-                    self.actions.push(Action::OpenArtist(i));
-                }
+            if ar.clicked() && let Some(i) = album.and_then(|a| lib.artists.iter().position(|ar| ar.albums.contains(&a))) {
+                self.actions.push(Action::OpenArtist(i));
             }
             let mut line = x.album.clone();
             if let Some(y) = x.year {
                 line = if line.is_empty() { y.to_string() } else { format!("{line} · {y}") };
             }
             let al = ui.add(egui::Label::new(theme::one_line(ui, &line, egui::FontId::proportional(14.5), p.dim, w)).sense(Sense::click()));
-            if al.clicked() {
-                if let Some(a) = album {
-                    self.actions.push(Action::OpenAlbum(a));
-                }
+            if al.clicked() && let Some(a) = album {
+                self.actions.push(Action::OpenAlbum(a));
             }
             for r in [&ar, &al] {
                 if r.hovered() {
@@ -1212,10 +1200,8 @@ impl LibraryUi {
                 let label = |t: f64| egui::RichText::new(mmss(t)).font(egui::FontId::monospace(12.5)).color(p.dim);
                 ui.label(label(pos));
                 let frac = if dur > 0.0 { (s.position / dur) as f32 } else { 0.0 };
-                if let Some(f) = theme::seek_bar(ui, (w - 96.0).max(80.0), frac, &mut self.seek_preview) {
-                    if dur > 0.0 {
-                        self.player.seek(f as f64 * dur);
-                    }
+                if let Some(f) = theme::seek_bar(ui, (w - 96.0).max(80.0), frac, &mut self.seek_preview) && dur > 0.0 {
+                    self.player.seek(f as f64 * dur);
                 }
                 ui.label(label(dur));
             });
@@ -1528,10 +1514,8 @@ fn song_row(ui: &mut egui::Ui, s: &Song, number: usize, show_artist: bool, is_no
         ui.painter().text(pos2(rect.right() - 70.0, y), egui::Align2::RIGHT_CENTER, &s.codec, theme::medium(11.0), if s.lossless() { theme::prism_at(0.1) } else { p.faint });
     }
     let mut out = None;
-    if resp.clicked() || resp.double_clicked() {
-        if !s.drm {
-            out = Some(RowClick::Play);
-        }
+    if (resp.clicked() || resp.double_clicked()) && !s.drm {
+        out = Some(RowClick::Play);
     }
     let resp = if s.drm { resp.on_hover_text("Protected by iTunes DRM: can't be played") } else { resp };
     resp.context_menu(|ui| {

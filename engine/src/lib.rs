@@ -533,14 +533,10 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
 
     // Off to the server (docs/server-library.md): queued here, sent by the
     // pusher (the window's, or `localbeat push`) when on the home network.
-    if wrote {
-        if let Some(a) = &album_name {
-            if config::Prefs::load(s).server.enabled() {
-                match localbeat_core::outbox::Outbox::update(s, |o| o.add(a)) {
-                    Ok(()) => fe.event(Event::Note(format!("Queued for the server: {a}"))),
-                    Err(e) => fe.event(Event::Note(format!("couldn't queue {a} for the server: {e:#}"))),
-                }
-            }
+    if wrote && let Some(a) = &album_name && config::Prefs::load(s).server.enabled() {
+        match localbeat_core::outbox::Outbox::update(s, |o| o.add(a)) {
+            Ok(()) => fe.event(Event::Note(format!("Queued for the server: {a}"))),
+            Err(e) => fe.event(Event::Note(format!("couldn't queue {a} for the server: {e:#}"))),
         }
     }
 

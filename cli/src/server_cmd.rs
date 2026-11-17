@@ -80,7 +80,7 @@ pub fn server(action: Option<ServerAction>) -> Result<bool> {
         println!("Set one: localbeat server set --host 192.168.1.10 --user musicuser --key ~/.ssh/localbeat-studio");
         return Ok(true);
     }
-    println!("Rips go to {}@{}:{} (key {})", sv.user, sv.host, "FLAC/", sv.key);
+    println!("Rips go to {}@{}:FLAC/ (key {})", sv.user, sv.host, sv.key);
     if !sv.key_path().is_file() {
         println!("  but the key {} doesn't exist", sv.key_path().display());
     }

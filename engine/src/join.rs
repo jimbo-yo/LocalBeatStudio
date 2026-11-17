@@ -50,11 +50,11 @@ pub fn ask(s: &Settings, server: &str, name: &str, role: Role) -> Result<Pending
 /// failed setup can be retried without asking the admin again.
 pub fn check(s: &Settings, p: &mut Pending) -> Result<Status> {
     if let Some(a) = &p.approval {
-        return Ok(Status::Approved(a.clone()));
+        return Ok(Status::Approved(Box::new(a.clone())));
     }
     let st = join::status(p)?;
     if let Status::Approved(a) = &st {
-        p.approval = Some(a.clone());
+        p.approval = Some((**a).clone());
         p.save(&s.config_dir)?;
     }
     Ok(st)

@@ -409,11 +409,9 @@ impl PhoneTab {
                     ui.selectable_value(&mut self.show, Show::FromCd, "Ripped from CD (FLAC)");
                     ui.selectable_value(&mut self.show, Show::FromMisc, "Miscellaneous (MP3/AAC…)");
                 });
-            if crate::theme::button(ui, None, "Undo changes", crate::theme::Kind::Secondary).on_hover_text("Back to what's on the phone now").clicked() {
-                if let Some(l) = &self.loaded {
-                    self.wanted = phone_sync::on_phone(&l.lib, &l.phone);
-                    changed = true;
-                }
+            if crate::theme::button(ui, None, "Undo changes", crate::theme::Kind::Secondary).on_hover_text("Back to what's on the phone now").clicked() && let Some(l) = &self.loaded {
+                self.wanted = phone_sync::on_phone(&l.lib, &l.phone);
+                changed = true;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let ok = !self.plan.is_empty() && !self.over_capacity(prefs);

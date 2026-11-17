@@ -3,7 +3,7 @@
 //! do next. Stays put when another disc goes in, unlike the drive's card.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};
 
 use eframe::egui::{self, RichText};
@@ -74,9 +74,9 @@ impl RepairsTab {
         lines
     }
 
-    fn cover(&mut self, ctx: &egui::Context, album: &PathBuf) -> Option<egui::TextureHandle> {
+    fn cover(&mut self, ctx: &egui::Context, album: &Path) -> Option<egui::TextureHandle> {
         self.covers
-            .entry(album.clone())
+            .entry(album.to_path_buf())
             .or_insert_with(|| {
                 let p = ["cover.jpg", "cover.png", "folder.jpg", "Front.jpg"].iter().map(|n| album.join(n)).find(|p| p.exists())?;
                 let img = image::open(p).ok()?.thumbnail(256, 256).to_rgba8();

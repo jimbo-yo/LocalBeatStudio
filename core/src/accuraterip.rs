@@ -214,15 +214,13 @@ mod tests {
         let check_start: u32 = if first { 5 * 588 - 1 } else { 0 };
         let check_end: u32 = if last { count - 5 * 588 } else { count };
         let (mut crc, mut crc_new) = (0u32, 0u32);
-        let mut multiplier: u32 = 1;
-        for &f in frames {
+        for (multiplier, &f) in (1u32..).zip(frames) {
             if multiplier >= check_start && multiplier <= check_end {
                 crc = crc.wrapping_add(multiplier.wrapping_mul(f));
                 let calc = f as u64 * multiplier as u64;
                 crc_new = crc_new.wrapping_add((calc & 0xFFFF_FFFF) as u32);
                 crc_new = crc_new.wrapping_add((calc >> 32) as u32);
             }
-            multiplier += 1;
         }
         Checksums { v1: crc, v2: crc_new }
     }

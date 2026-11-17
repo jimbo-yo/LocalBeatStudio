@@ -457,10 +457,8 @@ impl App {
                 let Some(flag) = self.drives.get(&drive).and_then(|v| v.stop_disc.clone()) else { return };
                 flag.store(if eject { 1 } else { 2 }, Ordering::Relaxed);
                 // Its release question, if any, goes away.
-                if self.choice.as_ref().is_some_and(|c| c.drive == drive) {
-                    if let Some(c) = self.choice.take() {
-                        let _ = c.reply.send(ReleaseChoice::Skip);
-                    }
+                if self.choice.as_ref().is_some_and(|c| c.drive == drive) && let Some(c) = self.choice.take() {
+                    let _ = c.reply.send(ReleaseChoice::Skip);
                 }
                 let (theirs, rest): (Vec<_>, Vec<_>) = self.queued_choices.drain(..).partition(|c| c.drive == drive);
                 self.queued_choices = rest.into();
@@ -744,13 +742,11 @@ impl App {
             self.log("Stopped".into());
         }
         // Ask the next release question once the previous one is answered.
-        if self.choice.is_none() {
-            if let Some(mut c) = self.queued_choices.pop_front() {
-                if c.candidates.first().is_some_and(|r| !r.fuzzy) {
-                    c.deadline = Some(Instant::now() + Duration::from_secs(AUTO_CHOOSE_SECS));
-                }
-                self.choice = Some(c);
+        if self.choice.is_none() && let Some(mut c) = self.queued_choices.pop_front() {
+            if c.candidates.first().is_some_and(|r| !r.fuzzy) {
+                c.deadline = Some(Instant::now() + Duration::from_secs(AUTO_CHOOSE_SECS));
             }
+            self.choice = Some(c);
         }
     }
 
@@ -975,11 +971,9 @@ impl App {
     }
 
     fn finish_track(&mut self, position: usize, status: Status) {
-        if let Some(d) = &mut self.disc {
-            if let Some(r) = d.rows.iter_mut().find(|r| r.info.position == position) {
-                d.done_secs += r.info.seconds;
-                r.status = status;
-            }
+        if let Some(d) = &mut self.disc && let Some(r) = d.rows.iter_mut().find(|r| r.info.position == position) {
+            d.done_secs += r.info.seconds;
+            r.status = status;
         }
     }
 
@@ -1344,10 +1338,8 @@ impl App {
                         }
                         ui.add_space(6.0);
                         ui.horizontal_wrapped(|ui| {
-                            if let Some(r) = &d.release {
-                                if r.media_count > 1 {
-                                    theme::badge(ui, &format!("Disc {} of {}", r.medium.position, r.media_count), theme::prism_at(0.1));
-                                }
+                            if let Some(r) = &d.release && r.media_count > 1 {
+                                theme::badge(ui, &format!("Disc {} of {}", r.medium.position, r.media_count), theme::prism_at(0.1));
                             }
                             match d.in_accuraterip {
                                 Some(true) => {
@@ -1417,10 +1409,8 @@ impl App {
     fn choice_window(&mut self, ctx: &egui::Context) {
         let Some(c) = &mut self.choice else { return };
         let mut answer: Option<ReleaseChoice> = None;
-        if let Some(dl) = c.deadline {
-            if Instant::now() >= dl {
-                answer = Some(ReleaseChoice::Use(c.selected));
-            }
+        if let Some(dl) = c.deadline && Instant::now() >= dl {
+            answer = Some(ReleaseChoice::Use(c.selected));
         }
         let p = theme::pal_ctx(ctx);
         egui::Window::new("Which release is this?")
@@ -1493,10 +1483,8 @@ impl App {
                     theme::progress(ui, 1.0 - left / AUTO_CHOOSE_SECS as f32, 200.0, Some(&format!("Using the first in {:.0} s unless you choose", left.ceil())));
                 }
             });
-        if let Some(a) = answer {
-            if let Some(c) = self.choice.take() {
-                let _ = c.reply.send(a);
-            }
+        if let Some(a) = answer && let Some(c) = self.choice.take() {
+            let _ = c.reply.send(a);
         }
     }
 }
@@ -1597,12 +1585,10 @@ fn deck_card(ui: &mut egui::Ui, d: &Deck, width: f32) -> Option<DeckClick> {
                     ui.add(egui::Label::new(egui::RichText::new(what).font(theme::medium(14.0)).color(p.text)).truncate());
                 }
                 ui.add(egui::Label::new(egui::RichText::new(d.stage).small().color(p.dim)).truncate());
-                if let Some(x) = d.disc.filter(|_| d.ripping) {
-                    if x.total_secs > 0 {
-                        let f = x.done_secs as f32 / x.total_secs as f32;
-                        let w = (ui.available_width() - 44.0).max(60.0);
-                        theme::progress(ui, f, w, Some(&format!("{:.0}%", f * 100.0)));
-                    }
+                if let Some(x) = d.disc.filter(|_| d.ripping) && x.total_secs > 0 {
+                    let f = x.done_secs as f32 / x.total_secs as f32;
+                    let w = (ui.available_width() - 44.0).max(60.0);
+                    theme::progress(ui, f, w, Some(&format!("{:.0}%", f * 100.0)));
                 }
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

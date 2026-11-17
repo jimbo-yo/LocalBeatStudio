@@ -85,10 +85,8 @@ pub fn check_dir(dir: &Path, obs: &mut dyn Observer) -> Result<()> {
         // Decoded tracks, kept for neighbours of a shifted pressing.
         let mut audio: BTreeMap<usize, Vec<u32>> = BTreeMap::new();
         let decode = |track: usize, audio: &mut BTreeMap<usize, Vec<u32>>| -> Result<()> {
-            if !audio.contains_key(&track) {
-                if let Some((_, p)) = tracks.iter().find(|(t, _)| *t == track) {
-                    audio.insert(track, flacfile::read_cd_audio(p)?.1);
-                }
+            if !audio.contains_key(&track) && let Some((_, p)) = tracks.iter().find(|(t, _)| *t == track) {
+                audio.insert(track, flacfile::read_cd_audio(p)?.1);
             }
             Ok(())
         };
@@ -103,25 +101,23 @@ pub fn check_dir(dir: &Path, obs: &mut dyn Observer) -> Result<()> {
             let sums = accuraterip::checksums(frames, first, last);
             let verdict = entries.verdict(track, sums);
             let mut other_pressing = None;
-            if verdict == Verdict::NoMatch {
-                if let Some(shift) = entries.find_pressing_shift(track, frames) {
-                    let n = shift.unsigned_abs() as usize;
-                    let neighbour = if shift > 0 { track + 1 } else { track.wrapping_sub(1) };
-                    decode(neighbour, &mut audio)?;
-                    let frames = &audio[&track];
-                    let combined: Option<Vec<u32>> = match audio.get(&neighbour) {
-                        Some(next) if shift > 0 && next.len() >= n => Some(frames[n..].iter().chain(&next[..n]).copied().collect()),
-                        Some(prev) if shift < 0 && prev.len() >= n => {
-                            Some(prev[prev.len() - n..].iter().chain(&frames[..frames.len() - n]).copied().collect())
-                        }
-                        _ => None,
-                    };
-                    let confirmed = combined.and_then(|c| match entries.verdict(track, accuraterip::checksums(&c, first, last)) {
-                        Verdict::Match { confidence, .. } => Some(confidence),
-                        _ => None,
-                    });
-                    other_pressing = Some((shift, confirmed));
-                }
+            if verdict == Verdict::NoMatch && let Some(shift) = entries.find_pressing_shift(track, frames) {
+                let n = shift.unsigned_abs() as usize;
+                let neighbour = if shift > 0 { track + 1 } else { track.wrapping_sub(1) };
+                decode(neighbour, &mut audio)?;
+                let frames = &audio[&track];
+                let combined: Option<Vec<u32>> = match audio.get(&neighbour) {
+                    Some(next) if shift > 0 && next.len() >= n => Some(frames[n..].iter().chain(&next[..n]).copied().collect()),
+                    Some(prev) if shift < 0 && prev.len() >= n => {
+                        Some(prev[prev.len() - n..].iter().chain(&frames[..frames.len() - n]).copied().collect())
+                    }
+                    _ => None,
+                };
+                let confirmed = combined.and_then(|c| match entries.verdict(track, accuraterip::checksums(&c, first, last)) {
+                    Verdict::Match { confidence, .. } => Some(confidence),
+                    _ => None,
+                });
+                other_pressing = Some((shift, confirmed));
             }
             let right_pressing = verdict == Verdict::NoMatch && entries.frame450_matches(track, &audio[&track]);
             obs.track(&TrackReport { path, track, sums, verdict, other_pressing, right_pressing });

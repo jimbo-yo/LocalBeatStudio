@@ -110,7 +110,7 @@ pub struct Approval {
 pub enum Status {
     Waiting,
     Denied,
-    Approved(Approval),
+    Approved(Box<Approval>),
 }
 
 /// A request sent and not finished yet: kept in `<config>/join.json` (it
@@ -295,7 +295,7 @@ pub fn status(p: &Pending) -> Result<Status> {
     match v.get("state").and_then(|s| s.as_str()) {
         Some("waiting") => Ok(Status::Waiting),
         Some("denied") => Ok(Status::Denied),
-        Some("approved") => Ok(Status::Approved(serde_json::from_value(v).context("the approval")?)),
+        Some("approved") => Ok(Status::Approved(Box::new(serde_json::from_value(v).context("the approval")?))),
         other => bail!("unexpected answer from the server ({other:?})"),
     }
 }

@@ -92,10 +92,8 @@ pub fn read_track(a: ReadTrackArgs) -> Result<bool> {
         a.offset
     );
 
-    if a.speed.is_some() {
-        if let Err(e) = drive.set_speed(a.speed) {
-            println!("  (speed request failed: {e:#})");
-        }
+    if a.speed.is_some() && let Err(e) = drive.set_speed(a.speed) {
+        println!("  (speed request failed: {e:#})");
     }
 
     let entries = match accuraterip::fetch(&toc) {
