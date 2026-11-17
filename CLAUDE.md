@@ -305,8 +305,9 @@ Installed on the Surface's Windows side and registered with Claude Code at
 user scope (2026-11-17; no `claude` on PATH there: the desktop app bundles
 one under `%LOCALAPPDATA%\Claude-Data\…\claude-code\<version>\…\claude.exe`);
 checked with a `claude -p` question. LocalBeat 0.9.7 (step 4, 2026-11-17)
-shows and plays the server playlists on the phone. Next: editing them on
-the phone (step 5), later Studio's Library page. Live phone control (adb) comes after the
+shows and plays the server playlists on the phone; 0.9.8/0.9.9 (step 5)
+edits them there (queued while out of reach) and moves the phone's own
+playlists in. Next: Studio's Library page (step 6). Live phone control (adb) comes after the
 phone shows server playlists.
 
 ## Open items
