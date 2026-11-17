@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=LocalBeat Studio
+GenericName=Music library, player and CD ripper
+Comment=Play your music, rip CDs to verified FLAC, sync to the phone
+Exec=localbeat-studio
+Icon=localbeat-studio
+Terminal=false
+StartupWMClass=localbeat-studio
+Categories=AudioVideo;Audio;Player;
+Keywords=music;player;cd;rip;flac;opus;phone;sync;accuraterip;localbeat;ripshelf;
