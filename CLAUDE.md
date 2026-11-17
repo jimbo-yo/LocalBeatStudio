@@ -20,7 +20,8 @@ reasons behind most rules below, are in **`docs/history.md`**.
 | `../LocalBeatServer` | Mac Mini server (`/srv/music/FLAC`, `/srv/music/Miscellaneous`), streams Opus on demand |
 
 Each repo's CLAUDE.md records the library contract below. If you change
-folder names, tags, the phone record, or Opus settings, update all three
+folder names, tags, the phone record, Opus settings, or the playlist /
+users-and-devices contract (LocalBeat `docs/control.md`), update all three
 repos. The LocalBeat mark (`gui/assets/localbeat.svg`, gold disc #F2B33D +
 navy #1B2A3A note) is also shared (`docs/brand/` in the other two).
 
@@ -269,6 +270,20 @@ ID_SERIAL_SHORT as fallback.
   + approve on the admin page, keys made on the computer, listener / admin
   roles; the protocol shared with LocalBeatServer's `localbeat-admin`)
 - `docs/history.md`: the full project journal up to 2026-11-14
+
+## AI control and playlists (planned 2026-11-17)
+
+Design and order of work: LocalBeat **`docs/control.md`**. Playlists live
+on the music server (LocalBeatServer, standard Subsonic playlist calls),
+owned by a **user**; each phone/Studio login is a **device** of one user
+(the server's `/etc/localbeat/users`), so a user's playlists are the same
+on all their devices; shareable with named users or everyone (view/play
+only). Step 1 (server) built on LocalBeatServer branch `playlists`. Next
+here: core `subsonic.rs` playlist calls, `localbeat playlist …` and
+`localbeat match` (artist – title lines → library song IDs), then
+`localbeat mcp` (stdio MCP server for Claude, Studio's server login), later
+the Library page. Live phone control (adb) comes after the phone shows
+server playlists.
 
 ## Open items
 
