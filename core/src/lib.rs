@@ -27,5 +27,6 @@ pub mod phone_sync;
 pub mod rip;
 pub mod secure_read;
 pub mod server_library;
+pub mod song_match;
 pub mod subsonic;
 pub mod vote;

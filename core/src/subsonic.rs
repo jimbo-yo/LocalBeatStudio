@@ -1,6 +1,7 @@
 //! A small Subsonic API client for the LocalBeat server: the calls Studio
-//! needs after sending an album (scan, and is it in the catalogue yet).
-//! Playing from the server (step 4 of docs/server-library.md) adds more.
+//! needs after sending an album (scan, and is it in the catalogue yet),
+//! playing from the server (docs/server-library.md), and the user's
+//! playlists on the server (LocalBeat docs/control.md).
 //!
 //! Login is the salted token (`t = md5(password + salt)`), so the secret
 //! itself never goes over the wire (the server accepts both).
@@ -136,6 +137,112 @@ impl Subsonic {
         let v = self.call("search3", &[("query", album), ("albumCount", "100"), ("artistCount", "0"), ("songCount", "0")])?;
         Ok(albums_match(&v, artist, album))
     }
+
+    /// Every song on the server, as its song objects (search3 pages).
+    pub fn all_songs(&self) -> Result<Vec<Value>> {
+        const PAGE: usize = 500;
+        let mut all = Vec::new();
+        for page in 0.. {
+            let got = self.songs(page * PAGE, PAGE)?;
+            let n = got.len();
+            all.extend(got);
+            if n < PAGE {
+                break;
+            }
+        }
+        Ok(all)
+    }
+
+    /// Calls `method` with `params` in a form POST body (OpenSubsonic
+    /// `formPost`: a long song list doesn't fit a URL). The login stays in
+    /// the query string.
+    fn post(&self, method: &str, params: &[(&str, String)]) -> Result<Value> {
+        let url = format!("{}/rest/{method}", self.base);
+        let salt = salt();
+        let mut resp = crate::http::agent()
+            .post(&url)
+            .query("u", &self.user)
+            .query("t", token(&self.password, &salt))
+            .query("s", &salt)
+            .query("v", VERSION)
+            .query("c", CLIENT)
+            .query("f", "json")
+            .send_form(params.iter().map(|(k, v)| (*k, v.as_str())))
+            .with_context(|| format!("asking the server ({url})"))?;
+        let v: Value = resp.body_mut().read_json().with_context(|| format!("reading the reply from {url}"))?;
+        parse(v)
+    }
+
+    /// The user's playlists, those shared with them and public ones (no songs).
+    pub fn playlists(&self) -> Result<Vec<Value>> {
+        let v = self.call("getPlaylists", &[])?;
+        Ok(v["playlists"]["playlist"].as_array().cloned().unwrap_or_default())
+    }
+
+    /// One playlist with its songs (`entry`).
+    pub fn playlist(&self, id: &str) -> Result<Value> {
+        Ok(self.call("getPlaylist", &[("id", id)])?["playlist"].clone())
+    }
+
+    /// A new playlist with these songs, in this order. Returns it.
+    pub fn create_playlist(&self, name: &str, song_ids: &[String]) -> Result<Value> {
+        let mut p = vec![("name", name.to_string())];
+        p.extend(song_ids.iter().map(|id| ("songId", id.clone())));
+        Ok(self.post("createPlaylist", &p)?["playlist"].clone())
+    }
+
+    /// Replaces a playlist's songs (how a playlist is reordered). Returns it.
+    pub fn set_playlist_songs(&self, id: &str, song_ids: &[String]) -> Result<Value> {
+        let mut p = vec![("playlistId", id.to_string())];
+        p.extend(song_ids.iter().map(|s| ("songId", s.clone())));
+        Ok(self.post("createPlaylist", &p)?["playlist"].clone())
+    }
+
+    /// Changes a playlist; only what's set in `c` changes.
+    pub fn update_playlist(&self, id: &str, c: &PlaylistChange) -> Result<()> {
+        let mut p = vec![("playlistId", id.to_string())];
+        if let Some(n) = &c.name {
+            p.push(("name", n.clone()));
+        }
+        if let Some(n) = &c.comment {
+            p.push(("comment", n.clone()));
+        }
+        if let Some(b) = c.public {
+            p.push(("public", b.to_string()));
+        }
+        p.extend(c.remove.iter().map(|i| ("songIndexToRemove", i.to_string())));
+        p.extend(c.add.iter().map(|s| ("songIdToAdd", s.clone())));
+        if let Some(users) = &c.shared_with {
+            if users.is_empty() {
+                p.push(("sharedWith", String::new()));
+            }
+            p.extend(users.iter().map(|u| ("sharedWith", u.clone())));
+        }
+        self.post("updatePlaylist", &p).map(|_| ())
+    }
+
+    pub fn delete_playlist(&self, id: &str) -> Result<()> {
+        self.call("deletePlaylist", &[("id", id)]).map(|_| ())
+    }
+
+    /// The server's users (people to share a playlist with).
+    pub fn users(&self) -> Result<Vec<String>> {
+        let v = self.call("getUsers", &[])?;
+        Ok(v["users"]["user"].as_array().into_iter().flatten().filter_map(|u| u["username"].as_str().map(str::to_string)).collect())
+    }
+}
+
+/// What [Subsonic::update_playlist] changes: `remove` holds positions in
+/// the playlist as it is now (counted from 0), done before `add`.
+#[derive(Debug, Default, Clone)]
+pub struct PlaylistChange {
+    pub name: Option<String>,
+    pub comment: Option<String>,
+    pub public: Option<bool>,
+    pub remove: Vec<usize>,
+    pub add: Vec<String>,
+    /// The new list of users it's shared with (empty: nobody).
+    pub shared_with: Option<Vec<String>>,
 }
 
 /// For "is it there": a few seconds at most.

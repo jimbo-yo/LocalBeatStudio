@@ -80,7 +80,8 @@ Cargo workspace at the repo root (edition 2024):
   Symphonia), Opus copies (`phone_copy.rs`), phone sync plan (`phone_sync.rs`),
   library scan (`library.rs`), tag enrichment (`enrich.rs`, `enrich_review.rs`,
   `acoustid.rs`), prefs/offsets/server settings (`config.rs`), server outbox
-  (`outbox.rs`), joining the server (`join.rs`: protocol, WireGuard keys), Subsonic client (`subsonic.rs`), the server's albums in the
+  (`outbox.rs`), joining the server (`join.rs`: protocol, WireGuard keys), Subsonic client (`subsonic.rs`, playlists included),
+  matching "Artist - Title" lists to library songs (`song_match.rs`), the server's albums in the
   library + song cache (`server_library.rs`), naming, locks, HTTP (1
   req/s, 503 retries)
 - `platform/` (`localbeat-platform`): CD drives (`drive.rs`, `linux.rs`,
@@ -94,7 +95,9 @@ Cargo workspace at the repo root (edition 2024):
 - `cli/` (`localbeat`): `rip [--loop]`, `check`, `drives`, `toc`,
   `read-track`, `identify`, `offset`, `sync`, `phone`, `enrich`,
   `fingerprint`, `superseded`, `repair`, `ctdb`, `library`, `play`, `notify`,
-  `eject`, `server [set|off|check|trust]`, `outbox [add]`, `push`, `join`, `pair`
+  `eject`, `server [set|off|check|trust]`, `outbox [add]`, `push`, `join`, `pair`,
+  `playlist [list|show|new|add|remove|move|rename|share|delete|users]`,
+  `match` (`playlist_cmd.rs`; `--json` for scripts and AI)
 - `gui/` (`localbeat-studio`, eframe/egui 0.37): pages Library, Rip, Phone,
   Server (`server_tab.rs`; sender thread `server_push.rs`), Review tags,
   Repairs, Settings (`settings_tab.rs`: joining the server, folders, phone,
@@ -278,12 +281,22 @@ on the music server (LocalBeatServer, standard Subsonic playlist calls),
 owned by a **user**; each phone/Studio login is a **device** of one user
 (the server's `/etc/localbeat/users`), so a user's playlists are the same
 on all their devices; shareable with named users or everyone (view/play
-only). Step 1 (server) built on LocalBeatServer branch `playlists`. Next
-here: core `subsonic.rs` playlist calls, `localbeat playlist …` and
-`localbeat match` (artist – title lines → library song IDs), then
-`localbeat mcp` (stdio MCP server for Claude, Studio's server login), later
-the Library page. Live phone control (adb) comes after the phone shows
-server playlists.
+only). Step 1 (server) on LocalBeatServer branch `playlists`, running on
+the Mac since 2026-11-17. Step 2 done here 2026-11-17: core `subsonic.rs`
+playlist calls (song lists sent as form POSTs), `song_match.rs`, and
+`localbeat playlist …` / `localbeat match FILE|-` (playlists named by ID or
+name; positions counted from 1). Matching: "Artist - Title" (also –, —,
+`"Title" by Artist`, `Artist: Title`, numbering, bullets); case, accents,
+quotes, "&"/"and", a leading "The", "(Remastered 2011)" / "- Live" /
+"feat." ignored; artist may be part of the song's ("Tom Petty" in "Tom
+Petty and the Heartbreakers"). Found = best version first (the same full
+title, FLAC, not a live album/compilation, earliest); Close (near
+spelling, or a title alone by several artists) is only used with
+`--close`. Tried on the Mac: a 30-song road-trip list found 11 (checked by
+hand: the 19 others really aren't there); the playlist "Road trip" was left
+on the server. Next: `localbeat mcp` (stdio MCP server for Claude, same
+calls), later the Library page. Live phone control (adb) comes after the
+phone shows server playlists.
 
 ## Open items
 

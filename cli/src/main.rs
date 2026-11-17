@@ -9,6 +9,7 @@ mod sync_cmd;
 mod superseded_cmd;
 mod server_cmd;
 mod join_cmd;
+mod playlist_cmd;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -163,6 +164,22 @@ enum Command {
         #[arg(long)]
         acoustid_key: Option<String>,
     },
+    /// Your playlists on the music server: list, show, new (from a song
+    /// list with --from), add, remove, move, rename, share, delete
+    Playlist {
+        #[command(subcommand)]
+        action: Option<playlist_cmd::PlaylistAction>,
+        /// JSON out (for scripts and AI tools)
+        #[arg(long, global = true)]
+        json: bool,
+    },
+    /// Which songs of a list ("Artist - Title" per line; a file, or stdin)
+    /// are in the library on the server
+    Match {
+        file: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
     /// The LocalBeat server that rips are sent to: show or set it
     Server {
         #[command(subcommand)]
@@ -314,6 +331,8 @@ fn main() -> ExitCode {
             Ok(true)
         })(),
         Command::Superseded { move_them } => superseded_cmd::run(move_them),
+        Command::Playlist { action, json } => playlist_cmd::playlist(action, json),
+        Command::Match { file, json } => playlist_cmd::match_cmd(file, json),
         Command::Server { action } => server_cmd::server(action),
         Command::Outbox { action } => server_cmd::outbox(action),
         Command::Push => server_cmd::push(),
