@@ -97,7 +97,8 @@ Cargo workspace at the repo root (edition 2024):
   `fingerprint`, `superseded`, `repair`, `ctdb`, `library`, `play`, `notify`,
   `eject`, `server [set|off|check|trust]`, `outbox [add]`, `push`, `join`, `pair`,
   `playlist [list|show|new|add|remove|move|rename|share|delete|users]`,
-  `match` (`playlist_cmd.rs`; `--json` for scripts and AI)
+  `match` (`playlist_cmd.rs`; `--json` for scripts and AI), `mcp` (`mcp_cmd.rs`:
+  MCP server over stdio for AI tools, `claude mcp add localbeat -- localbeat mcp`)
 - `gui/` (`localbeat-studio`, eframe/egui 0.37): pages Library, Rip, Phone,
   Server (`server_tab.rs`; sender thread `server_push.rs`), Review tags,
   Repairs, Settings (`settings_tab.rs`: joining the server, folders, phone,
@@ -294,8 +295,15 @@ title, FLAC, not a live album/compilation, earliest); Close (near
 spelling, or a title alone by several artists) is only used with
 `--close`. Tried on the Mac: a 30-song road-trip list found 11 (checked by
 hand: the 19 others really aren't there); the playlist "Road trip" was left
-on the server. Next: `localbeat mcp` (stdio MCP server for Claude, same
-calls), later the Library page. Live phone control (adb) comes after the
+on the server. Step 3 done 2026-11-17: `localbeat mcp` (`cli/src/mcp_cmd.rs`,
+hand-written JSON-RPC over stdio, 14 tools: library summary, artists,
+search with genre/decade by original year, match, playlist list/get/
+create/add/remove/set/rename/share/delete, users; tool list in LocalBeat
+docs/control.md). Tried by driving it as a client with Time Out's 50 road-trip
+songs (9 found; playlist "Road trip (Time Out 50)" left on the server); not
+yet from Claude Code itself: install the new build, then `claude mcp add
+localbeat -- localbeat mcp`. Next: the phone (LocalBeat step 4), later the
+Library page. Live phone control (adb) comes after the
 phone shows server playlists.
 
 ## Open items

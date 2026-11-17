@@ -153,6 +153,24 @@ impl Subsonic {
         Ok(all)
     }
 
+    /// Every album (getAlbumList2 pages): `year` is the original release
+    /// year on the LocalBeat server, `genres`, `songCount`.
+    pub fn all_albums(&self) -> Result<Vec<Value>> {
+        const PAGE: usize = 500;
+        let mut all = Vec::new();
+        for page in 0.. {
+            let (o, c) = ((page * PAGE).to_string(), PAGE.to_string());
+            let v = self.call("getAlbumList2", &[("type", "alphabeticalByName"), ("size", &c), ("offset", &o)])?;
+            let got = v["albumList2"]["album"].as_array().cloned().unwrap_or_default();
+            let n = got.len();
+            all.extend(got);
+            if n < PAGE {
+                break;
+            }
+        }
+        Ok(all)
+    }
+
     /// Calls `method` with `params` in a form POST body (OpenSubsonic
     /// `formPost`: a long song list doesn't fit a URL). The login stays in
     /// the query string.

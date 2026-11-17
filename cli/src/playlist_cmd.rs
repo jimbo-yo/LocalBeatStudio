@@ -191,7 +191,7 @@ fn songs_from(sub: &Subsonic, from: Option<&Path>, close: bool, ids: &[String], 
 }
 
 /// A playlist by ID, or by name (yours first; case doesn't matter).
-fn find(sub: &Subsonic, wanted: &str) -> Result<Value> {
+pub(crate) fn find(sub: &Subsonic, wanted: &str) -> Result<Value> {
     let all = sub.playlists()?;
     if let Some(p) = all.iter().find(|p| p["id"].as_str() == Some(wanted)) {
         return Ok(p.clone());

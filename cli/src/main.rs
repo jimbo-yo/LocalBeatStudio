@@ -9,6 +9,7 @@ mod sync_cmd;
 mod superseded_cmd;
 mod server_cmd;
 mod join_cmd;
+mod mcp_cmd;
 mod playlist_cmd;
 
 use std::path::{Path, PathBuf};
@@ -180,6 +181,9 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// MCP server over stdio, for AI tools: search the library, match song
+    /// lists, build playlists (claude mcp add localbeat -- localbeat mcp)
+    Mcp,
     /// The LocalBeat server that rips are sent to: show or set it
     Server {
         #[command(subcommand)]
@@ -333,6 +337,7 @@ fn main() -> ExitCode {
         Command::Superseded { move_them } => superseded_cmd::run(move_them),
         Command::Playlist { action, json } => playlist_cmd::playlist(action, json),
         Command::Match { file, json } => playlist_cmd::match_cmd(file, json),
+        Command::Mcp => mcp_cmd::run(),
         Command::Server { action } => server_cmd::server(action),
         Command::Outbox { action } => server_cmd::outbox(action),
         Command::Push => server_cmd::push(),
