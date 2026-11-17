@@ -98,7 +98,9 @@ Cargo workspace at the repo root (edition 2024):
   `eject`, `server [set|off|check|trust]`, `outbox [add]`, `push`, `join`, `pair`,
   `playlist [list|show|new|add|remove|move|rename|share|delete|users]`,
   `match` (`playlist_cmd.rs`; `--json` for scripts and AI), `mcp` (`mcp_cmd.rs`:
-  MCP server over stdio for AI tools, `claude mcp add localbeat -- localbeat mcp`)
+  MCP server over stdio for AI tools, `claude mcp add localbeat -- localbeat mcp`),
+  `player [status|play|pause|toggle|next|prev|seek|shuffle|repeat|queue|playlists|version]`
+  (`player_cmd.rs`: the LocalBeat app on the phone, live over adb; `phone::control_call`)
 - `gui/` (`localbeat-studio`, eframe/egui 0.37): pages Library, Rip, Phone,
   Server (`server_tab.rs`; sender thread `server_push.rs`), Review tags,
   Repairs, Playlists (`playlists_ui.rs`, server playlists), Settings (`settings_tab.rs`: joining the server, folders, phone,

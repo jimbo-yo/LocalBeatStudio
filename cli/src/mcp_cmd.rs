@@ -252,6 +252,28 @@ impl Server {
                 Ok(json!({ "deleted": id }))
             }
             "list_users" => Ok(json!(self.sub()?.users()?)),
+            // The phone, live over adb (USB or wireless debugging).
+            "phone_now_playing" => crate::player_cmd::call("status", None),
+            "phone_play" => {
+                let what = a["what"].as_str().unwrap_or("").trim();
+                let target = if what.is_empty() { None } else { Some(crate::player_cmd::play_target(what)?) };
+                crate::player_cmd::call("play", target.as_deref())
+            }
+            "phone_control" => {
+                let action = text(a, "action")?;
+                let (method, arg) = match action.as_str() {
+                    "pause" => ("pause", None),
+                    "resume" | "play" => ("play", None),
+                    "toggle" => ("toggle", None),
+                    "next" | "skip" => ("next", None),
+                    "previous" | "prev" => ("prev", None),
+                    "seek" => ("seek", Some(text(a, "to")?)),
+                    "shuffle_on" => ("shuffle", Some("on".to_string())),
+                    "shuffle_off" => ("shuffle", Some("off".to_string())),
+                    other => bail!("action: pause, resume, next, previous, seek, shuffle_on or shuffle_off, not {other}"),
+                };
+                crate::player_cmd::call(method, arg.as_deref())
+            }
             other => bail!("no tool called {other}"),
         }
     }
@@ -522,6 +544,18 @@ pub fn tools() -> Vec<Value> {
             false, true, json!({ "playlist": playlist }), &["playlist"]),
         tool("list_users", "List users", "The users of the music server (to share a playlist with).",
             true, false, json!({}), &[]),
+        tool("phone_now_playing", "Phone: now playing",
+            "What the LocalBeat app on the user's phone is playing now (needs the phone on USB or wireless debugging).",
+            true, false, json!({}), &[]),
+        tool("phone_play", "Phone: play",
+            "Plays on the user's phone: a playlist (its name or ID), or words to search for (a song, album or artist); nothing = carry on. Replaces what's queued there.",
+            false, false, json!({ "what": { "type": "string", "description": "A playlist name or ID, or words like 'Thunder Road' or 'Springsteen'" } }), &[]),
+        tool("phone_control", "Phone: control playback",
+            "Pause, resume, skip, go back, seek or switch shuffle on the user's phone.",
+            false, false, json!({
+                "action": { "type": "string", "enum": ["pause", "resume", "next", "previous", "seek", "shuffle_on", "shuffle_off"] },
+                "to": { "type": "string", "description": "For seek: a time like 1:30" },
+            }), &["action"]),
     ]
 }
 
@@ -544,7 +578,7 @@ mod tests {
         assert!(s.handle_line(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
         let r = reply(&mut s, json!({"jsonrpc": "2.0", "id": "x", "method": "tools/list"}));
         let tools = r["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 14);
+        assert_eq!(tools.len(), 17);
         for t in tools {
             assert_eq!(t["inputSchema"]["type"], "object", "{}", t["name"]);
             for req in t["inputSchema"]["required"].as_array().unwrap() {

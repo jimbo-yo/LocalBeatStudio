@@ -122,6 +122,67 @@ pub fn adb_connect(address: &str) -> Result<()> {
     Ok(())
 }
 
+/// The LocalBeat app's control channel on the phone (LocalBeat docs/control.md
+/// step 7): `adb shell content call` on its provider, which only adb may
+/// use. Returns the app's JSON reply (with an "error" field when it refused).
+pub fn control_call(method: &str, arg: Option<&str>) -> Result<String> {
+    let serial = pick_serial()?;
+    // Android won't let an app in the background start its music service
+    // ("startForegroundService() not allowed"), so starting playback this way
+    // failed. adb may put the app on the temporary power allow-list, which
+    // lets it start the service for a while: do that before anything that
+    // can start playback.
+    if matches!(method, "play" | "toggle") {
+        let _ = run(crate::command(adb_exe()).args(["-s", &serial, "shell", "cmd deviceidle tempwhitelist -d 60000 com.jimboyo.localbeat"]));
+    }
+    let mut cmd = format!("content call --uri content://com.jimboyo.localbeat.control --method {}", sh(method));
+    if let Some(a) = arg {
+        cmd.push_str(&format!(" --arg {}", sh(a)));
+    }
+    let out = run(crate::command(adb_exe()).args(["-s", &serial, "shell", &cmd]))?;
+    let text = String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    control_reply(&text)
+}
+
+/// The JSON in `content call`'s "Result: Bundle[{json=…}]".
+fn control_reply(text: &str) -> Result<String> {
+    if let Some(i) = text.find("json=") {
+        let rest = text[i + 5..].trim_end();
+        return Ok(rest.strip_suffix("}]").unwrap_or(rest).to_string());
+    }
+    if text.contains("Could not find provider") || text.contains("Unknown authority") {
+        bail!("LocalBeat on the phone has no control channel: install LocalBeat 0.9.11 or later");
+    }
+    let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("no answer").trim();
+    bail!("the phone said: {first}")
+}
+
+/// The phone to talk to: over USB if plugged in, else on wireless debugging.
+fn pick_serial() -> Result<String> {
+    let out = run(crate::command(adb_exe()).arg("devices"))?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let devices: Vec<(&str, &str)> = text
+        .lines()
+        .skip(1)
+        .filter_map(|l| {
+            let mut it = l.split_whitespace();
+            Some((it.next()?, it.next()?))
+        })
+        .collect();
+    let wireless = |serial: &str| serial.contains("tls-connect") || serial.contains(':');
+    let ready = |(s, state): &&(&str, &str)| *state == "device" && !s.is_empty();
+    match devices.iter().filter(ready).find(|(s, _)| !wireless(s)).or_else(|| devices.iter().find(ready)) {
+        Some((serial, _)) => Ok(serial.to_string()),
+        None if devices.iter().any(|(_, s)| *s == "unauthorized") => {
+            bail!("unlock the phone and tap Allow on the \"Allow USB debugging?\" prompt")
+        }
+        None => bail!(
+            "no phone found: plug it in with USB debugging on, or turn on Wireless debugging \
+             (both in Settings > System > Developer options; pair once for Wi-Fi)"
+        ),
+    }
+}
+
 impl AdbPhone {
     /// The first phone connected over USB with debugging allowed, else one on
     /// wireless debugging.
@@ -385,4 +446,19 @@ pub fn preferred_kdeconnect_device(config_dir: &Path) -> Option<String> {
     let text = std::fs::read_to_string(config_dir.join("phone-sync.json")).ok()?;
     let v: serde_json::Value = serde_json::from_str(&text).ok()?;
     v.get("kdeconnect_device")?.as_str().filter(|s| !s.is_empty()).map(str::to_string)
+}
+
+#[cfg(test)]
+mod control_tests {
+    use super::control_reply;
+
+    #[test]
+    fn replies() {
+        let ok = "Result: Bundle[{json={\"state\":\"playing\",\"song\":{\"title\":\"Thunder Road\"}}}]\n";
+        assert_eq!(control_reply(ok).unwrap(), "{\"state\":\"playing\",\"song\":{\"title\":\"Thunder Road\"}}");
+        let old = "Error while accessing provider:com.jimboyo.localbeat.control\njava.lang.IllegalArgumentException: Unknown authority com.jimboyo.localbeat.control";
+        assert!(control_reply(old).unwrap_err().to_string().contains("0.9.11"));
+        let refused = "Exception occurred while executing 'call':\njava.lang.SecurityException: LocalBeat control: adb only";
+        assert!(control_reply(refused).unwrap_err().to_string().contains("the phone said"));
+    }
 }

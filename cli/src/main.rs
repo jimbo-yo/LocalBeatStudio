@@ -10,6 +10,7 @@ mod superseded_cmd;
 mod server_cmd;
 mod join_cmd;
 mod mcp_cmd;
+mod player_cmd;
 mod playlist_cmd;
 
 use std::path::{Path, PathBuf};
@@ -184,6 +185,15 @@ enum Command {
     /// MCP server over stdio, for AI tools: search the library, match song
     /// lists, build playlists (claude mcp add localbeat -- localbeat mcp)
     Mcp,
+    /// The LocalBeat app on the phone, live over adb: status, play [playlist or
+    /// words], pause, toggle, next, prev, seek, shuffle, repeat, queue, playlists
+    Player {
+        #[command(subcommand)]
+        action: Option<player_cmd::PlayerAction>,
+        /// JSON out (for scripts and AI tools)
+        #[arg(long, global = true)]
+        json: bool,
+    },
     /// The LocalBeat server that rips are sent to: show or set it
     Server {
         #[command(subcommand)]
@@ -342,6 +352,7 @@ fn main() -> ExitCode {
         Command::Playlist { action, json } => playlist_cmd::playlist(action, json),
         Command::Match { file, json } => playlist_cmd::match_cmd(file, json),
         Command::Mcp => mcp_cmd::run(),
+        Command::Player { action, json } => player_cmd::run(action, json),
         Command::Server { action } => server_cmd::server(action),
         Command::Outbox { action } => server_cmd::outbox(action),
         Command::Push => server_cmd::push(),
