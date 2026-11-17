@@ -1109,6 +1109,10 @@ impl App {
             .resizable(false)
             .frame(egui::Frame::new().fill(p.base))
             .show(ui, |ui| self.library.now_playing(ui));
+        // The cover was clicked on another tab: show Now Playing there.
+        if std::mem::take(&mut self.library.show_library) {
+            self.tab = Tab::Library;
+        }
         // egui reserves a little less than a bottom panel draws (the panels
         // drawn next overlap its top); the bar lays itself out below the
         // point where they really end.

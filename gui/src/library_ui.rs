@@ -162,6 +162,8 @@ pub struct LibraryUi {
     confirm_delete: Option<String>,
     /// For starting background work from actions.
     ctx: Option<egui::Context>,
+    /// The bottom bar asked for Now Playing: main.rs switches to the Library tab.
+    pub show_library: bool,
 }
 
 impl LibraryUi {
@@ -223,6 +225,7 @@ impl LibraryUi {
             name_dialog: None,
             confirm_delete: None,
             ctx: None,
+            show_library: false,
         };
         me.rescan(ctx);
         me
@@ -1331,7 +1334,10 @@ impl LibraryUi {
                 }
             }
             if resp.on_hover_text("Now Playing").clicked() && song.is_some() {
+                // As the sidebar's Now Playing: from any tab, and over a search.
+                self.search.clear();
                 self.open_now();
+                self.show_library = true;
             }
             ui.add_space(4.0);
             ui.vertical(|ui| {
