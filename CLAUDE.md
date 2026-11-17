@@ -300,9 +300,11 @@ hand-written JSON-RPC over stdio, 14 tools: library summary, artists,
 search with genre/decade by original year, match, playlist list/get/
 create/add/remove/set/rename/share/delete, users; tool list in LocalBeat
 docs/control.md). Tried by driving it as a client with Time Out's 50 road-trip
-songs (9 found; playlist "Road trip (Time Out 50)" left on the server); not
-yet from Claude Code itself: install the new build, then `claude mcp add
-localbeat -- localbeat mcp`. Next: the phone (LocalBeat step 4), later the
+songs (9 found; playlist "Road trip (Time Out 50)" left on the server).
+Installed on the Surface's Windows side and registered with Claude Code at
+user scope (2026-11-17; no `claude` on PATH there: the desktop app bundles
+one under `%LOCALAPPDATA%\Claude-Data\…\claude-code\<version>\…\claude.exe`);
+checked with a `claude -p` question. Next: the phone (LocalBeat step 4), later the
 Library page. Live phone control (adb) comes after the
 phone shows server playlists.
 
