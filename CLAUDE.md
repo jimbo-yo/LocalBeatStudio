@@ -122,6 +122,12 @@ Cargo workspace at the repo root (edition 2024):
   Kitware.CMake` (a new shell may need `C:\Program Files\CMake\bin` on PATH)
 - `cargo test --workspace`; online tests: `cargo test -p localbeat-core --
   --ignored`
+- Fedora RPM (2026-11-17): `tools/build-rpm.sh` (in WSL Fedora 45 or on
+  Fedora; needs rpm-build rpmdevtools desktop-file-utils) builds
+  `packaging/localbeat-studio.spec` from HEAD -> ~/rpmbuild/RPMS/x86_64/
+  (16 MB; /usr/bin/localbeat{,-studio}, menu entry, icons; Recommends rsync,
+  openssh-clients, android-tools, NetworkManager, wireguard-tools). Install:
+  `sudo dnf install ./localbeat-studio-*.rpm`. No Windows installer yet
 - Install on Linux: `tools/install-linux.sh` (release build, ~10-13 min the
   first time) → `~/.local/bin/localbeat{,-studio}`, menu entry, icons. It uses
   `install` (new inode), so a running copy is undisturbed
@@ -329,6 +335,9 @@ phone shows server playlists.
   my-laptop`. The Mac now hands out `vpn.example.com:51820` as the
   endpoint (seen in the 2026-11-16 join); tunnels made earlier may still
   have the bare IP. Laptop copies are kept until the Mac's library has a backup
+- Studio has no control channel: nothing can tell the running window to
+  play a playlist (`localbeat studio play NAME`, like the phone's
+  `localbeat player`; for AI too). Wanted later (user, 2026-11-17)
 - Replugging a USB drive while Studio runs adds a second drive card (watcher
   keys drives by /dev path). Fix: key by udev ID_SERIAL, drop vanished paths
 - Not yet seen on a real disc: OtherPressing acceptance, per-drive Stop / Stop

@@ -10,3 +10,6 @@
 .vscode/
 *.swp
 /target/
+
+# Built packages (tools/build-rpm.sh copies here by hand)
+/dist/
