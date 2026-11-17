@@ -278,6 +278,19 @@ pub fn lookup_offset(file: &Path, key: &str, serial: &str) -> Option<i32> {
         .next_back()
 }
 
+/// Read offsets known for drive models (the table in CLAUDE.md, checked at
+/// accuraterip.com/driveoffsets.htm). Used when none is saved for a drive.
+pub fn known_offset(model: &str) -> Option<i32> {
+    let m = model.to_uppercase();
+    if m.contains("GTA0N") {
+        Some(102)
+    } else if m.contains("SUPERDRIVE") || m.contains("GX50N") {
+        Some(6)
+    } else {
+        None
+    }
+}
+
 pub fn save_offset(file: &Path, key: &str, offset: i32) -> Result<()> {
     if let Some(dir) = file.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;

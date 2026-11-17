@@ -235,6 +235,11 @@ ID_SERIAL_SHORT as fallback.
 - SuperDrive needs a wake-up command (`sg3_utils`), udev rule
   `/etc/udev/rules.d/91-superdrive.rules`:
   `ACTION=="add", SUBSYSTEM=="block", KERNEL=="sr[0-9]*", ATTRS{idVendor}=="05ac", ATTRS{idProduct}=="1500", RUN+="/usr/bin/sg_raw /dev/%k EA 00 00 00 00 00 01"`.
+  On Windows there's no udev: the rip loop sends the same command itself
+  (`drive::wake`, SCSI pass-through) when a drive appears, and `localbeat
+  drives` sends it too (2026-11-17; before that the SuperDrive spat discs
+  out on Windows). A drive with no saved offset gets its model's known one
+  (`config::known_offset`), saved on first rip.
   Use a USB 3 port on the laptop (it failed to eject on weaker ports).
   Slot-loading: don't push discs in while it's busy; thick printed discs can
   stall on eject

@@ -131,9 +131,16 @@ impl std::fmt::Display for Cancelled {
 }
 impl std::error::Error for Cancelled {}
 
+/// The drive's saved offset, else the one known for its model (then saved,
+/// so Settings shows it as the drive's own).
 fn saved_offset(s: &Settings, id: Option<&DriveIdentity>) -> Option<i32> {
     let id = id?;
-    config::lookup_offset(&s.offsets_file(), &id.key(), &id.serial)
+    let file = s.offsets_file();
+    config::lookup_offset(&file, &id.key(), &id.serial).or_else(|| {
+        let known = config::known_offset(&id.model())?;
+        let _ = config::save_offset(&file, &id.key(), known);
+        Some(known)
+    })
 }
 
 /// The first drive with an audio CD that no other localbeat is using.
@@ -228,6 +235,7 @@ pub fn rip_loop(s: &Settings, opts: &Options, fe: &dyn Frontend) -> Result<()> {
     }
     let watch: Vec<String> = opts.drive.iter().map(|d| drive::normalize_path(d)).collect();
     let mut finished: HashMap<String, String> = HashMap::new();
+    let mut woken: std::collections::HashSet<String> = Default::default();
     let mut announce = true;
     let mut done = 0;
     while !fe.cancelled() {
@@ -235,12 +243,22 @@ pub fn rip_loop(s: &Settings, opts: &Options, fe: &dyn Frontend) -> Result<()> {
             fe.event(Event::Waiting { done });
             announce = false;
         }
-        let paths = if watch.is_empty() { drive::drive_paths() } else { watch.clone() };
+        let present = drive::drive_paths();
+        // A drive that went away (unplugged) needs waking again when back.
+        woken.retain(|p| present.contains(p));
+        let paths = if watch.is_empty() { present.clone() } else { watch.clone() };
         for path in paths {
             if fe.cancelled() {
                 break;
             }
             let Some(lock) = lock::try_lock(&s.cache_dir, &lock::drive_lock_name(&path))? else { continue };
+            if present.contains(&path) && !woken.contains(&path) {
+                // Tried once per appearance, so a failure is said only once.
+                woken.insert(path.clone());
+                if let Err(e) = drive::wake(&path) {
+                    fe.event(Event::Note(format!("{e:#}")));
+                }
+            }
             match disc_in(&path) {
                 None => {
                     finished.remove(&path);

@@ -38,6 +38,11 @@ pub fn drives() -> Result<bool> {
             }
             None => println!("  (couldn't read drive identity)"),
         }
+        match drive::wake(&d.path) {
+            Ok(true) => println!("  woken:    yes (SuperDrive: it now takes discs)"),
+            Ok(false) => {}
+            Err(e) => println!("  woken:    FAILED: {e:#}"),
+        }
         println!("  audio CD: {}", if d.has_audio_cd { "yes" } else { "no" });
     }
     Ok(true)

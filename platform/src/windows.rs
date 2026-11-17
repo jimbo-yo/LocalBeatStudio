@@ -128,6 +128,52 @@ pub fn eject(path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Sends Apple's SuperDrive the vendor command that lets it take discs on a
+/// computer that isn't a Mac (Linux: sg_raw EA 00 00 00 00 00 01 from a
+/// udev rule). Without it the drive spits every disc straight back out.
+/// Needed again after each replug.
+pub fn wake_superdrive(path: &str) -> Result<()> {
+    use windows_sys::Win32::Foundation::GENERIC_WRITE;
+    use windows_sys::Win32::Storage::IscsiDisc::{
+        IOCTL_SCSI_PASS_THROUGH_DIRECT, SCSI_IOCTL_DATA_UNSPECIFIED, SCSI_PASS_THROUGH_DIRECT,
+    };
+    #[repr(C)]
+    struct WithSense {
+        sptd: SCSI_PASS_THROUGH_DIRECT,
+        sense: [u8; 32],
+    }
+    const CDB: [u8; 7] = [0xEA, 0, 0, 0, 0, 0, 0x01];
+    let h = open(path, GENERIC_READ | GENERIC_WRITE)?;
+    let mut w: WithSense = unsafe { std::mem::zeroed() };
+    w.sptd.Length = size_of::<SCSI_PASS_THROUGH_DIRECT>() as u16;
+    w.sptd.CdbLength = CDB.len() as u8;
+    w.sptd.DataIn = SCSI_IOCTL_DATA_UNSPECIFIED as u8;
+    w.sptd.TimeOutValue = 10;
+    w.sptd.SenseInfoLength = w.sense.len() as u8;
+    w.sptd.SenseInfoOffset = std::mem::offset_of!(WithSense, sense) as u32;
+    w.sptd.Cdb[..CDB.len()].copy_from_slice(&CDB);
+    let mut returned = 0u32;
+    let ok = unsafe {
+        DeviceIoControl(
+            h.as_raw_handle(),
+            IOCTL_SCSI_PASS_THROUGH_DIRECT,
+            &mut w as *mut _ as *mut _,
+            size_of::<WithSense>() as u32,
+            &mut w as *mut _ as *mut _,
+            size_of::<WithSense>() as u32,
+            &mut returned,
+            ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    if w.sptd.ScsiStatus != 0 {
+        bail!("the drive refused the wake-up command (SCSI status {})", w.sptd.ScsiStatus);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::normalize_path;

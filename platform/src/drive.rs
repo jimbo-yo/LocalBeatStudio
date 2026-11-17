@@ -65,6 +65,24 @@ pub fn drive_paths() -> Vec<String> {
     sys::drive_paths()
 }
 
+/// Readies a drive that needs it before it takes discs: Apple's SuperDrive
+/// ejects every disc on a non-Mac until it gets a wake-up command. Ok(true)
+/// if one was sent. On Linux the udev rule in CLAUDE.md does it.
+pub fn wake(path: &str) -> Result<bool> {
+    let path = normalize_path(path);
+    let id = sys::identity(&path)?;
+    if !(id.vendor.eq_ignore_ascii_case("Apple") && id.product.to_uppercase().contains("SUPERDRIVE")) {
+        return Ok(false);
+    }
+    #[cfg(windows)]
+    {
+        sys::wake_superdrive(&path).with_context(|| format!("waking the SuperDrive at {path}"))?;
+        Ok(true)
+    }
+    #[cfg(not(windows))]
+    Ok(false)
+}
+
 /// Whether the drive has a disc with audio tracks in it.
 pub fn has_audio_cd(path: &str) -> bool {
     Drive::open(path).and_then(|d| d.read_toc()).is_ok()

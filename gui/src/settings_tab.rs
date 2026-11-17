@@ -79,18 +79,6 @@ pub struct SettingsTab {
     pub restart_wanted: bool,
 }
 
-/// Read offsets known for drive models (the table in CLAUDE.md).
-fn known_offset(model: &str) -> Option<i32> {
-    let m = model.to_uppercase();
-    if m.contains("GTA0N") {
-        Some(102)
-    } else if m.contains("SUPERDRIVE") || m.contains("GX50N") {
-        Some(6)
-    } else {
-        None
-    }
-}
-
 fn run_checks() -> Checks {
     let rsync = match localbeat_engine::push::Rsync::find() {
         Ok(r) if cfg!(windows) => Ok(r.exe.display().to_string()),
@@ -174,7 +162,7 @@ fn find_drives(s: &Settings) -> Answer<Vec<DriveRow>> {
             let key = id.key();
             let saved = config::lookup_offset(&file, &key, &id.serial);
             let model = id.model();
-            let known = known_offset(&model);
+            let known = config::known_offset(&model);
             Some(DriveRow { path: d.path, offset: saved.or(known).unwrap_or(0), model, key, saved, known })
         })
         .collect())
