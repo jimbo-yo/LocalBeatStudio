@@ -30,5 +30,7 @@ else
         su builder -c "cd /build && makepkg -f --noconfirm"
     '
 fi
-cp "$work"/localbeat-studio-*.pkg.tar.zst dist/
+# From the container, the package belongs to its user: copy it out through podman unshare.
+cp "$work"/localbeat-studio-*.pkg.tar.zst dist/ 2>/dev/null \
+    || podman unshare sh -c "cp \"$work\"/localbeat-studio-*.pkg.tar.zst dist/"
 ls -1 dist/localbeat-studio-*.pkg.tar.zst
