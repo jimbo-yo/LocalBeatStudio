@@ -10,7 +10,8 @@ set -e
 cd "$(dirname "$0")/.."
 ver=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+# Files the container made belong to its user: podman unshare can remove them.
+trap 'rm -rf "$work" 2>/dev/null || podman unshare rm -rf "$work"' EXIT
 cp packaging/arch/PKGBUILD "$work/"
 sed -i "s/^pkgver=.*/pkgver=$ver/" "$work/PKGBUILD"
 git archive --format=tar.gz --prefix="localbeat-studio-$ver/" -o "$work/localbeat-studio-$ver.tar.gz" HEAD
@@ -24,7 +25,7 @@ else
     command -v podman >/dev/null || { echo "not Arch, and no podman to run an archlinux container (sudo dnf install podman)" >&2; exit 1; }
     # makepkg won't run as root: build as a throwaway user inside the container.
     podman run --rm -v "$work:/build:Z" docker.io/library/archlinux:latest bash -euc '
-        pacman -Syu --noconfirm --needed base-devel rust cmake >/dev/null
+        pacman -Syu --noconfirm --needed base-devel rust cmake alsa-lib hicolor-icon-theme >/dev/null
         useradd -m builder && chown -R builder /build
         su builder -c "cd /build && makepkg -f --noconfirm"
     '
