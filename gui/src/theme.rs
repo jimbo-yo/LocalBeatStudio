@@ -696,9 +696,13 @@ pub fn progress(ui: &mut Ui, fraction: f32, width: f32, text: Option<&str>) {
 
 /// One row of the sidebar: icon, label and an optional status on the right.
 /// The selected row gets a card background and a prism marker.
+/// A sidebar item's height (the sidebar reserves room for the ones pinned
+/// at its bottom from this).
+pub const NAV_ITEM_HEIGHT: f32 = 34.0;
+
 pub fn nav_item(ui: &mut Ui, icon: Icon, label: &str, selected: bool, status: Option<(&str, Color32)>) -> Response {
     let width = ui.available_width();
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, 34.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, NAV_ITEM_HEIGHT), Sense::click());
     let p = pal(ui);
     let painter = ui.painter();
     if selected {

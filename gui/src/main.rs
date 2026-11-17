@@ -550,10 +550,12 @@ impl App {
             }
             ui.add_space(16.0);
             // The pages scroll when the window is too short for them all;
-            // the activity log stays at the bottom.
+            // Settings and the activity log stay at the bottom (room kept
+            // for both, so they never cover Review tags / Repairs).
+            let pinned = 2.0 * (theme::NAV_ITEM_HEIGHT + ui.spacing().item_spacing.y) + 10.0;
             egui::ScrollArea::vertical()
                 .id_salt("nav-scroll")
-                .max_height((ui.available_height() - 52.0).max(80.0))
+                .max_height((ui.available_height() - pinned).max(80.0))
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                 ui.horizontal(|ui| {
