@@ -38,10 +38,10 @@ pub fn writer_key() -> Result<(PathBuf, String)> {
 }
 
 /// Sends the request and keeps it in `<config>/join.json` while it waits.
-pub fn ask(s: &Settings, server: &str, name: &str, role: Role) -> Result<Pending> {
+pub fn ask(s: &Settings, server: &str, name: &str, user: &str, role: Role) -> Result<Pending> {
     let keys = WgKeys::generate()?;
     let ssh = if role == Role::Admin { Some(writer_key()?) } else { None };
-    let p = join::request(&join::admin_url(server), name, role, keys, ssh.as_ref().map(|(p, k)| (p.as_path(), k.as_str())))?;
+    let p = join::request(&join::admin_url(server), name, user, role, keys, ssh.as_ref().map(|(p, k)| (p.as_path(), k.as_str())))?;
     p.save(&s.config_dir)?;
     Ok(p)
 }

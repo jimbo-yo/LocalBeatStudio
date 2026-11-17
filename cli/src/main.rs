@@ -255,6 +255,10 @@ enum Command {
         /// Withdraw a waiting request
         #[arg(long)]
         cancel: bool,
+        /// Whose computer this is (a user on the server, e.g. jim): all of a
+        /// user's devices share their playlists. A suggestion the admin may change
+        #[arg(long)]
+        user: Option<String>,
     },
     /// Pair with the phone for adb over Wi-Fi (once per computer): on the
     /// phone, Developer options > Wireless debugging > Pair device with pairing
@@ -345,7 +349,7 @@ fn main() -> ExitCode {
         Command::Library { covers, list } => library_cmd::run(covers, list),
         Command::Ctdb { dirs } => ctdb_cmd::run(dirs),
         Command::Repair { album, reads, write } => repair_cmd::run(album, reads, write),
-        Command::Join { name, admin, server, cancel } => join_cmd::run(join_cmd::JoinArgs { name, admin, server, cancel }),
+        Command::Join { name, admin, server, cancel, user } => join_cmd::run(join_cmd::JoinArgs { name, admin, server, cancel, user }),
         Command::Pair { address, code } => match code {
             Some(code) => localbeat_platform::phone::adb_pair(&address, &code).map(|msg| {
                 println!("{msg}\nlocalbeat sync --wifi now finds the phone whenever Wireless debugging is on.");

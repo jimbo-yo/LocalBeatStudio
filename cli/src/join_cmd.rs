@@ -12,6 +12,7 @@ pub struct JoinArgs {
     pub admin: bool,
     pub server: String,
     pub cancel: bool,
+    pub user: Option<String>,
 }
 
 pub fn run(a: JoinArgs) -> Result<bool> {
@@ -33,7 +34,7 @@ pub fn run(a: JoinArgs) -> Result<bool> {
         None => {
             let name = a.name.unwrap_or_else(join::suggested_name);
             let role = if a.admin { Role::Admin } else { Role::Listener };
-            engine_join::ask(&s, &a.server, &name, role)?
+            engine_join::ask(&s, &a.server, &name, a.user.as_deref().unwrap_or(""), role)?
         }
     };
     println!();

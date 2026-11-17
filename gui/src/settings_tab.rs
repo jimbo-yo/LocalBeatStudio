@@ -59,6 +59,8 @@ pub struct SettingsTab {
     rx: Receiver<Msg>,
     name: String,
     server: String,
+    /// Whose computer this is (a user on the server; empty: the admin decides).
+    user: String,
     as_admin: bool,
     pending: Option<Pending>,
     busy: Option<&'static str>,
@@ -183,6 +185,7 @@ impl SettingsTab {
             rx,
             name: if prefs.server.login.is_empty() { join::suggested_name() } else { prefs.server.login.clone() },
             server: if prefs.server.host.is_empty() { join::DEFAULT_SERVER.into() } else { prefs.server.host.clone() },
+            user: String::new(),
             as_admin: pending.as_ref().is_some_and(|p| p.role == Role::Admin),
             next_check: pending.as_ref().map(|_| Instant::now()),
             pending,
@@ -449,19 +452,29 @@ impl SettingsTab {
                     ui.label(RichText::new("Server").color(p.dim));
                     ui.add(egui::TextEdit::singleline(&mut self.server).desired_width(260.0));
                     ui.end_row();
+                    ui.label(RichText::new("Whose computer").color(p.dim));
+                    ui.add(egui::TextEdit::singleline(&mut self.user).hint_text("your user, e.g. jim (optional)").desired_width(260.0));
+                    ui.end_row();
                 });
                 if !join::valid_name(&self.name) {
                     ui.small("Name: lowercase letters, digits and -, e.g. sam-laptop.");
                 }
+                let user = self.user.trim().to_string();
+                let user_ok = user.is_empty() || join::valid_name(&user);
+                if !user_ok {
+                    ui.small("Whose computer: a user name, lowercase letters, digits and -, e.g. jim.");
+                } else {
+                    ui.small("All of a user's devices share their playlists. The admin can change it when approving.");
+                }
                 ui.add_space(6.0);
                 let label = if self.as_admin { "Ask to join as an admin" } else { "Ask to join" };
-                let can = join::valid_name(&self.name) && !self.server.trim().is_empty();
+                let can = join::valid_name(&self.name) && user_ok && !self.server.trim().is_empty();
                 if ui.add_enabled_ui(can, |ui| theme::button(ui, Some(theme::Icon::Server), label, theme::Kind::Primary)).inner.clicked() {
                     self.join_error = None;
                     self.busy = Some("Asking the server…");
                     let (s, server, name) = (s.clone(), self.server.trim().to_string(), self.name.clone());
                     let role = if self.as_admin { Role::Admin } else { Role::Listener };
-                    self.spawn(&ctx, move || Msg::Asked(joining::ask(&s, &server, &name, role).map_err(|e| format!("{e:#}"))));
+                    self.spawn(&ctx, move || Msg::Asked(joining::ask(&s, &server, &name, &user, role).map_err(|e| format!("{e:#}"))));
                 }
                 if self.as_admin {
                     ui.small("An admin rips CDs on this computer and sends them to the server: the admin page shows that it asks for this.");

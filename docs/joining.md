@@ -37,12 +37,13 @@ No admin password for these; the page is firewalled to the home network.
 ```
 POST /join   Content-Type: application/json
      {"name", "role": "listener"|"admin", "computer",
-      "wireguard_key": <public>, "ssh_key": <public, admins only>}
+      "wireguard_key": <public>, "ssh_key": <public, admins only>,
+      "user": <optional: whose device, a suggestion>}
   -> 201 {"id", "token", "code"}       400 bad field, 409 name taken or
                                        already waiting, 429 five waiting
 GET /join/ID     Authorization: Bearer TOKEN
   -> {"state": "waiting"} | {"state": "denied"}
-   | {"state": "approved", "name", "role",
+   | {"state": "approved", "name", "role", "user",
       "tunnel": {"address", "server_key", "preshared_key", "endpoint", "allowed_ips"},
       "music": {"server", "login", "secret"},
       "writer": {"host", "user", "known_hosts"}}      (writer: admins only)
@@ -108,3 +109,14 @@ DELETE /join/ID  (same token): saved here, forget it   -> 204
   music login works. Not yet: a real album pushed with that key, the join
   from Studio's Settings page against the Mac (the CLI and the page share
   `engine/join.rs`), Linux (NetworkManager import), away from home.
+
+## Whose device (added 2026-11-17)
+
+Each joined computer or phone is a *device* that belongs to a *user*; all of
+a user's devices share their playlists (LocalBeat `docs/control.md`). Studio's
+join form has an optional "Whose computer" box (`localbeat join --user jim`),
+sent as `user`; the admin page's Approve has a "whose device?" box filled
+with it, which the admin may change (empty: the device is a user of its
+own). Approve runs `localbeat-people add NAME --user USER`; the people table
+can change it later (`localbeat-people user NAME USER`). The users file is
+`/etc/localbeat/users`, read by the music server with the logins.

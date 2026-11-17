@@ -242,9 +242,14 @@ pub fn valid_name(name: &str) -> bool {
 }
 
 /// Sends the request: the admin page shows it with the returned code.
-pub fn request(admin_url: &str, name: &str, role: Role, keys: WgKeys, ssh_key: Option<(&Path, &str)>) -> Result<Pending> {
+/// `user`: whose computer this is (their playlists are shared by all their
+/// devices), as a suggestion the admin may change; empty for none.
+pub fn request(admin_url: &str, name: &str, user: &str, role: Role, keys: WgKeys, ssh_key: Option<(&Path, &str)>) -> Result<Pending> {
     if !valid_name(name) {
         bail!("name: lowercase letters, digits and -, e.g. my-laptop");
+    }
+    if !user.is_empty() && !valid_name(user) {
+        bail!("user: lowercase letters, digits and -, e.g. jim");
     }
     let mut body = serde_json::json!({
         "name": name,
@@ -252,6 +257,9 @@ pub fn request(admin_url: &str, name: &str, role: Role, keys: WgKeys, ssh_key: O
         "computer": computer_label(),
         "wireguard_key": keys.public,
     });
+    if !user.is_empty() {
+        body["user"] = user.into();
+    }
     if let Some((_, public)) = ssh_key {
         body["ssh_key"] = public.trim().into();
     }
