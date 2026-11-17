@@ -335,6 +335,11 @@ phone shows server playlists.
   my-laptop`. The Mac now hands out `vpn.example.com:51820` as the
   endpoint (seen in the 2026-11-16 join); tunnels made earlier may still
   have the bare IP. Laptop copies are kept until the Mac's library has a backup
+- Keep playlist songs locally (user, 2026-11-17; after 7 PM): a setting
+  (default on) on the phone and in Studio: every song in the user's
+  playlists (and shared ones) is kept on the device (phone: auto "Keep on
+  phone", Wi-Fi only; Studio: downloaded in the background, outside the 4 GB
+  song cache limit); unpinned again when in no playlist. Not built
 - Studio has no control channel: nothing can tell the running window to
   play a playlist (`localbeat studio play NAME`, like the phone's
   `localbeat player`; for AI too). Wanted later (user, 2026-11-17)

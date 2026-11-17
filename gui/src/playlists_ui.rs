@@ -26,6 +26,9 @@ pub struct Playlist {
     pub comment: String,
     /// The server's song IDs, in order.
     pub songs: Vec<String>,
+    /// Each song's (artist, title, album), as the server lists it: to find
+    /// it when the library shows a local copy instead of the server's.
+    pub info: Vec<(String, String, String)>,
     /// Songs the server no longer finds.
     pub missing: u64,
 }
@@ -41,6 +44,16 @@ impl Playlist {
             readonly: v["readonly"].as_bool().unwrap_or(false),
             comment: st("comment"),
             songs: v["entry"].as_array().into_iter().flatten().filter_map(|e| e["id"].as_str().map(str::to_string)).collect(),
+            info: v["entry"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|e| e["id"].is_string())
+                .map(|e| {
+                    let s = |k: &str| e[k].as_str().unwrap_or("").to_string();
+                    (s("artist"), s("title"), s("album"))
+                })
+                .collect(),
             missing: v["missing"].as_u64().unwrap_or(0),
         })
     }
@@ -72,6 +85,8 @@ pub struct Playlists {
     login: bool,
     /// Song ID → library index, for the library it was built from.
     index: Option<(usize, HashMap<String, usize>)>,
+    /// Album + title (folded) → library indices, for the same library.
+    by_name: HashMap<String, Vec<usize>>,
 }
 
 /// All playlists with their songs.
@@ -89,7 +104,7 @@ impl Playlists {
     pub fn new(settings: &Settings) -> Self {
         let (tx, rx) = channel();
         let login = server_library::client(settings).is_some();
-        Playlists { settings: settings.clone(), lists: Vec::new(), loaded: false, busy: false, error: None, notice: None, tx, rx, login, index: None }
+        Playlists { settings: settings.clone(), lists: Vec::new(), loaded: false, busy: false, error: None, notice: None, tx, rx, login, index: None, by_name: HashMap::new() }
     }
 
     fn client(&self) -> Option<Subsonic> {
@@ -172,14 +187,39 @@ impl Playlists {
     }
 
     /// Library indices of a playlist's songs (those in the library now), with
-    /// their positions in the playlist.
+    /// their positions in the playlist. A server song the library hides
+    /// because this computer has the album too (the local copy wins) is
+    /// found by album + title, preferring the same artist: else it would be
+    /// left out (2 of 25 in "Electronic", from a local Trance Nation: America).
     pub fn songs_in(&mut self, p: &Playlist, songs: &[localbeat_core::library::Song]) -> Vec<(usize, usize)> {
+        use localbeat_core::library::norm;
         let key = songs.as_ptr() as usize ^ songs.len();
         if self.index.as_ref().is_none_or(|(k, _)| *k != key) {
-            let map = songs.iter().enumerate().filter_map(|(i, s)| self.song_id(&s.path).map(|id| (id, i))).collect();
+            let mut map = HashMap::new();
+            let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
+            for (i, s) in songs.iter().enumerate() {
+                if let Some(id) = self.song_id(&s.path) {
+                    map.insert(id, i);
+                }
+                by_name.entry(format!("{}\u{1}{}", norm(&s.album), norm(&s.title))).or_default().push(i);
+            }
             self.index = Some((key, map));
+            self.by_name = by_name;
         }
         let map = &self.index.as_ref().unwrap().1;
-        p.songs.iter().enumerate().filter_map(|(pos, id)| map.get(id).map(|&i| (pos, i))).collect()
+        p.songs
+            .iter()
+            .enumerate()
+            .filter_map(|(pos, id)| {
+                if let Some(&i) = map.get(id) {
+                    return Some((pos, i));
+                }
+                let (artist, title, album) = p.info.get(pos)?;
+                let found = self.by_name.get(&format!("{}\u{1}{}", norm(album), norm(title)))?;
+                let a = norm(artist);
+                let i = found.iter().copied().find(|&i| norm(&songs[i].artist) == a).or_else(|| found.first().copied())?;
+                Some((pos, i))
+            })
+            .collect()
     }
 }
