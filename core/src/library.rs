@@ -319,7 +319,14 @@ impl Library {
                 });
                 let first = &songs[idx[0]];
                 let title = if key.starts_with("dir:") {
-                    first.path.parent().and_then(|d| d.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+                    // No album tag: named after its folder ("Unknown Album"
+                    // in old iTunes folders). A server song's folder is the
+                    // song cache's, named by the server's album id: no name.
+                    if first.origin == Origin::Server {
+                        "Unknown Album".to_string()
+                    } else {
+                        first.path.parent().and_then(|d| d.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+                    }
                 } else {
                     first.album.clone()
                 };
@@ -483,6 +490,17 @@ mod tests {
         let mix = lib.albums.iter().find(|a| a.dirs[0].ends_with("Mix")).unwrap();
         assert_eq!(mix.artist, "Various Artists");
         assert_eq!(mix.songs.len(), 2);
+    }
+
+    #[test]
+    fn no_album_tag_on_the_server_is_unknown_album_not_the_cache_folder() {
+        let songs = vec![
+            song("/cache/server-songs/af649ae1cc705dc61/s1.mp3", "", "AC/DC", "AC/DC", 0, Origin::Server),
+            song("/m/Coolio/Unknown Album/Gangsters Paradise.mp3", "", "Coolio", "Coolio", 0, Origin::Misc),
+        ];
+        let lib = Library::build(songs, &mut ScanStats::default());
+        let titles: Vec<&str> = lib.albums.iter().map(|a| a.title.as_str()).collect();
+        assert_eq!(titles, ["Unknown Album", "Unknown Album"]);
     }
 
     #[test]
