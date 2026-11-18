@@ -1,6 +1,7 @@
 //! OS-specific parts: CD drives now; disc-inserted detection and phone
 //! connections later (see docs/rust-app-design.md).
 
+pub mod disk;
 pub mod drive;
 pub mod phone;
 pub mod phone_notify;

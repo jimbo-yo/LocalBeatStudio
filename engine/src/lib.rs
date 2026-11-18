@@ -421,6 +421,9 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
         fe.event(Event::Note(format!("All {} tracks are already in the library", plan.tracks.len())));
         fe.event(Event::RipDone { accepted: 0, rejected: vec![], skipped: plan.tracks.len(), elapsed: started.elapsed() });
     } else {
+        // A full disk failed each disc after a track or two (the encode
+        // couldn't be written) and ejected it: wait for room instead.
+        wait_for_space(&plan, fe)?;
         let cover: Option<Picture> = match release.as_ref() {
             Some(r) => {
                 fe.event(Event::Stage("Fetching the cover".into()));
@@ -566,4 +569,44 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
     // mechanism that wasn't ready).
     fe.event(Event::DiscDone { ok });
     Ok(ok)
+}
+
+/// Room the missing tracks need: FLAC of CD audio is usually 50-70% of the
+/// raw size; 80% plus a margin (cover, log, the `.part` being written).
+fn space_needed(plan: &rip::DiscPlan) -> u64 {
+    let sectors: u64 = plan.missing().map(|t| u64::from(t.sectors.end - t.sectors.start)).sum();
+    sectors * 2352 * 4 / 5 + 64 * 1024 * 1024
+}
+
+/// Waits, disc still in, until the library's disk has room for this disc
+/// (or the rip is stopped). Doesn't wait if the free space can't be found out.
+fn wait_for_space(plan: &rip::DiscPlan, fe: &dyn Frontend) -> Result<()> {
+    let need = space_needed(plan);
+    let mb = |b: u64| b / (1024 * 1024);
+    let mut said = false;
+    loop {
+        let Some(free) = localbeat_platform::disk::free_space(&plan.album_dir) else { return Ok(()) };
+        if free >= need {
+            if said {
+                fe.event(Event::Note(format!("Enough disk space now ({} MB free); ripping", mb(free))));
+            }
+            return Ok(());
+        }
+        if !said {
+            fe.event(Event::Note(format!(
+                "Not enough disk space for this disc: {} MB free where the library is, it needs about {} MB. \
+                 Free some space and the rip starts by itself.",
+                mb(free),
+                mb(need)
+            )));
+            said = true;
+        }
+        fe.event(Event::Stage(format!("Waiting for disk space: {} MB free, about {} MB needed", mb(free), mb(need))));
+        for _ in 0..25 {
+            if stopping(fe) {
+                return Err(Cancelled.into());
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
 }
