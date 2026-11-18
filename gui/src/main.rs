@@ -918,6 +918,9 @@ impl App {
                 self.session.push((ok, format!("{label}: {result}")));
             }
             Event::DiscFailed(e) => {
+                // Tracks saved before the failure are queued for the server.
+                self.library.rescan(&self.ctx.clone());
+                self.pusher.kick();
                 let label = self.disc_label();
                 self.log(format!("Disc failed: {e}"));
                 self.session.push((false, format!("{label}: {e}")));
@@ -952,6 +955,8 @@ impl App {
                 }
             }
             Event::DiscStopped => {
+                self.library.rescan(&self.ctx.clone());
+                self.pusher.kick();
                 let label = self.disc_label();
                 let keep = self.disc.as_ref().is_some_and(|d| d.keep_in);
                 self.log(format!("Stopped {label}{}", if keep { ": the disc stays in the drive" } else { ": ejecting it" }));

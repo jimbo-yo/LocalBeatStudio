@@ -475,9 +475,15 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
         fe.event(Event::Stage("Ripping".into()));
         let mut src = Cancellable { drive: &mut drive, fe };
         let mut cancelled = false;
+        // Tracks already in the library if the rip ends early (Stop, or an
+        // error such as a full disk): they still go to the server.
+        let mut accepted_any = false;
         let sum = rip::rip(&mut src, &plan, &ctx, &mut |e| {
             if stopping(fe) {
                 cancelled = true;
+            }
+            if matches!(e, rip::Event::Accepted { .. }) {
+                accepted_any = true;
             }
             let ev = match e {
                 rip::Event::Skipped { position, .. } => Event::Skipped { position },
@@ -498,9 +504,20 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
             }
         });
         if cancelled || stopping(fe) {
+            if accepted_any {
+                queue_for_server(s, album_name.as_deref(), fe);
+            }
             return Err(Cancelled.into());
         }
-        let sum = sum?;
+        let sum = match sum {
+            Ok(sum) => sum,
+            Err(e) => {
+                if accepted_any {
+                    queue_for_server(s, album_name.as_deref(), fe);
+                }
+                return Err(e);
+            }
+        };
         ok = sum.rejected.is_empty();
         rejected_now = sum.rejected.clone();
         wrote |= !sum.accepted.is_empty();
@@ -556,11 +573,8 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
 
     // Off to the server (docs/server-library.md): queued here, sent by the
     // pusher (the window's, or `localbeat push`) when on the home network.
-    if wrote && let Some(a) = &album_name && config::Prefs::load(s).server.enabled() {
-        match localbeat_core::outbox::Outbox::update(s, |o| o.add(a)) {
-            Ok(()) => fe.event(Event::Note(format!("Queued for the server: {a}"))),
-            Err(e) => fe.event(Event::Note(format!("couldn't queue {a} for the server: {e:#}"))),
-        }
+    if wrote {
+        queue_for_server(s, album_name.as_deref(), fe);
     }
 
     // No phone copies here any more (2026-11-12): phone sync converts from
@@ -569,6 +583,19 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
     // mechanism that wasn't ready).
     fe.event(Event::DiscDone { ok });
     Ok(ok)
+}
+
+/// Puts the album in the outbox for the server (when a server is set up).
+/// The pusher sends it once the `_ripping` lock is released.
+fn queue_for_server(s: &Settings, album: Option<&str>, fe: &dyn Frontend) {
+    let Some(a) = album else { return };
+    if !config::Prefs::load(s).server.enabled() {
+        return;
+    }
+    match localbeat_core::outbox::Outbox::update(s, |o| o.add(a)) {
+        Ok(()) => fe.event(Event::Note(format!("Queued for the server: {a}"))),
+        Err(e) => fe.event(Event::Note(format!("couldn't queue {a} for the server: {e:#}"))),
+    }
 }
 
 /// Room the missing tracks need: FLAC of CD audio is usually 50-70% of the
