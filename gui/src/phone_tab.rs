@@ -160,6 +160,10 @@ impl PhoneTab {
                 let lib = phone_sync::scan_library(&s.flac_dir, &s.misc_dir);
                 let mut phone = phone_sync::read_phone(&*conn)?;
                 phone_sync::alias_phone(&mut phone, &lib, &phone_sync::load_superseded(&s.config_dir));
+                // The phone app's CD rip / old copy labels (also after each sync).
+                if let Err(e) = phone_sync::hand_to_app(&*conn, &phone.manifest, &lib) {
+                    eprintln!("{e:#}");
+                }
                 Ok(Loaded { conn, desc, lib, phone })
             })();
             let _ = tx.send(Msg::Loaded(r.map_err(|e| format!("{e:#}"))));
@@ -223,7 +227,7 @@ impl PhoneTab {
         self.waiting = None;
         self.result = None;
         self.cancel = Arc::new(AtomicBool::new(false));
-        let (conn, phone, plan) = (l.conn.clone(), l.phone.clone(), self.plan.clone());
+        let (conn, phone, plan, lib) = (l.conn.clone(), l.phone.clone(), self.plan.clone(), l.lib.clone());
         let (work, kbps, cancel, ctx) = (s.cache_dir.join("sync-work"), s.opus_kbps, self.cancel.clone(), ctx.clone());
         std::thread::spawn(move || {
             let send = |m: Msg| {
@@ -238,6 +242,11 @@ impl PhoneTab {
                 cancelled: &cancelled,
             };
             let r = phone_sync::execute(&fs, &phone, &plan, &work, kbps, &|e| send(Msg::Event(e)), &cancelled);
+            if let Ok(sum) = &r
+                && let Err(e) = phone_sync::hand_to_app(&fs, &sum.manifest, &lib)
+            {
+                eprintln!("{e:#}");
+            }
             send(Msg::Done(r.map_err(|e| format!("{e:#}"))));
         });
     }

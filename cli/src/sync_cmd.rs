@@ -60,6 +60,10 @@ fn run<P: PhoneFs + Reconnect + Sync>(raw: &P, desc: &str, s: &Settings, a: &Syn
     }
     let mut phone = phone_sync::read_phone(&fs)?;
     phone_sync::alias_phone(&mut phone, &lib, &phone_sync::load_superseded(&s.config_dir));
+    // The phone app's CD rip / old copy labels (again after the sync).
+    if !a.dry_run && let Err(e) = phone_sync::hand_to_app(&fs, &phone.manifest, &lib) {
+        println!("  {e:#}");
+    }
     let flac = lib.iter().filter(|x| x.origin == phone_sync::Origin::Flac).count();
     let drm: usize = lib.iter().map(|x| x.protected.len()).sum();
     println!(
@@ -141,6 +145,9 @@ fn run<P: PhoneFs + Reconnect + Sync>(raw: &P, desc: &str, s: &Settings, a: &Syn
         },
         &|| false,
     )?;
+    if let Err(e) = phone_sync::hand_to_app(&fs, &sum.manifest, &lib) {
+        println!("  {e:#}");
+    }
     println!(
         "Done: {} files sent, {} albums removed, {} files removed, {} albums adopted, {} failed",
         sum.sent,
