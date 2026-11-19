@@ -107,7 +107,9 @@ Cargo workspace at the repo root (edition 2024):
 - `gui/` (`localbeat-studio`, eframe/egui 0.37): pages Library, Rip, Phone,
   Server (`server_tab.rs`; sender thread `server_push.rs`), Review tags,
   Repairs, Playlists (`playlists_ui.rs`, server playlists), Settings (`settings_tab.rs`: joining the server, folders, phone,
-  prerequisites, drives; opens on a new install). Rip/Server/Review/Repairs
+  prerequisites, drives; opens on a new install; "Server status" window
+  `server_status.rs`: the server's fastfetch, disks, library sizes, via
+  `Subsonic::server_status`, LocalBeatServer's `getServerStatus`). Rip/Server/Review/Repairs
   and the rip watcher only on an admin computer (`Prefs::role`,
   docs/joining.md); MPRIS (`media_keys.rs`); design system "Prism" in
   `theme.rs` (`docs/ui-redesign.md`)

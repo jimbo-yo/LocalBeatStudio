@@ -77,6 +77,7 @@ pub struct SettingsTab {
     drives: Option<Answer<Vec<DriveRow>>>,
     finding_drives: bool,
     connection: Option<Answer<()>>,
+    status: crate::server_status::StatusWindow,
     /// Set by a button: the app starts itself again (new folders, joined).
     pub restart_wanted: bool,
 }
@@ -202,6 +203,7 @@ impl SettingsTab {
             drives: None,
             finding_drives: false,
             connection: None,
+            status: Default::default(),
             restart_wanted: false,
         }
     }
@@ -348,6 +350,7 @@ impl SettingsTab {
                 self.drives_card(ui, s);
             }
         });
+        self.status.show(&ctx, &prefs.server);
     }
 
     fn server_card(&mut self, ui: &mut egui::Ui, s: &Settings, prefs: &mut Prefs) {
@@ -411,6 +414,12 @@ impl SettingsTab {
                                 None => Err("no login set".into()),
                             })
                         });
+                    }
+                    if theme::button(ui, Some(theme::Icon::Server), "Server status", theme::Kind::Secondary)
+                        .on_hover_text("The server computer, its disks and the space the music takes")
+                        .clicked()
+                    {
+                        self.status.open(&ctx, &prefs.server);
                     }
                     match &self.connection {
                         Some(Ok(())) => {

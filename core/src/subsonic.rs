@@ -1,7 +1,8 @@
 //! A small Subsonic API client for the LocalBeat server: the calls Studio
 //! needs after sending an album (scan, and is it in the catalogue yet),
-//! playing from the server (docs/server-library.md), and the user's
-//! playlists on the server (LocalBeat docs/control.md).
+//! playing from the server (docs/server-library.md), the user's
+//! playlists on the server (LocalBeat docs/control.md), and the server's
+//! status (its computer and disks: the Settings page's "Server status").
 //!
 //! Login is the salted token (`t = md5(password + salt)`), so the secret
 //! itself never goes over the wire (the server accepts both).
@@ -11,6 +12,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::config::ServerPrefs;
@@ -243,11 +245,75 @@ impl Subsonic {
         self.call("deletePlaylist", &[("id", id)]).map(|_| ())
     }
 
+    /// The server computer, its disks and the library's size (LocalBeat
+    /// server's `localbeatServerStatus` extension). fastfetch can take a few
+    /// seconds, and the server adds up the library's folders first.
+    pub fn server_status(&self) -> Result<ServerStatus> {
+        let v = self.call("getServerStatus", &[]).map_err(|e| {
+            if e.to_string().contains("Not implemented") {
+                anyhow!("this server doesn't report its status yet (it needs updating)")
+            } else {
+                e
+            }
+        })?;
+        serde_json::from_value(v["serverStatus"].clone()).context("reading the server's status")
+    }
+
     /// The server's users (people to share a playlist with).
     pub fn users(&self) -> Result<Vec<String>> {
         let v = self.call("getUsers", &[])?;
         Ok(v["users"]["user"].as_array().into_iter().flatten().filter_map(|u| u["username"].as_str().map(str::to_string)).collect())
     }
+}
+
+/// [Subsonic::server_status]: the `serverStatus` object.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ServerStatus {
+    pub version: String,
+    pub uptime_secs: u64,
+    pub songs: u64,
+    pub albums: u64,
+    pub scanning: bool,
+    /// ISO 8601, UTC.
+    pub last_scan: Option<String>,
+    /// fastfetch's report, plain text (or why there's none: `fastfetch_error`).
+    pub fastfetch: Option<String>,
+    pub fastfetch_error: Option<String>,
+    pub folders: Vec<ServerFolder>,
+    pub disks: Vec<ServerDisk>,
+    pub opus: OpusProgress,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ServerFolder {
+    /// "FLAC", "Miscellaneous", "Removed", "Opus copies".
+    pub name: String,
+    /// "library", "removed" (songs taken out, kept for undo) or "cache".
+    pub kind: String,
+    pub path: String,
+    pub files: u64,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ServerDisk {
+    pub mount: String,
+    pub total: u64,
+    pub used: u64,
+    pub available: u64,
+    /// The folders on it (as [ServerFolder::name]), and "System" for `/`.
+    pub holds: Vec<String>,
+}
+
+/// FLAC songs with their Opus copy made, of all that need one.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct OpusProgress {
+    pub made: u64,
+    pub needed: u64,
 }
 
 /// What [Subsonic::update_playlist] changes: `remove` holds positions in
@@ -329,6 +395,27 @@ mod tests {
         let bad = json!({"subsonic-response": {"status": "failed", "error": {"code": 40, "message": "Wrong username or password"}}});
         assert!(parse(bad).unwrap_err().to_string().contains("refused the login"));
         assert!(parse(json!({"x": 1})).is_err());
+    }
+
+    #[test]
+    fn server_status_reply() {
+        let v = json!({
+            "version": "0.1.0", "uptimeSecs": 3600, "songs": 9000, "albums": 700, "scanning": false,
+            "lastScan": "2026-11-19T10:00:00Z", "fastfetchError": "fastfetch isn't installed on the server",
+            "folders": [{"name": "FLAC", "kind": "library", "path": "/srv/music/FLAC", "files": 8000, "bytes": 90000000000u64}],
+            "disks": [{"mount": "/srv/music", "total": 800000000000u64, "used": 96000000000u64, "available": 705000000000u64, "holds": ["FLAC"]}],
+            "opus": {"made": 8990, "needed": 9000},
+            "somethingNew": 1
+        });
+        let s: ServerStatus = serde_json::from_value(v).unwrap();
+        assert_eq!(s.uptime_secs, 3600);
+        assert!(s.fastfetch.is_none() && s.fastfetch_error.is_some());
+        assert_eq!(s.folders[0].bytes, 90_000_000_000);
+        assert_eq!(s.disks[0].holds, ["FLAC"]);
+        assert_eq!(s.opus.made, 8990);
+        // An older reply without some fields still reads.
+        let s: ServerStatus = serde_json::from_value(json!({"songs": 3})).unwrap();
+        assert!(s.disks.is_empty() && s.opus.needed == 0);
     }
 
     #[test]

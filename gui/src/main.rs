@@ -29,6 +29,7 @@ mod repairs_tab;
 mod review_tab;
 mod server_tab;
 mod server_push;
+mod server_status;
 mod settings_tab;
 mod theme;
 
