@@ -33,7 +33,7 @@ fn clean(name: &str, trim_dots: bool) -> String {
     // Windows drops trailing dots and spaces; leading spaces are just confusing.
     let trimmed = out.trim_start();
     let trimmed = if trim_dots { trimmed.trim_end_matches(['.', ' ']) } else { trimmed.trim_end() };
-    out = trimmed.to_string();
+    out = shorten(trimmed);
 
     if out.is_empty() {
         return "_".to_string();
@@ -42,6 +42,40 @@ fn clean(name: &str, trim_dots: bool) -> String {
         out.push('_');
     }
     out
+}
+
+/// Longest name kept whole, in characters and in UTF-8 bytes. Every file
+/// system involved allows 255 per name (NTFS counts UTF-16 units, ext4 and
+/// the phone's storage bytes); the margin leaves room for an extension, and
+/// keeps whole paths short. The longest name in the library on 2026-11-18
+/// was 86 characters, so no existing album changes.
+const MAX_CHARS: usize = 120;
+const MAX_BYTES: usize = 200;
+
+/// Cuts a name that's too long (Fiona Apple's "When the Pawn…" is about 440
+/// characters) at a word boundary and ends it with "…". Tags keep the full
+/// title; only the file or folder name is shortened. Same input, same name.
+fn shorten(name: &str) -> String {
+    if name.chars().count() <= MAX_CHARS && name.len() <= MAX_BYTES {
+        return name.to_string();
+    }
+    const ELLIPSIS: char = '…';
+    let (mut cut, mut chars) = (0, 0);
+    for (i, c) in name.char_indices() {
+        if chars + 1 >= MAX_CHARS || i + c.len_utf8() + ELLIPSIS.len_utf8() > MAX_BYTES {
+            break;
+        }
+        cut = i + c.len_utf8();
+        chars += 1;
+    }
+    let head = &name[..cut];
+    // Back up to the last space when it's near the end, so a word isn't cut.
+    let head = match head.rfind(' ') {
+        Some(sp) if head[sp..].chars().count() <= 25 && name[cut..].chars().next() != Some(' ') => &head[..sp],
+        _ => head,
+    };
+    let head = head.trim_end_matches(|c: char| c == ' ' || c == '.' || c == ',' || c == ';' || c == '-' || c == '：');
+    format!("{head}{ELLIPSIS}")
 }
 
 /// Device names Windows won't use as file names, with or without extension.
@@ -100,5 +134,37 @@ mod tests {
         assert_eq!(track_stem(None, 7, "The Kinks", "Days"), "07. The Kinks - Days");
         assert_eq!(track_stem(None, 12, "AC/DC", "T.N.T."), "12. AC／DC - T.N.T.");
         assert_eq!(track_stem(Some(2), 3, "The Kinks", "Lola"), "2.03. The Kinks - Lola");
+    }
+
+    const PAWN: &str = "When the Pawn Hits the Conflicts He Thinks Like a King What He Knows Throws the Blows When He Goes to the Fight and He’ll Win the Whole Thing ’fore He Enters the Ring There’s No Body to Batter When Your Mind Is Your Might So When You Go Solo, You Hold Your Own Hand and Remember That Depth Is the Greatest of Heights and If You Know Where You Stand, Then You Know Where to Land and If You Fall It Won’t Matter, Cuz You’ll Know That You’re Right";
+
+    #[test]
+    fn shortens_very_long_names() {
+        let name = safe_component(PAWN);
+        assert!(name.chars().count() <= MAX_CHARS && name.len() <= MAX_BYTES, "{name}");
+        assert!(name.starts_with("When the Pawn Hits the Conflicts"));
+        assert!(name.ends_with('…') && !name.ends_with(" …"), "{name}");
+        // Cut between words, not inside one.
+        let kept = name.trim_end_matches('…');
+        assert!(PAWN.starts_with(kept) && PAWN[kept.len()..].starts_with(' '), "{name}");
+        assert_eq!(safe_component(PAWN), name, "same input, same name");
+
+        let stem = track_stem(None, 3, "Fiona Apple", PAWN);
+        assert!(stem.starts_with("03. Fiona Apple - When the Pawn") && stem.chars().count() <= MAX_CHARS);
+    }
+
+    #[test]
+    fn shortens_by_bytes_too() {
+        // 3-byte characters: 120 of them would be 360 bytes.
+        let name = safe_component(&"日本語".repeat(60));
+        assert!(name.len() <= MAX_BYTES && name.ends_with('…'), "{} bytes", name.len());
+    }
+
+    #[test]
+    fn leaves_normal_names_alone() {
+        let long = "6.05. Pyotr Tchaikovsky - The Sleeping Beauty Ballet Suite： Pas d’action ‐ Adagio";
+        assert_eq!(track_stem(Some(6), 5, "Pyotr Tchaikovsky", "The Sleeping Beauty Ballet Suite: Pas d’action ‐ Adagio"), long);
+        let exact = "a".repeat(MAX_CHARS);
+        assert_eq!(safe_component(&exact), exact);
     }
 }
