@@ -843,18 +843,20 @@ impl App {
                     r.status = Status::Reading { read, fraction: done as f32 / total.max(1) as f32 };
                 }
             }
-            Event::ReadDone { position, read, crc, verdict, unreadable, repeat } => {
+            Event::ReadDone { position, read, crc, verdict, unreadable, repeat, nothing } => {
                 let ar = match verdict {
                     Verdict::Match { confidence, .. } => format!("AccurateRip ✔ ({confidence})"),
                     Verdict::NoMatch => "no AR match".into(),
                     Verdict::NotInDatabase => "not in AR".into(),
                 };
-                let extra = match (unreadable, repeat) {
-                    (0, true) => ", same as before".to_string(),
-                    (0, false) => String::new(),
-                    (n, _) => format!(", {n} unreadable sectors"),
+                // A read with unreadable sectors never counts, so its CRC
+                // isn't shown as if it could match another read's.
+                let line = match (nothing, unreadable, repeat) {
+                    (true, _, _) => format!("read {read}: nothing readable (the drive returned no audio)"),
+                    (false, 0, true) => format!("read {read}: {crc:08X} {ar}, same as before"),
+                    (false, 0, false) => format!("read {read}: {crc:08X} {ar}"),
+                    (false, n, _) => format!("read {read}: {n} unreadable sectors (doesn't count)"),
                 };
-                let line = format!("read {read}: {crc:08X} {ar}{extra}");
                 self.log(format!("Track {position} {line}"));
                 if let Some(r) = self.row(position) {
                     r.reads.push(line);

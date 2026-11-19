@@ -62,7 +62,8 @@ pub enum Event {
     Skipped { position: usize },
     ReadStart { position: usize, read: u32 },
     Progress { position: usize, read: u32, done: u32, total: u32 },
-    ReadDone { position: usize, read: u32, crc: u32, verdict: Verdict, unreadable: usize, repeat: bool },
+    /// `nothing`: no sector could be read (all silence: the CRC means nothing).
+    ReadDone { position: usize, read: u32, crc: u32, verdict: Verdict, unreadable: usize, repeat: bool, nothing: bool },
     Accepted { position: usize, how: Acceptance },
     Rejected { position: usize, reads: u32, kept: Option<PathBuf> },
     /// The rip part is over (before eject and phone copies).
@@ -490,8 +491,8 @@ pub fn rip_disc(path: &str, s: &Settings, opts: &Options, fe: &dyn Frontend) -> 
                 rip::Event::Skipped { position, .. } => Event::Skipped { position },
                 rip::Event::ReadStart { position, read } => Event::ReadStart { position, read },
                 rip::Event::Progress { position, read, done, total } => Event::Progress { position, read, done, total },
-                rip::Event::ReadDone { position, read, crc, verdict, unreadable, repeat } => {
-                    Event::ReadDone { position, read, crc, verdict, unreadable, repeat }
+                rip::Event::ReadDone { position, read, crc, verdict, unreadable, repeat, nothing } => {
+                    Event::ReadDone { position, read, crc, verdict, unreadable, repeat, nothing }
                 }
                 rip::Event::Accepted { position, how, .. } => Event::Accepted { position, how },
                 rip::Event::Rejected { position, path, reads } => {

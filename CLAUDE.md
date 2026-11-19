@@ -224,6 +224,10 @@ app reads it: rename only together with that repo).
   re-rip" (RepeatDiffers)
 - Damaged spots: a stalled chunk (the 30 s READ CD timeout, then a USB reset)
   is skipped with a growing gap (max 750 sectors), budget 150 s per read.
+  Two reads with nothing readable at all (every sector failed: all silence)
+  give the track up at once, without the extra reads (2026-11-19: Anthology
+  CD1's last tracks took 8 empty reads, 2+ hours); such reads show "nothing
+  readable", and reads with unreadable sectors show no CRC (they never count)
   Rejected tracks keep all clean reads; after the eject the disc is repaired
   with CUETools DB parity (`docs/ctdb-repair.md`) and written if CTDB +
   AccurateRip agree (or CTDB ≥ 3 when AR doesn't know it)

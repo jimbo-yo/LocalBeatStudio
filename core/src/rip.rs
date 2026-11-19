@@ -143,7 +143,9 @@ pub enum Event<'a> {
     Skipped { position: usize, path: &'a Path },
     ReadStart { position: usize, read: u32 },
     Progress { position: usize, read: u32, done: u32, total: u32 },
-    ReadDone { position: usize, read: u32, crc: u32, verdict: Verdict, unreadable: usize, repeat: bool },
+    /// `nothing`: every sector was unreadable (the read is all silence; its
+    /// CRC means nothing).
+    ReadDone { position: usize, read: u32, crc: u32, verdict: Verdict, unreadable: usize, repeat: bool, nothing: bool },
     Accepted { position: usize, path: &'a Path, how: Acceptance },
     Rejected { position: usize, path: Option<&'a Path>, reads: u32 },
     Note(String),
@@ -313,6 +315,8 @@ pub fn rip(
         let mut limit = s.reads.max(1);
         let mut read = 0;
         let mut gave_up = 0;
+        // Reads that got nothing at all (the drive returned no audio).
+        let mut empty = 0;
         while read < limit {
             read += 1;
             if read > 1 && s.flush_sectors > 0 {
@@ -330,26 +334,33 @@ pub fn rip(
             // Only clean reads count: two reads that both failed on the same
             // sectors would agree on the silence.
             let repeat = clean && clean_crcs.contains(&crc);
-            on(Event::ReadDone { position: t.position, read, crc, verdict, unreadable: r.unreadable.len(), repeat });
-            let _ = writeln!(
-                sum.log,
-                "Track {:>2} read {read}: CRC {crc:08X}, AR v1 {:08X} v2 {:08X}, {}{}",
-                t.position,
-                sums.v1,
-                sums.v2,
-                match verdict {
-                    Verdict::Match { version, confidence } => format!("AccurateRip v{version} match (confidence {confidence})"),
-                    Verdict::NoMatch => "no AccurateRip match".into(),
-                    Verdict::NotInDatabase => "not in AccurateRip".into(),
-                },
-                if clean { String::new() } else { format!(", {} unreadable sectors", r.unreadable.len()) }
-            );
+            let gaps = gaps_of(&r, t, ctx.offset);
+            let nothing = !r.frames.is_empty() && gaps == [(0, r.frames.len())];
+            on(Event::ReadDone { position: t.position, read, crc, verdict, unreadable: r.unreadable.len(), repeat, nothing });
+            if nothing {
+                empty += 1;
+                let _ = writeln!(sum.log, "Track {:>2} read {read}: nothing readable ({} unreadable sectors)", t.position, r.unreadable.len());
+            } else {
+                let _ = writeln!(
+                    sum.log,
+                    "Track {:>2} read {read}: CRC {crc:08X}, AR v1 {:08X} v2 {:08X}, {}{}",
+                    t.position,
+                    sums.v1,
+                    sums.v2,
+                    match verdict {
+                        Verdict::Match { version, confidence } => format!("AccurateRip v{version} match (confidence {confidence})"),
+                        Verdict::NoMatch => "no AccurateRip match".into(),
+                        Verdict::NotInDatabase => "not in AccurateRip".into(),
+                    },
+                    if clean { String::new() } else { format!(", {} unreadable sectors (doesn't count)", r.unreadable.len()) }
+                );
+            }
             // Kept for the sector vote (AccurateRip discs) and the CUETools
             // repair (any disc).
             if clean {
                 clean_reads.push(r.frames.clone());
             }
-            all_reads.push((r.frames.clone(), gaps_of(&r, t, ctx.offset)));
+            all_reads.push((r.frames.clone(), gaps));
             if clean {
                 if let Verdict::Match { confidence, .. } = verdict {
                     accepted = Some(Acceptance::AccurateRip { confidence });
@@ -401,6 +412,16 @@ pub fn rip(
                 let _ = writeln!(sum.log, "Track {:>2}: the drive stalled on the same damage twice; giving up on this track", t.position);
                 on(Event::Note(format!(
                     "track {}: the drive keeps stalling on a damaged spot; skipping the track (try another drive later)",
+                    t.position
+                )));
+                break;
+            }
+            // Twice nothing at all: more reads won't help (nor give the
+            // CUETools repair anything); move on to the rest of the disc.
+            if empty >= 2 {
+                let _ = writeln!(sum.log, "Track {:>2}: nothing readable twice; giving up on this track", t.position);
+                on(Event::Note(format!(
+                    "track {}: the drive can't read any of it (twice); skipping the track (clean the disc or try another drive)",
                     t.position
                 )));
                 break;
@@ -734,6 +755,31 @@ mod tests {
             assert_eq!(frames, ours.frames);
             std::fs::remove_dir_all(&root).ok();
         }
+    }
+
+    #[test]
+    fn a_track_with_nothing_readable_is_given_up_after_two_reads() {
+        // Track 3 (sectors 80..120) can't be read at all; the CUETools
+        // repair would otherwise earn it extra reads.
+        let (s, root) = setup("nothing");
+        let p = plan(&toc(), &Metadata::Unknown { album: "Nothing".into() }, &s.flac_dir);
+        let mut disc = FakeDisc { sectors: 120, flaky: vec![], bad: (80..120).collect(), reads: 0 };
+        let ctx = RipContext { settings: &s, offset: 0, accuraterip: None, cover: None, log_header: String::new(), ctdb_parity: true };
+        let mut done = Vec::new();
+        let sum = rip(&mut disc, &p, &ctx, &mut |e| {
+            if let Event::ReadDone { position, nothing, unreadable, .. } = e {
+                done.push((position, nothing, unreadable > 0));
+            }
+        })
+        .unwrap();
+        assert_eq!(sum.accepted, [1, 2]);
+        assert_eq!(sum.rejected, [3]);
+        let of_3: Vec<_> = done.iter().filter(|d| d.0 == 3).copied().collect();
+        assert_eq!(of_3, [(3, true, true), (3, true, true)]);
+        assert!(done.iter().filter(|d| d.0 != 3).all(|d| !d.1));
+        assert!(sum.log.contains("Track  3 read 1: nothing readable"), "{}", sum.log);
+        assert!(sum.log.contains("Track  3: nothing readable twice; giving up"), "{}", sum.log);
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// A disc whose track 2 reads wrong in a different sector on each pass.

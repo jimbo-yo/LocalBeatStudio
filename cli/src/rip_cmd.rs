@@ -126,18 +126,18 @@ impl Frontend for Printer {
                 print!("\r      read {read}: {:>3}%", done * 100 / total.max(1));
                 std::io::stdout().flush().ok();
             }
-            Event::ReadDone { read, crc, verdict, unreadable, repeat, .. } => {
+            Event::ReadDone { read, crc, verdict, unreadable, repeat, nothing, .. } => {
                 let ar = match verdict {
                     Verdict::Match { confidence, .. } => format!("AccurateRip match ({confidence})"),
                     Verdict::NoMatch => "no AccurateRip match".into(),
                     Verdict::NotInDatabase => "not in AccurateRip".into(),
                 };
-                let extra = match (unreadable, repeat) {
-                    (0, true) => ", same as an earlier read".to_string(),
-                    (0, false) => String::new(),
-                    (n, _) => format!(", {n} unreadable sectors"),
-                };
-                println!("\r      read {read}: CRC {crc:08X}, {ar}{extra}");
+                match (nothing, unreadable, repeat) {
+                    (true, _, _) => println!("\r      read {read}: nothing readable (the drive returned no audio)"),
+                    (false, 0, true) => println!("\r      read {read}: CRC {crc:08X}, {ar}, same as an earlier read"),
+                    (false, 0, false) => println!("\r      read {read}: CRC {crc:08X}, {ar}"),
+                    (false, n, _) => println!("\r      read {read}: {n} unreadable sectors (doesn't count)"),
+                }
             }
             Event::Accepted { how, .. } => match how {
                 Acceptance::AccurateRip { .. } => println!("      saved (verified by AccurateRip)"),
