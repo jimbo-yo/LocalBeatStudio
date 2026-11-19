@@ -267,11 +267,6 @@ ID_SERIAL_SHORT as fallback.
   only the wireless (`_adb-tls-connect`) device: `adb kill-server`
 - Sync = make the phone match the ticked albums. Record
   `Music/.ripshelf-sync.json` (album folder → source + file fingerprints).
-  The phone app can't read that (it may only read audio in Music/), so on
-  connecting and after each sync, over adb only, Studio also writes
-  `Android/data/com.jimboyo.localbeat/files/sources.json` (`app_sources`:
-  album folder → `{"from":"cd"}` or `{"from":"old","format":"MP3"}`) for the
-  app's CD RIP / OLD MP3 labels.
   Removals first; every operation is idempotent, so a sleeping phone is
   waited out (reconnect every 5 s, up to 10 min). KDE Connect battery usage
   should be Unrestricted on the phone

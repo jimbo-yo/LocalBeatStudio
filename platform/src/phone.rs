@@ -313,21 +313,6 @@ impl PhoneFs for AdbPhone {
             _ => bail!("couldn't read the phone's free space: {:?}", text.trim()),
         }
     }
-
-    /// Into `<storage>/Android/data/<package>/files`, next to the music
-    /// folder's storage; adb's shell user may write there, other apps can't.
-    fn write_for_app(&self, name: &str, data: &[u8]) -> Result<()> {
-        let storage = self.root.rsplit_once('/').map(|(d, _)| d).unwrap_or("/sdcard");
-        let dir = format!("{storage}/Android/data/{}/files", localbeat_core::phone_sync::APP_PACKAGE);
-        let tmp = std::env::temp_dir().join(format!("localbeat-app-{}.tmp", std::process::id()));
-        std::fs::write(&tmp, data)?;
-        let r = self
-            .shell(&format!("mkdir -p {}", sh(&dir)))
-            .and_then(|_| run(self.adb().arg("push").arg(&tmp).arg(format!("{dir}/{name}"))))
-            .with_context(|| format!("handing {name} to the LocalBeat app"));
-        let _ = std::fs::remove_file(&tmp);
-        r.map(|_| ())
-    }
 }
 
 impl Reconnect for AdbPhone {

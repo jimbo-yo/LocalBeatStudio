@@ -26,12 +26,6 @@ use crate::{audio_source, phone_copy};
 
 /// The sync's record, in the phone's music folder.
 pub const MANIFEST: &str = ".ripshelf-sync.json";
-/// The phone app's package: Studio hands it [`APP_SOURCES`] in its own folder
-/// (`Android/data/<package>/files`), which it reads without storage permissions
-/// (it can only read audio files in Music/, not [`MANIFEST`]).
-pub const APP_PACKAGE: &str = "com.jimboyo.localbeat";
-/// Handed to the phone app: where each album folder came from ([`app_sources`]).
-pub const APP_SOURCES: &str = "sources.json";
 
 const COVER_FILES: [&str; 4] = ["cover.jpg", "cover.png", "folder.jpg", "folder.png"];
 /// FLAC -> Opus 160 kbps is about this much of the FLAC's size (measured:
@@ -55,11 +49,6 @@ pub trait PhoneFs: Sync {
     fn remove_dir(&self, rel: &str) -> Result<()>;
     /// (total, free) bytes, if the connection can tell.
     fn space(&self) -> Result<Option<(u64, u64)>>;
-    /// Writes a file into the phone app's own folder ([`APP_PACKAGE`]); a
-    /// no-op where the connection can't reach it (Wi-Fi, a test folder).
-    fn write_for_app(&self, _name: &str, _data: &[u8]) -> Result<()> {
-        Ok(())
-    }
 }
 
 /// A phone reachable as a normal folder (KDE Connect's mount), or a test
@@ -208,9 +197,6 @@ impl<P: PhoneFs + Reconnect + Sync + ?Sized> PhoneFs for Patient<'_, P> {
     }
     fn space(&self) -> Result<Option<(u64, u64)>> {
         self.phone.space()
-    }
-    fn write_for_app(&self, name: &str, data: &[u8]) -> Result<()> {
-        self.retry(|| self.phone.write_for_app(name, data))
     }
 }
 
@@ -772,8 +758,6 @@ pub struct SyncSummary {
     pub adopted: usize,
     pub failed: Vec<(String, String)>,
     pub stopped: bool,
-    /// The record as it stands after the sync (for [`hand_to_app`]).
-    pub manifest: Manifest,
 }
 
 /// Carries out `plan`. Removals first (to make room), then album by album:
@@ -795,7 +779,6 @@ pub fn execute(
     for (dir, _) in &plan.remove_dirs {
         if cancelled() {
             sum.stopped = true;
-            sum.manifest = manifest;
             return Ok(sum);
         }
         on(SyncEvent::Removing(dir.clone()));
@@ -920,61 +903,7 @@ pub fn execute(
         }
     }
     on(SyncEvent::Sending { file: String::new(), done: total, total });
-    sum.manifest = manifest;
     Ok(sum)
-}
-
-/// What the phone app shows as each album's source, from the record:
-/// `{"albums": {"Artist/Album": {"from": "cd"} | {"from": "old", "format": "MP3"}}}`.
-/// "cd" is the FLAC library (ripped from CD, verified); "old" is a
-/// Miscellaneous copy, with its files' format ("MP3", "AAC", "AAC + MP3").
-pub fn app_sources(manifest: &Manifest, library: &[Album]) -> Vec<u8> {
-    let by_label: BTreeMap<String, &Album> = library.iter().map(|a| (a.source_label(), a)).collect();
-    let mut albums = serde_json::Map::new();
-    for (dir, rec) in &manifest.albums {
-        let v = if rec.source.starts_with("flac:") {
-            json!({ "from": "cd" })
-        } else if rec.source.starts_with("misc:") {
-            let mut formats: Vec<&str> = by_label
-                .get(&rec.source)
-                .map(|a| a.files.iter().filter(|f| f.convert).filter_map(|f| format_name(&f.path)).collect())
-                .unwrap_or_default();
-            formats.sort();
-            formats.dedup();
-            json!({ "from": "old", "format": formats.join(" + ") })
-        } else {
-            continue;
-        };
-        albums.insert(dir.clone(), v);
-    }
-    let v = json!({
-        "about": "Written by LocalBeat Studio's phone sync for the LocalBeat app: where each album folder came from.",
-        "version": 1,
-        "albums": albums,
-    });
-    let mut out = serde_json::to_vec_pretty(&v).unwrap_or_default();
-    out.push(b'\n');
-    out
-}
-
-/// Hands [`app_sources`] to the phone app ([`PhoneFs::write_for_app`]).
-pub fn hand_to_app(fs: &dyn PhoneFs, manifest: &Manifest, library: &[Album]) -> Result<()> {
-    fs.write_for_app(APP_SOURCES, &app_sources(manifest, library))
-}
-
-/// A source file's format, as the phone app shows it.
-fn format_name(path: &Path) -> Option<&'static str> {
-    let ext = path.extension()?.to_string_lossy().to_lowercase();
-    Some(match ext.as_str() {
-        "mp3" => "MP3",
-        "m4a" | "aac" | "mp4" => "AAC",
-        "flac" => "FLAC",
-        "ogg" | "oga" => "Ogg Vorbis",
-        "opus" => "Opus",
-        "wav" => "WAV",
-        "wma" => "WMA",
-        _ => return None,
-    })
 }
 
 /// Converts one file into the work folder (covers are sent as they are).
@@ -1001,34 +930,6 @@ mod tests {
             })
             .collect();
         flac_encode::write_flac(path, &frames, &[("TITLE".into(), title.into())], None, 0).unwrap();
-    }
-
-    #[test]
-    fn app_sources_say_cd_rip_or_old_copy_and_its_format() {
-        let root = std::env::temp_dir().join(format!("localbeat-appsrc-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let (fl, misc) = (root.join("flac"), root.join("misc"));
-        flac(&fl.join("Band/Ripped/01. Band - One.flac"), "One");
-        for f in ["Band/Old/01 One.mp3", "Band/Old/02 Two.m4a", "Band/Older/01 One.mp3"] {
-            std::fs::create_dir_all(misc.join(f).parent().unwrap()).unwrap();
-            std::fs::write(misc.join(f), b"x").unwrap();
-        }
-        let lib = scan_library(&fl, &misc);
-        let rec = |source: &str| ManifestAlbum { source: source.into(), files: BTreeMap::new() };
-        let mut m = Manifest::default();
-        m.albums.insert("Band/Ripped".into(), rec("flac:Band/Ripped"));
-        m.albums.insert("Band/Old".into(), rec("misc:Band/Old"));
-        m.albums.insert("Band - Older".into(), rec("misc:Band/Older"));
-        m.albums.insert("Band/Gone".into(), rec("misc:Band/Gone"));
-        m.albums.insert("Odd".into(), rec(""));
-        let v: Value = serde_json::from_slice(&app_sources(&m, &lib)).unwrap();
-        let a = &v["albums"];
-        assert_eq!(a["Band/Ripped"], json!({ "from": "cd" }));
-        assert_eq!(a["Band/Old"], json!({ "from": "old", "format": "AAC + MP3" }));
-        assert_eq!(a["Band - Older"], json!({ "from": "old", "format": "MP3" }));
-        assert_eq!(a["Band/Gone"], json!({ "from": "old", "format": "" }));
-        assert!(a.get("Odd").is_none());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
