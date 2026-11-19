@@ -127,6 +127,8 @@ pub struct LibraryUi {
     pub page: Page,
     /// Open album page.
     pub album: Option<usize>,
+    /// The search the open album was picked from: its back link returns to it.
+    pub album_from_search: Option<String>,
     artist: Option<usize>,
     pub search: String,
     pub search_id: egui::Id,
@@ -200,6 +202,7 @@ impl LibraryUi {
             shared_lib,
             page: Page::Albums,
             album: None,
+            album_from_search: None,
             artist: None,
             search: String::new(),
             search_id: egui::Id::unique("library-search"),
@@ -548,13 +551,17 @@ impl LibraryUi {
                 Action::OpenAlbum(i) => {
                     self.now_open = false;
                     self.album = Some(i);
-                    self.search.clear();
+                    // Picked from a search: back goes to that search, not
+                    // to an empty one.
+                    let q = std::mem::take(&mut self.search);
+                    self.album_from_search = (!q.trim().is_empty()).then_some(q);
                 }
                 Action::OpenArtist(i) => {
                     self.now_open = false;
                     self.artist = Some(i);
                     self.page = Page::Artists;
                     self.album = None;
+                    self.album_from_search = None;
                     self.search.clear();
                 }
                 Action::OpenFolder(p) => open_folder(&p),
@@ -1085,15 +1092,22 @@ impl LibraryUi {
         mesh.add_triangle(1, 3, 2);
         ui.painter().add(egui::Shape::mesh(mesh));
 
-        let back = match self.page {
-            Page::Recent => "Recently added",
-            Page::Artists => "Artists",
-            Page::Songs => "Songs",
-            Page::Albums => "Albums",
-            Page::Playlists => "Playlists",
+        let back = match (&self.album_from_search, self.page) {
+            (Some(q), _) => format!("Search “{}”", q.trim()),
+            (None, Page::Recent) => "Recently added".into(),
+            (None, Page::Artists) => "Artists".into(),
+            (None, Page::Songs) => "Songs".into(),
+            (None, Page::Albums) => "Albums".into(),
+            (None, Page::Playlists) => "Playlists".into(),
         };
-        if ui.add(egui::Label::new(egui::RichText::new(format!("‹  {back}")).color(p.dim)).sense(Sense::click())).clicked() {
+        let clicked = ui.add(egui::Label::new(egui::RichText::new(format!("‹  {back}")).color(p.dim)).sense(Sense::click())).clicked();
+        // Esc goes back too (as on Now Playing), unless typing somewhere.
+        let esc = ui.ctx().memory(|m| m.focused().is_none()) && ui.input(|i| i.key_pressed(egui::Key::Escape));
+        if clicked || esc {
             self.album = None;
+            if let Some(q) = self.album_from_search.take() {
+                self.search = q;
+            }
         }
         ui.add_space(8.0);
         let songs: Vec<&Song> = album.songs.iter().map(|&i| &lib.songs[i]).collect();

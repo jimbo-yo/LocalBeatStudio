@@ -592,6 +592,7 @@ impl App {
                         self.library.page = page;
                         self.library.now_open = false;
                         self.library.album = None;
+                        self.library.album_from_search = None;
                         self.library.playlist = None;
                         self.library.search.clear();
                     }
