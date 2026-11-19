@@ -20,6 +20,7 @@ use localbeat_platform::drive::{self, Drive, DriveIdentity};
 pub mod join;
 pub mod notify;
 pub mod push;
+pub mod remove;
 
 #[derive(Debug, Clone, Default)]
 pub struct Options {

@@ -103,6 +103,11 @@ impl Outbox {
         Ok(r)
     }
 
+    /// Drops `album` (taken out of the library: nothing left to send).
+    pub fn forget(&mut self, album: &str) {
+        self.albums.retain(|e| e.album != album);
+    }
+
     /// Adds `album` as waiting (again, if it was sent: something changed).
     pub fn add(&mut self, album: &str) {
         self.albums.retain(|e| e.album != album);

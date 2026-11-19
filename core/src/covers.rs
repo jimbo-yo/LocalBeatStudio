@@ -168,6 +168,7 @@ mod tests {
             drm: false,
             origin: Origin::Flac,
             picture: false,
+            server_path: None,
         };
         let lib = crate::library::Library::build(vec![song], &mut ScanStats::default());
         (lib.albums[0].clone(), lib.songs)

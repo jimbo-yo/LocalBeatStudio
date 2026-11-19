@@ -65,6 +65,10 @@ pub struct Song {
     pub origin: Origin,
     /// Has an embedded picture.
     pub picture: bool,
+    /// A server song: where it is on the server, relative to its library
+    /// folder (FLAC or Miscellaneous): "Artist/Album/01. Artist - Title.flac".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_path: Option<String>,
 }
 
 impl Song {
@@ -399,6 +403,7 @@ fn fallback_song(p: &Path, origin: Origin, size: u64, mtime: i64, added: i64) ->
         drm: p.extension().is_some_and(|e| e.eq_ignore_ascii_case("m4p")),
         origin,
         picture: false,
+        server_path: None,
     }
 }
 

@@ -13,3 +13,5 @@ cdtoc.workspace = true
 chrono.workspace = true
 dirs.workspace = true
 serde_json.workspace = true
+# "Remove from library": this computer's files go to the Recycle Bin / trash.
+trash = "5"

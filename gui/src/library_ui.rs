@@ -14,6 +14,7 @@ use eframe::egui::{self, Color32, Rect, Sense, Vec2, pos2, vec2};
 use localbeat_core::config::Settings;
 use localbeat_core::library::{Library, Origin, ScanStats, Song, norm};
 use localbeat_core::server_library::{self, Catalogue, Fetcher};
+use localbeat_engine::remove;
 use localbeat_player::{Player, State, Status};
 
 use crate::cover_cache::CoverCache;
@@ -73,6 +74,26 @@ enum Action {
     /// In the open playlist: take out the song at this position, or move it by this much.
     PlaylistRemove(usize),
     PlaylistMove(usize, isize),
+    /// Ask, then take these songs out of the library (server and here).
+    AskRemove(Vec<usize>),
+}
+
+/// "Remove from library": asked, then done in the background.
+struct RemoveDialog {
+    /// Library indices.
+    songs: Vec<usize>,
+    /// "“Revolver” by The Beatles", "“Taxman”", "3 songs".
+    what: String,
+    plan: remove::Plan,
+    /// This computer has a writer key (an admin computer).
+    server_ok: bool,
+    state: RemoveState,
+}
+
+enum RemoveState {
+    Confirm,
+    Working(Receiver<Result<remove::Report, String>>),
+    Done(Result<remove::Report, String>),
 }
 
 /// What's kept between runs (`<config>/player.json`).
@@ -162,6 +183,7 @@ pub struct LibraryUi {
     name_dialog: Option<NameDialog>,
     /// A playlist waiting for "delete?" to be confirmed.
     confirm_delete: Option<String>,
+    remove_dialog: Option<RemoveDialog>,
     /// For starting background work from actions.
     ctx: Option<egui::Context>,
     /// The bottom bar asked for Now Playing: main.rs switches to the Library tab.
@@ -227,6 +249,7 @@ impl LibraryUi {
             playlist: None,
             name_dialog: None,
             confirm_delete: None,
+            remove_dialog: None,
             ctx: None,
             show_library: false,
         };
@@ -588,6 +611,26 @@ impl LibraryUi {
                         self.playlists.edit(&ctx, crate::playlists_ui::Edit::Remove { id, positions: vec![pos] }, "Removed from the playlist");
                     }
                 }
+                Action::AskRemove(v) if !v.is_empty() && self.remove_dialog.is_none() => {
+                    let songs: Vec<&Song> = v.iter().map(|&i| &lib.songs[i]).collect();
+                    // The whole of one album: say which; else the song or a count.
+                    let album = lib.albums.iter().find(|a| {
+                        let mut x = a.songs.clone();
+                        let mut y = v.clone();
+                        x.sort_unstable();
+                        y.sort_unstable();
+                        x == y
+                    });
+                    let what = match (album, songs.as_slice()) {
+                        (Some(a), _) => format!("“{}” by {}", a.title, a.artist),
+                        (None, [one]) => format!("“{}” by {}", one.title, one.artist),
+                        (None, many) => format!("{} songs", many.len()),
+                    };
+                    let plan = remove::plan(&self.settings, &songs);
+                    let server_ok = remove::can_remove_from_server(&localbeat_core::config::Prefs::load(&self.settings).server);
+                    self.remove_dialog = Some(RemoveDialog { songs: v, what, plan, server_ok, state: RemoveState::Confirm });
+                }
+                Action::AskRemove(_) => {}
                 Action::PlaylistMove(pos, by) => {
                     let (Some(id), Some(ctx)) = (self.playlist.clone(), self.ctx.clone()) else { continue };
                     let Some(p) = self.playlists.get(&id) else { continue };
@@ -619,6 +662,7 @@ impl LibraryUi {
             MenuChoice::NewPlaylist => Action::NewPlaylist(vec![si]),
             MenuChoice::Remove(pos) => Action::PlaylistRemove(pos),
             MenuChoice::Move(pos, by) => Action::PlaylistMove(pos, by),
+            MenuChoice::RemoveFromLibrary => Action::AskRemove(vec![si]),
         });
     }
 
@@ -685,6 +729,7 @@ impl LibraryUi {
             }
         }
         self.playlist_dialogs(ui.ctx());
+        self.remove_dialog(ui.ctx());
         self.run_actions();
     }
 
@@ -855,6 +900,134 @@ impl LibraryUi {
     }
 
     /// The name box (new / rename) and "delete?" for playlists.
+    /// "Remove from library": what goes where, then the removal in the
+    /// background (the server's part waits for its scan), then how it went.
+    fn remove_dialog(&mut self, ctx: &egui::Context) {
+        let Some(d) = &mut self.remove_dialog else { return };
+        // The background job's answer.
+        let answer = match &d.state {
+            RemoveState::Working(rx) => match rx.try_recv() {
+                Ok(r) => Some(r),
+                Err(TryRecvError::Disconnected) => Some(Err("the removal stopped unexpectedly".into())),
+                Err(TryRecvError::Empty) => None,
+            },
+            _ => None,
+        };
+        if let Some(r) = answer {
+            self.log.push(match &r {
+                Ok(rep) => rep.summary(),
+                Err(e) => format!("Remove: {e}"),
+            });
+            let removed = self.remove_dialog.as_ref().map(|d| d.songs.clone()).unwrap_or_default();
+            if let Some(d) = &mut self.remove_dialog {
+                d.state = RemoveState::Done(r);
+            }
+            // An open album that was removed: back to where it was opened from.
+            let gone = |a: usize| self.lib.as_ref().is_some_and(|l| a < l.albums.len() && l.albums[a].songs.iter().all(|s| removed.contains(s)));
+            if self.album.is_some_and(gone) {
+                self.album = None;
+                if let Some(q) = self.album_from_search.take() {
+                    self.search = q;
+                }
+            }
+            // The library (and the server's catalogue) without them.
+            self.rescan(ctx);
+        }
+        let now = self.now();
+        let Some(d) = &mut self.remove_dialog else { return };
+        let (mut go, mut close) = (false, false);
+        let local = d.plan.local.len();
+        let server_only = d.songs.len().saturating_sub(local);
+        egui::Window::new("Remove from library?")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.set_max_width(440.0);
+                match &d.state {
+                    RemoveState::Confirm => {
+                        ui.label(egui::RichText::new(format!("Remove {}?", d.what)).strong());
+                        ui.add_space(4.0);
+                        if d.server_ok && !d.plan.server.is_empty() {
+                            ui.label("• From the music server: gone from every device (phone, every Studio). Kept on the Mac in /srv/music/Removed, so it can be put back.");
+                        }
+                        if local > 0 {
+                            ui.label(format!("• From this computer: {} to the Recycle Bin.", files(local)));
+                        }
+                        if !d.server_ok && server_only > 0 {
+                            ui.label(egui::RichText::new(format!(
+                                "{} only on the server can't be removed from this computer: only an admin computer can.",
+                                files(server_only)
+                            ))
+                            .color(theme::WARN));
+                        } else if !d.server_ok && local > 0 {
+                            ui.label(egui::RichText::new("The server's copy, if it has one, stays (only an admin computer can remove it) and shows here instead.").small());
+                        }
+                        if d.server_ok && !d.plan.server.is_empty() {
+                            ui.label(egui::RichText::new("Works on the home network only (the server's SSH is open there).").small());
+                        }
+                        ui.add_space(8.0);
+                        let possible = local > 0 || (d.server_ok && !d.plan.server.is_empty());
+                        ui.horizontal(|ui| {
+                            if ui.add_enabled_ui(possible, |ui| theme::button(ui, None, "Remove", Kind::Danger)).inner.clicked() {
+                                go = true;
+                            }
+                            if theme::button(ui, None, "Cancel", Kind::Secondary).clicked() {
+                                close = true;
+                            }
+                        });
+                    }
+                    RemoveState::Working(_) => {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(format!("Removing {}…", d.what));
+                        });
+                        ui.label(egui::RichText::new("The server's part waits for its scan, so this can take a minute.").small());
+                    }
+                    RemoveState::Done(r) => {
+                        match r {
+                            Ok(rep) => {
+                                ui.label(rep.summary());
+                                if rep.server_missing > 0 && rep.server_removed == 0 && local > 0 {
+                                    ui.label(egui::RichText::new("The server didn't have it (never sent there).").small());
+                                }
+                                for n in &rep.notes {
+                                    ui.label(egui::RichText::new(n).color(theme::WARN));
+                                }
+                            }
+                            Err(e) => {
+                                ui.label(egui::RichText::new(e).color(theme::WARN));
+                            }
+                        }
+                        ui.add_space(6.0);
+                        if theme::button(ui, None, "OK", Kind::Primary).clicked() {
+                            close = true;
+                        }
+                    }
+                }
+            });
+        if close {
+            self.remove_dialog = None;
+            return;
+        }
+        if go {
+            // A song being removed can't stay open in the player (Windows
+            // won't move an open file).
+            if now.is_some_and(|n| d.songs.contains(&n)) {
+                self.player.stop();
+            }
+            let (tx, rx) = channel();
+            let (settings, plan, ctx2) = (self.settings.clone(), d.plan.clone(), ctx.clone());
+            let server = if d.server_ok { localbeat_core::config::Prefs::load(&settings).server } else { Default::default() };
+            std::thread::spawn(move || {
+                let r = remove::remove(&settings, &server, &plan).map_err(|e| format!("{e:#}"));
+                let _ = tx.send(r);
+                ctx2.request_repaint();
+            });
+            d.state = RemoveState::Working(rx);
+        }
+    }
+
     fn playlist_dialogs(&mut self, ctx: &egui::Context) {
         if let Some(d) = &mut self.name_dialog {
             let (mut ok, mut cancel) = (false, false);
@@ -1066,12 +1239,16 @@ impl LibraryUi {
                 }
             });
         }
-        if let Some(d) = dir {
-            ui.separator();
-            if ui.button("Show in folder").clicked() {
-                self.actions.push(Action::OpenFolder(d));
-                ui.close();
-            }
+        ui.separator();
+        if let Some(d) = dir
+            && ui.button("Show in folder").clicked()
+        {
+            self.actions.push(Action::OpenFolder(d));
+            ui.close();
+        }
+        if ui.button("Remove from library…").clicked() {
+            self.actions.push(Action::AskRemove(songs));
+            ui.close();
         }
     }
 
@@ -1161,6 +1338,12 @@ impl LibraryUi {
                     }
                     if let Some(d) = album.dirs.first() && theme::icon_button(ui, Icon::Folder, 32.0, "Show in folder").clicked() {
                         self.actions.push(Action::OpenFolder(d.clone()));
+                    }
+                    if theme::button(ui, None, "Remove…", Kind::Secondary)
+                        .on_hover_text("Take this album out of the library: off the server and this computer")
+                        .clicked()
+                    {
+                        self.actions.push(Action::AskRemove(album.songs.clone()));
                     }
                 });
             });
@@ -1837,6 +2020,8 @@ enum MenuChoice {
     /// In the open playlist: remove the song at this position, or move it.
     Remove(usize),
     Move(usize, isize),
+    /// Take the song out of the library (asks first).
+    RemoveFromLibrary,
 }
 
 /// What a song row's right-click menu offers besides playing.
@@ -1958,6 +2143,10 @@ fn song_row(ui: &mut egui::Ui, s: &Song, number: usize, show_artist: bool, is_no
             out = Some(RowClick::Menu(MenuChoice::Folder));
             ui.close();
         }
+        if ui.button("Remove from library…").clicked() {
+            out = Some(RowClick::Menu(MenuChoice::RemoveFromLibrary));
+            ui.close();
+        }
     });
     out
 }
@@ -2035,4 +2224,9 @@ fn open_folder(p: &std::path::Path) {
     #[cfg(not(target_os = "windows"))]
     let cmd = "xdg-open";
     let _ = std::process::Command::new(cmd).arg(p).spawn();
+}
+
+/// "1 song", "12 songs".
+fn files(n: usize) -> String {
+    if n == 1 { "1 song".into() } else { format!("{n} songs") }
 }

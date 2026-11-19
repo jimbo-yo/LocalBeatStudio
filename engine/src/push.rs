@@ -155,7 +155,21 @@ impl Rsync {
     /// the `ssh` in [`ssh_command`] is the one beside it, and HOME is the
     /// user's profile (else ssh looks for a home inside MSYS2/Cygwin).
     pub fn command(&self) -> Command {
-        let mut c = localbeat_platform::command(&self.exe);
+        self.in_runtime(&self.exe)
+    }
+
+    /// A command running the ssh beside this rsync (on Windows MSYS2's or
+    /// Cygwin's, with the same PATH and HOME), for what isn't rsync: taking
+    /// songs off the server (`remove`). Linux: the ssh on PATH.
+    pub fn ssh(&self) -> Command {
+        if self.style == PathStyle::Native {
+            return localbeat_platform::command("ssh");
+        }
+        self.in_runtime(&self.exe.with_file_name("ssh.exe"))
+    }
+
+    fn in_runtime(&self, exe: &Path) -> Command {
+        let mut c = localbeat_platform::command(exe);
         if let (true, Some(dir)) = (cfg!(windows), self.exe.parent()) {
             let mut path = std::ffi::OsString::from(dir.as_os_str());
             if let Some(old) = std::env::var_os("PATH") {

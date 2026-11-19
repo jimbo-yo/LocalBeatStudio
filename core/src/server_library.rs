@@ -112,6 +112,7 @@ pub fn song_from(s: &Settings, v: &Value) -> Option<Song> {
         drm: suffix == "m4p",
         origin: Origin::Server,
         picture: false,
+        server_path: v["path"].as_str().filter(|p| !p.is_empty()).map(str::to_string),
     })
 }
 

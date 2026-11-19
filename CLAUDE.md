@@ -89,7 +89,10 @@ Cargo workspace at the repo root (edition 2024):
   KDE Connect mount, folder), phone notifications (`phone_notify.rs`), the WireGuard tunnel (`tunnel.rs`)
 - `engine/` (`localbeat-engine`): the rip session (rip_loop per drive,
   `Event`s, `Frontend` trait), notifications summary, sending the outbox to
-  the server (`push.rs`: rsync over SSH, scan, catalogue check), joining the server (`join.rs`)
+  the server (`push.rs`: rsync over SSH, scan, catalogue check), joining the server (`join.rs`),
+  taking albums/songs out of the library (`remove.rs`: the server's copy over
+  the writer key's `localbeat-remove` into the Mac's `/srv/music/Removed`,
+  then this computer's to the Recycle Bin, `trash` crate)
 - `player/` (`localbeat-player`): playback engine, no UI (Symphonia → cpal,
   gapless, exact seek)
 - `cli/` (`localbeat`): `rip [--loop]`, `check`, `drives`, `toc`,
@@ -340,6 +343,13 @@ phone shows server playlists.
   playlists (and shared ones) is kept on the device (phone: auto "Keep on
   phone", Wi-Fi only; Studio: downloaded in the background, outside the 4 GB
   song cache limit); unpinned again when in no playlist. Not built
+- Remove from library (2026-11-19): album page "Remove…", right-click
+  "Remove from library…" on songs and album cards. Server first (admin
+  computer, home network; LocalBeatServer `host/localbeat-writer-session`,
+  needs its setup.sh run on the Mac), then local files to the Recycle Bin;
+  an album gone here leaves the outbox. Server songs need `Song.server_path`
+  (the Subsonic `path`, kept since 2026-11-19). Other computers' local
+  copies stay (a later push from them would bring an album back)
 - Studio has no control channel: nothing can tell the running window to
   play a playlist (`localbeat studio play NAME`, like the phone's
   `localbeat player`; for AI too). Wanted later (user, 2026-11-17)
