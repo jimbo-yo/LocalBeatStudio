@@ -349,7 +349,11 @@ phone shows server playlists.
   needs its setup.sh run on the Mac), then local files to the Recycle Bin;
   an album gone here leaves the outbox. Server songs need `Song.server_path`
   (the Subsonic `path`, kept since 2026-11-19). Other computers' local
-  copies stay (a later push from them would bring an album back)
+  copies stay (a later push from them would bring an album back).
+  After a re-rip is sent and found in the catalogue, Studio asks "Remove
+  the old copy?" (any page) for other copies with the same album artist +
+  album tags (`remove::old_copies`: an old MP3/AAC rip in Miscellaneous,
+  on the server or here). Not yet tried on a real re-rip
 - Studio has no control channel: nothing can tell the running window to
   play a playlist (`localbeat studio play NAME`, like the phone's
   `localbeat player`; for AI too). Wanted later (user, 2026-11-17)

@@ -101,6 +101,60 @@ pub fn plan(s: &Settings, songs: &[&Song]) -> Plan {
     p
 }
 
+/// "artist|album" for matching copies of one album: album artist (else
+/// artist) and album, case, accents, punctuation, a leading "The" and disc
+/// labels ("CD 2") ignored. None without an album name.
+fn album_key(x: &Song) -> Option<String> {
+    let artist = if x.album_artist.trim().is_empty() { &x.artist } else { &x.album_artist };
+    let artist = localbeat_core::enrich::norm(artist);
+    let artist = artist.strip_prefix("the ").unwrap_or(&artist).to_string();
+    let album = localbeat_core::enrich::norm(&localbeat_core::enrich::clean_album(&x.album));
+    if matches!(album.as_str(), "" | "unknown album" | "untitled") {
+        return None;
+    }
+    Some(format!("{artist}|{album}"))
+}
+
+/// Where a song is inside its library folder ("Artist/Album/01. ….flac"):
+/// the server's path, or a local file's place under FLAC / Miscellaneous.
+fn library_rel(s: &Settings, x: &Song) -> Option<String> {
+    match x.origin {
+        Origin::Server => x.server_path.clone(),
+        Origin::Flac => rel_to(&x.path, &s.flac_dir),
+        Origin::Misc => rel_to(&x.path, &s.misc_dir),
+    }
+}
+
+/// After a FLAC album (`album`, its outbox name "Artist/Album") reached the
+/// server: the library's other copies of the same album (same album artist
+/// and album tags), such as the old MP3/AAC copy in Miscellaneous, as
+/// indices into `songs`. The new rip's own songs (here, or the server's
+/// copy of them at the same place) never count, and nor does anything at a
+/// place the new rip has (the server removes a path from both its library
+/// folders).
+pub fn old_copies(s: &Settings, songs: &[Song], album: &str) -> Vec<usize> {
+    let prefix = format!("{}/", album.trim_end_matches('/'));
+    let new: Vec<usize> = (0..songs.len())
+        .filter(|&i| {
+            let x = &songs[i];
+            matches!(x.origin, Origin::Flac | Origin::Server)
+                && x.codec == "FLAC"
+                && (x.origin == Origin::Flac || x.server_path.is_some())
+                && library_rel(s, x).is_some_and(|r| r.starts_with(&prefix))
+        })
+        .collect();
+    let keys: BTreeSet<String> = new.iter().filter_map(|&i| album_key(&songs[i])).collect();
+    if keys.is_empty() {
+        return Vec::new();
+    }
+    let taken: BTreeSet<String> = new.iter().filter_map(|&i| library_rel(s, &songs[i])).collect();
+    (0..songs.len())
+        .filter(|i| !new.contains(i))
+        .filter(|&i| album_key(&songs[i]).is_some_and(|k| keys.contains(&k)))
+        .filter(|&i| library_rel(s, &songs[i]).is_none_or(|r| !taken.contains(&r)))
+        .collect()
+}
+
 /// Whether this computer can take songs off the server: it has a writer key
 /// (an admin computer, docs/joining.md).
 pub fn can_remove_from_server(sp: &ServerPrefs) -> bool {
@@ -310,6 +364,33 @@ mod tests {
             ]
         );
         assert_eq!(p.unknown, 1);
+    }
+
+    fn tagged(path: &str, origin: Origin, server_path: Option<&str>, artist: &str, album: &str, codec: &str) -> Song {
+        Song { album_artist: artist.into(), album: album.into(), codec: codec.into(), ..song(path, origin, server_path) }
+    }
+
+    #[test]
+    fn old_copies_of_a_new_flac_album() {
+        let mut s = Settings::load();
+        s.flac_dir = PathBuf::from("/m/FLAC");
+        s.misc_dir = PathBuf::from("/m/Misc");
+        let songs = vec![
+            // 0, 1: the new rip, here and its server copy.
+            tagged("/m/FLAC/The Beach Boys/Greatest Hits/01. The Beach Boys - Surfin' U.S.A..flac", Origin::Flac, None, "The Beach Boys", "Greatest Hits", "FLAC"),
+            tagged("/c/s/a9/s1.flac", Origin::Server, Some("The Beach Boys/Greatest Hits/02. The Beach Boys - I Get Around.flac"), "The Beach Boys", "Greatest Hits", "FLAC"),
+            // 2, 3: the old copy on the server (another folder name, no "The").
+            tagged("/c/s/a1/s7.mp3", Origin::Server, Some("Beach Boys/Greatest Hits [Disc 1]/01 Surfin USA.mp3"), "Beach Boys", "Greatest Hits (Disc 1)", "MP3"),
+            tagged("/c/s/a1/s8.m4a", Origin::Server, Some("Beach Boys/Greatest Hits [Disc 1]/02 I Get Around.m4a"), "Beach Boys", "Greatest Hits", "AAC"),
+            // 4: an old copy in this computer's Miscellaneous, in the same folder name.
+            tagged("/m/Misc/The Beach Boys/Greatest Hits/03 Help Me Rhonda.mp3", Origin::Misc, None, "The Beach Boys", "Greatest Hits", "MP3"),
+            // 5: another artist's album of the same name stays.
+            tagged("/c/s/a2/s9.mp3", Origin::Server, Some("Eagles/Greatest Hits/01.mp3"), "Eagles", "Greatest Hits", "MP3"),
+            // 6: a server song where the new rip's file is: removing it would take the new one too.
+            tagged("/c/s/a3/s5.flac", Origin::Server, Some("The Beach Boys/Greatest Hits/01. The Beach Boys - Surfin' U.S.A..flac"), "The Beach Boys", "Greatest Hits", "FLAC"),
+        ];
+        assert_eq!(old_copies(&s, &songs, "The Beach Boys/Greatest Hits"), [2, 3, 4]);
+        assert!(old_copies(&s, &songs, "Nobody/Nothing").is_empty());
     }
 
     #[test]

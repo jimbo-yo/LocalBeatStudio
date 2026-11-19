@@ -88,6 +88,9 @@ struct RemoveDialog {
     /// This computer has a writer key (an admin computer).
     server_ok: bool,
     state: RemoveState,
+    /// Offered after a re-rip reached the server: what the old copy is
+    /// (said above the usual lines, with "Remove old copy" / "Keep it").
+    old_copy: Option<String>,
 }
 
 enum RemoveState {
@@ -184,6 +187,9 @@ pub struct LibraryUi {
     /// A playlist waiting for "delete?" to be confirmed.
     confirm_delete: Option<String>,
     remove_dialog: Option<RemoveDialog>,
+    /// Albums just sent to the server whose old copies are still to be
+    /// looked for (outbox names, "Artist/Album").
+    old_copy_checks: Vec<String>,
     /// For starting background work from actions.
     ctx: Option<egui::Context>,
     /// The bottom bar asked for Now Playing: main.rs switches to the Library tab.
@@ -250,6 +256,7 @@ impl LibraryUi {
             name_dialog: None,
             confirm_delete: None,
             remove_dialog: None,
+            old_copy_checks: Vec::new(),
             ctx: None,
             show_library: false,
         };
@@ -628,7 +635,7 @@ impl LibraryUi {
                     };
                     let plan = remove::plan(&self.settings, &songs);
                     let server_ok = remove::can_remove_from_server(&localbeat_core::config::Prefs::load(&self.settings).server);
-                    self.remove_dialog = Some(RemoveDialog { songs: v, what, plan, server_ok, state: RemoveState::Confirm });
+                    self.remove_dialog = Some(RemoveDialog { songs: v, what, plan, server_ok, state: RemoveState::Confirm, old_copy: None });
                 }
                 Action::AskRemove(_) => {}
                 Action::PlaylistMove(pos, by) => {
@@ -729,7 +736,6 @@ impl LibraryUi {
             }
         }
         self.playlist_dialogs(ui.ctx());
-        self.remove_dialog(ui.ctx());
         self.run_actions();
     }
 
@@ -900,9 +906,74 @@ impl LibraryUi {
     }
 
     /// The name box (new / rename) and "delete?" for playlists.
+    /// An album (outbox name) has reached the server as FLAC: once the
+    /// library is read, ask whether to remove its other copies (an old
+    /// MP3/AAC rip in Miscellaneous, on the server or here).
+    pub fn offer_old_copies(&mut self, album: String) {
+        if !self.old_copy_checks.contains(&album) {
+            self.old_copy_checks.push(album);
+        }
+    }
+
+    /// The next waiting [`offer_old_copies`] check, when nothing else is
+    /// open and the library isn't being read.
+    fn check_old_copies(&mut self) {
+        if self.old_copy_checks.is_empty() || self.remove_dialog.is_some() || self.scan.is_some() {
+            return;
+        }
+        let Some(lib) = self.lib.clone() else { return };
+        while !self.old_copy_checks.is_empty() {
+            let album = self.old_copy_checks.remove(0);
+            let old = remove::old_copies(&self.settings, &lib.songs, &album);
+            if old.is_empty() {
+                continue;
+            }
+            let songs: Vec<&Song> = old.iter().map(|&i| &lib.songs[i]).collect();
+            // Each folder of the old copy with its song count and formats.
+            let mut folders: std::collections::BTreeMap<String, (usize, std::collections::BTreeSet<String>)> = Default::default();
+            for x in &songs {
+                let place = match (&x.origin, &x.server_path) {
+                    (localbeat_core::library::Origin::Server, Some(p)) => {
+                        format!("on the server: {}", p.rsplit_once('/').map(|(d, _)| d).unwrap_or(p))
+                    }
+                    _ => format!("on this computer: {}", x.path.parent().map(|d| d.display().to_string()).unwrap_or_default()),
+                };
+                let e = folders.entry(place).or_default();
+                e.0 += 1;
+                e.1.insert(if x.codec.is_empty() { "?".into() } else { x.codec.clone() });
+            }
+            let lines: Vec<String> = folders
+                .iter()
+                .map(|(place, (n, codecs))| format!("• {} ({}), {place}", files(*n), codecs.iter().cloned().collect::<Vec<_>>().join(", ")))
+                .collect();
+            let (artist, title) = album.split_once('/').unwrap_or(("", &album));
+            let intro = format!(
+                "“{title}”{} is on the server now as FLAC. The library still has another copy of it:
+{}",
+                if artist.is_empty() { String::new() } else { format!(" by {artist}") },
+                lines.join("
+")
+            );
+            let plan = remove::plan(&self.settings, &songs);
+            let server_ok = remove::can_remove_from_server(&localbeat_core::config::Prefs::load(&self.settings).server);
+            self.log.push(format!("{album}: an old copy is still in the library ({})", files(old.len())));
+            self.remove_dialog = Some(RemoveDialog {
+                songs: old,
+                what: format!("the old copy of “{title}”"),
+                plan,
+                server_ok,
+                state: RemoveState::Confirm,
+                old_copy: Some(intro),
+            });
+            return;
+        }
+    }
+
     /// "Remove from library": what goes where, then the removal in the
     /// background (the server's part waits for its scan), then how it went.
-    fn remove_dialog(&mut self, ctx: &egui::Context) {
+    /// Drawn by main.rs on every page (an old copy is offered whichever is open).
+    pub fn remove_dialog(&mut self, ctx: &egui::Context) {
+        self.check_old_copies();
         let Some(d) = &mut self.remove_dialog else { return };
         // The background job's answer.
         let answer = match &d.state {
@@ -938,7 +1009,7 @@ impl LibraryUi {
         let (mut go, mut close) = (false, false);
         let local = d.plan.local.len();
         let server_only = d.songs.len().saturating_sub(local);
-        egui::Window::new("Remove from library?")
+        egui::Window::new(if d.old_copy.is_some() { "Remove the old copy?" } else { "Remove from library?" })
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -946,6 +1017,10 @@ impl LibraryUi {
                 ui.set_max_width(440.0);
                 match &d.state {
                     RemoveState::Confirm => {
+                        if let Some(intro) = &d.old_copy {
+                            ui.label(intro);
+                            ui.add_space(6.0);
+                        }
                         ui.label(egui::RichText::new(format!("Remove {}?", d.what)).strong());
                         ui.add_space(4.0);
                         if d.server_ok && !d.plan.server.is_empty() {
@@ -969,10 +1044,11 @@ impl LibraryUi {
                         ui.add_space(8.0);
                         let possible = local > 0 || (d.server_ok && !d.plan.server.is_empty());
                         ui.horizontal(|ui| {
-                            if ui.add_enabled_ui(possible, |ui| theme::button(ui, None, "Remove", Kind::Danger)).inner.clicked() {
+                            let (yes, no) = if d.old_copy.is_some() { ("Remove old copy", "Keep it") } else { ("Remove", "Cancel") };
+                            if ui.add_enabled_ui(possible, |ui| theme::button(ui, None, yes, Kind::Danger)).inner.clicked() {
                                 go = true;
                             }
-                            if theme::button(ui, None, "Cancel", Kind::Secondary).clicked() {
+                            if theme::button(ui, None, no, Kind::Secondary).clicked() {
                                 close = true;
                             }
                         });

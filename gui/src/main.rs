@@ -1086,6 +1086,11 @@ impl App {
         for line in self.library.poll(ctx) {
             self.log(line);
         }
+        // A re-rip on the server: the library offers to remove the old copy.
+        for album in self.pusher.take_sent() {
+            self.library.offer_old_copies(album);
+        }
+        self.library.remove_dialog(ctx);
         if self.tab != Tab::Phone {
             self.library.keyboard(ctx);
         }

@@ -36,6 +36,9 @@ pub struct Status {
 pub struct Pusher {
     kick: Sender<()>,
     status: Arc<Mutex<Status>>,
+    /// Albums that reached the server since last asked (outbox names): the
+    /// library offers to remove their old copies.
+    sent: Arc<Mutex<Vec<String>>>,
 }
 
 impl Pusher {
@@ -43,9 +46,11 @@ impl Pusher {
         let (kick, rx) = channel();
         let status = Arc::new(Mutex::new(Status::default()));
         let st = status.clone();
-        std::thread::spawn(move || run(settings, ctx, log, rx, st));
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let sent2 = sent.clone();
+        std::thread::spawn(move || run(settings, ctx, log, rx, st, sent2));
         // The thread's first round starts at once (no kick needed).
-        Pusher { kick, status }
+        Pusher { kick, status, sent }
     }
 
     /// Look now (a disc finished, or the sidebar item was clicked).
@@ -56,6 +61,11 @@ impl Pusher {
     pub fn status(&self) -> Status {
         self.status.lock().unwrap().clone()
     }
+
+    /// The albums sent since the last call.
+    pub fn take_sent(&self) -> Vec<String> {
+        std::mem::take(&mut *self.sent.lock().unwrap())
+    }
 }
 
 fn counts(s: &Settings) -> (usize, usize) {
@@ -64,7 +74,7 @@ fn counts(s: &Settings) -> (usize, usize) {
     (o.pending().len(), failed)
 }
 
-fn run(s: Settings, ctx: egui::Context, log: Sender<String>, rx: Receiver<()>, status: Arc<Mutex<Status>>) {
+fn run(s: Settings, ctx: egui::Context, log: Sender<String>, rx: Receiver<()>, status: Arc<Mutex<Status>>, sent: Arc<Mutex<Vec<String>>>) {
     // Said once until it changes, not every five minutes.
     let mut last_away: Option<String> = None;
     loop {
@@ -93,6 +103,7 @@ fn run(s: Settings, ctx: egui::Context, log: Sender<String>, rx: Receiver<()>, s
                 PushEvent::Sending(a) => set(format!("Sending {a}"), Some(a)),
                 PushEvent::Sent(a) => {
                     let _ = log.send(format!("Sent to the server: {a}"));
+                    sent.lock().unwrap().push(a);
                     last_away = None;
                 }
                 PushEvent::Failed { album, error } => {

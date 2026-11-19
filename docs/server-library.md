@@ -96,7 +96,7 @@ All of these happen on the home network only, over the same channel:
 |---|---|
 | `localbeat enrich` (tags) | Pull the album's FLACs, change tags, push back (or run on the Mac) |
 | Repairs writing fixed tracks | Same: the fixed track goes to the outbox |
-| Superseded albums (Misc copy of a re-rip) | Removed on the server (trash, see Deletes) |
+| Superseded albums (Misc copy of a re-rip) | Removed on the server (trash, see Deletes). **Done 2026-11-19:** when a sent album passes the catalogue check, Studio looks for other copies with the same album artist + album tags (`remove::old_copies`) and asks "Remove the old copy?"; yes = Remove from library (server's into `/srv/music/Removed`, local ones to the Recycle Bin) |
 | Phone sync (`localbeat sync`) | **Opus from the server** (`stream?format=opus`, already converted with the same settings), not encoded on the laptop; library list from the server catalogue |
 
 ## Moving over (once)
