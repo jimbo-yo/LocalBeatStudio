@@ -459,10 +459,10 @@ impl SettingsTab {
                     ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(260.0));
                     ui.end_row();
                     ui.label(RichText::new("Server").color(p.dim));
-                    ui.add(egui::TextEdit::singleline(&mut self.server).desired_width(260.0));
+                    ui.add(egui::TextEdit::singleline(&mut self.server).hint_text("e.g. 192.168.1.10").desired_width(260.0));
                     ui.end_row();
                     ui.label(RichText::new("Whose computer").color(p.dim));
-                    ui.add(egui::TextEdit::singleline(&mut self.user).hint_text("your user, e.g. jim (optional)").desired_width(260.0));
+                    ui.add(egui::TextEdit::singleline(&mut self.user).hint_text("your user, e.g. alex (optional)").desired_width(260.0));
                     ui.end_row();
                 });
                 if !join::valid_name(&self.name) {

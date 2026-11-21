@@ -28,20 +28,20 @@ the "server only" part, not for the rest.
 
 The server enforces this. Studio doesn't have to:
 
-- **Channel:** rsync over SSH to the Mac's LAN address `192.168.1.10`.
-  The firewall already allows SSH only from `192.168.1.0/24`. Through
+- **Channel:** rsync over SSH to the server's LAN address (e.g. `192.168.1.10`).
+  The firewall already allows SSH only from the home LAN (`192.168.1.0/24`). Through
   WireGuard (10.8.0.x), even at home, SSH is refused.
-- **A key just for Studio**, in the Mac's `authorized_keys`:
+- **A key just for Studio**, in the server's `authorized_keys`:
   `restrict,from="192.168.1.0/24",command="/usr/bin/rrsync -munge -no-del /srv/music" ssh-ed25519 …`
   It can only rsync inside `/srv/music`: no shell, no port forwarding,
   nowhere else, no deleting. One key per computer, so a lost laptop is one
   line to remove. **Built 2026-11-14:** LocalBeatServer
-  `host/localbeat-writers`; this laptop is `my-laptop` with
+  `host/localbeat-writers`; a laptop uses
   `~/.ssh/localbeat-studio`. Pushes need `--mkpath` (new folders) and
-  `--chmod=D755,F644`; checked on the Mac (LocalBeatServer CLAUDE.md,
+  `--chmod=D755,F644`; checked on the server (LocalBeatServer CLAUDE.md,
   "Writers").
-- **"Am I home?":** Studio tries `192.168.1.10:22` with a short timeout and
-  checks the pinned host key. If that works, it's the Mac on the home
+- **"Am I home?":** Studio tries `<server>:22` with a short timeout and
+  checks the pinned host key. If that works, it's the server on the home
   network. Nothing else is needed.
 - **New albums show up in seconds:** after a push Studio calls the standard
   Subsonic `startScan` (to add to the server; today it rescans every 10
@@ -68,7 +68,7 @@ The server enforces this. Studio doesn't have to:
 ## Playing from the server (anywhere)
 
 - **The laptop is a WireGuard peer** like a phone:
-  `sudo localbeat-people add my-laptop` on the Mac, then the config is
+  `sudo localbeat-people add my-laptop` on the server, then the config is
   imported into NetworkManager (split tunnel, `AllowedIPs = 10.8.0.1/32`).
   At home the router loops the tunnel back, so one address works
   everywhere: `http://10.8.0.1:4533`.
@@ -150,20 +150,18 @@ Each step works on its own:
    page (sidebar "Server") shows the outbox, recently sent, Send now and
    the settings; the Rip page says where each disc's album stands
 3. **Laptop tunnel and login** (`localbeat-people add my-laptop`,
-   NetworkManager import). **Done for the Surface** 2026-11-16
-   (`my-linux-pc`, 10.8.0.3; checked at home: ping and login through the
+   NetworkManager import). **Done** 2026-11-16
+   (`10.8.0.3`; checked at home: ping and login through the
    tunnel, Studio's catalogue fetched over it; away from home not tried
    yet). `tools/import-tunnel.py NAME` does it in one go: runs `sudo
-   localbeat-people add NAME --json` on the Mac over SSH (password asked
+   localbeat-people add NAME --json` on the server over SSH (password asked
    for, not shown), imports the WireGuard config into NetworkManager as
    `localbeat` (autoconnect, only 10.8.0.1 through it) and sets Studio's
    music server to `http://10.8.0.1:4533` with the new login; the private
    key is never shown or left in a file. Note `add` replaces NAME's music
-   login. The Mac's endpoint file gave the bare IP `203.0.113.10`, not
-   `vpn.example.com`: fix /etc/localbeat/wireguard-endpoint on the
-   Mac (and `endpoint=` in the laptop's
-   /etc/NetworkManager/system-connections/localbeat.nmconnection). Still
-   to do: the Lenovo (`my-laptop`).
+   login. If `/etc/localbeat/wireguard-endpoint` on the server has a bare IP
+   instead of your DDNS hostname (`vpn.example.com`), update it there (and
+   `endpoint=` in `/etc/NetworkManager/system-connections/localbeat.nmconnection`).
 4. **Studio as a server client** (**done** 2026-11-16, on the Surface at
    home: 4391 songs / 494 albums; played fine): settings, catalogue, merged
    library, playing via the song cache, connected/not connected. Built:

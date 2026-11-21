@@ -13,3 +13,6 @@
 
 # Built packages (tools/build-rpm.sh copies here by hand)
 /dist/
+
+# Local machine notes (not shared in git)
+CLAUDE.local.md

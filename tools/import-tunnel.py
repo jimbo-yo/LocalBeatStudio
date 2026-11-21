@@ -2,7 +2,7 @@
 """Sets this Linux laptop up with a WireGuard tunnel to the LocalBeat server
 (docs/server-library.md, step 3), so Studio plays from the server anywhere.
 
-    tools/import-tunnel.py NAME [--mac musicuser@192.168.1.10]
+    tools/import-tunnel.py NAME --mac user@192.168.1.10
     tools/import-tunnel.py NAME --from FILE
 
 At home, it runs `sudo localbeat-people add NAME --json` on the Mac over SSH
@@ -20,7 +20,7 @@ Sending rips is unchanged (SSH to the Mac's home address, home only).
 earlier (the file is deleted afterwards).
 
 Close LocalBeat Studio first: it would write its old settings back.
-NAME: lowercase letters, digits and -, e.g. my-laptop or my-linux-pc.
+NAME: lowercase letters, digits and -, e.g. my-laptop or studio-pc.
 """
 
 import argparse
@@ -61,9 +61,11 @@ def from_mac(mac, name):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("name")
-    ap.add_argument("--mac", default="musicuser@192.168.1.10", help="SSH login on the server (default: %(default)s)")
+    ap.add_argument("--mac", help="SSH login on the server, e.g. user@192.168.1.10 (required unless --from)")
     ap.add_argument("--from", dest="src", metavar="FILE", help="saved output of localbeat-people add --json")
     a = ap.parse_args()
+    if not a.src and not a.mac:
+        die("pass --mac user@server or --from FILE")
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,30}", a.name):
         die("NAME: lowercase letters, digits and -, e.g. my-laptop")
     if studio_running():

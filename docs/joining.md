@@ -8,7 +8,7 @@ server's admin page. This replaces running `localbeat-people` /
 ## Decisions (user, 2026-11-16)
 
 - **Request + approve.** Studio sends a request from the home network and
-  shows a short code (`K7Q-4XM`). The admin page (`https://192.168.1.10:8443`)
+  shows a short code (`K7Q-4XM`). The admin page (`https://<server>:8443`)
   lists waiting requests with the same code: Approve / Approve as listener /
   Deny. Studio then finishes on its own.
 - **Keys are made on the computer.** Studio makes its WireGuard key pair
@@ -101,11 +101,11 @@ DELETE /join/ID  (same token): saved here, forget it   -> 204
   host key pinned, request deleted after confirm; Studio then shows the admin
   pages and the joined Settings.
 - Tested 2026-11-16 against the Mac (after `host/setup.sh` ran there):
-  `localbeat join my-windows-pc --admin` from the Surface's Windows side. Code
+  `localbeat join my-pc --admin` from Windows. Code
   shown, approved on the admin page (admin password needed to log in),
   tunnel service installed through UAC: 10.8.0.4, endpoint
   `vpn.example.com:51820`, 10.8.0.1 answers. `localbeat server check`:
-  192.168.1.10 reachable, writing allowed with `~/.ssh/localbeat-studio`,
+  server reachable, writing allowed with `~/.ssh/localbeat-studio`,
   music login works. Not yet: a real album pushed with that key, the join
   from Studio's Settings page against the Mac (the CLI and the page share
   `engine/join.rs`), Linux (NetworkManager import), away from home.

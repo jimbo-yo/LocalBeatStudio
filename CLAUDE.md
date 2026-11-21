@@ -25,48 +25,14 @@ users-and-devices contract (LocalBeat `docs/control.md`), update all three
 repos. The LocalBeat mark (`gui/assets/localbeat.svg`, gold disc #F2B33D +
 navy #1B2A3A note) is also shared (`docs/brand/` in the other two).
 
-## Machines
+## Development environment
 
-| Machine | OS | Drives |
-|---|---|---|
-| Lenovo laptop (original; being retired, user moving to the Surface, 2026-11-16) | Fedora 44, KDE Plasma, Intel Haswell | sr0 built-in GU90N (broken), Apple SuperDrive, hp GTA0N |
-| Ubuntu laptop | Ubuntu 26.04, GNOME | sr0 built-in GU90N, hp GTA0N |
-| Windows laptop | Windows, Rust MSVC | hp GTA0N on D: |
-| Microsoft Surface laptop (added 2026-11-14; the main machine now) | three setups, below | none built in (USB drives only) |
-
-- **The Surface has three setups** (user, 2026-11-16): (1) native Fedora 45
-  on its own partition, KDE Plasma: the user's SSH login key for the Mac,
-  Studio joined as `my-linux-pc`; (2) Windows 11 (`MY-WINDOWS-PC`), where
-  Claude Code usually runs; (3) Fedora 45 in **WSL** inside that Windows
-  (`wsl -d FedoraLinux-45`, user musicuser): a Linux build/test box (Rust,
-  cmake, gcc, alsa, gawk, wireguard-tools, openssl, qrencode), its own
-  CDRipPipeline + LocalBeatServer clones in `~/Development` (branch
-  `joining`). Since 2026-11-16 it logs in to the Mac too (key
-  `~/.ssh/id_ed25519`, "musicuser@surface-wsl"; `ssh musicuser@192.168.1.10`),
-  so Claude Code can reach the Mac from Windows with
-  `wsl -d FedoraLinux-45 -- ssh musicuser@192.168.1.10 ...`. The server's
-  `host/setup.sh` was run on the Mac from there 2026-11-16 (the Mac's
-  localbeat-admin = the joining version). "Fedora on the Surface" is
-  ambiguous: say native or WSL
-- Check `/etc/os-release` and the hardware to tell the machines apart
-- Repo in `~/development/<repo>`; `~/Development/<repo>` (capital D) on the
-  Surface. Editor preference: **vi** (say vi, not nano, in instructions)
-- Surface on Windows (2026-11-16): repos at `C:\Users\user\Development\`
-  (CDRipPipeline, LocalBeatServer; their own clones, separate from Fedora's),
-  Studio installed with `tools\install-windows.ps1`, WireGuard installed.
-  Joined the Mac 2026-11-16 as **`my-windows-pc` (admin)** with `localbeat join
-  my-windows-pc --admin`: tunnel 10.8.0.4 (service `WireGuardTunnel$localbeat`),
-  music login `my-windows-pc`, rips to `musicuser@192.168.1.10` with
-  `~/.ssh/localbeat-studio`; `localbeat server check` all good. The admin
-  page needs the admin password (`sudo localbeat-admin set-password` on the
-  Mac); Claude's browser pane can't open it (self-made certificate), so
-  open it in Edge. Running bash scripts from these clones in WSL needs
-  CRLF stripped (Windows checkouts); the committed files are LF
-- Surface setup (2026-11-14): fresh install; build packages installed and
-  the workspace built 2026-11-15 (not installed with install-linux.sh yet);
-  no local music library, it plays the server's
+- Tested on Linux (Fedora, Ubuntu) and Windows (MSVC). Personal machine/SSH
+  details live in `CLAUDE.local.md` (gitignored).
+- Running bash scripts from Windows checkouts in WSL needs CRLF stripped;
+  committed files are LF.
 - The music libraries are NOT synced between machines (the server will become
-  the one copy: `docs/server-library.md`)
+  the one copy: `docs/server-library.md`).
 
 ## Layout
 
@@ -331,19 +297,14 @@ phone shows server playlists.
 
 - **Server as the library** (`docs/server-library.md`): steps 1-4 done
   (2026-11-14, Server page and catalogue check 2026-11-16). Finished discs
-  (and repairs) are queued in the outbox and sent to the Mac with rsync over
+  (and repairs) are queued in the outbox and sent to the server with rsync over
   SSH from the home network only; with a music server login Studio waits
   for the scan and checks the catalogue before marking an album sent.
-  Settings in localbeat.json `server`, set on the Lenovo laptop and the
-  Surface (writer `my-linux-pc`, login `my-linux-pc`). Step 4 done
+  Settings in localbeat.json `server`. Step 4 done
   2026-11-16: the server's albums show and play in Studio's library (song
-  cache). Step 3 (tunnel) done on the Surface (10.8.0.3, NetworkManager
-  `localbeat`, Studio on `http://10.8.0.1:4533`; not yet tried away from
-  home); the Surface's Windows side joined through Studio's join
-  (`my-windows-pc`, 10.8.0.4); the Lenovo still needs `tools/import-tunnel.py
-  my-laptop`. The Mac now hands out `vpn.example.com:51820` as the
-  endpoint (seen in the 2026-11-16 join); tunnels made earlier may still
-  have the bare IP. Laptop copies are kept until the Mac's library has a backup
+  cache). Step 3 (tunnel) done on Linux (NetworkManager `localbeat`, Studio on
+  `http://10.8.0.1:4533`) and Windows (WireGuard tunnel service via Studio's
+  join). Laptop copies are kept until the server's library has a backup
 - Keep playlist songs locally (user, 2026-11-17; after 7 PM): a setting
   (default on) on the phone and in Studio: every song in the user's
   playlists (and shared ones) is kept on the device (phone: auto "Keep on
@@ -367,6 +328,3 @@ phone shows server playlists.
   keys drives by /dev path). Fix: key by udev ID_SERIAL, drop vanished paths
 - Not yet seen on a real disc: OtherPressing acceptance, per-drive Stop / Stop
   & eject buttons during a rip
-- To re-rip: Led Zeppelin box RepeatDiffers tracks (disc 1: 1, 4, 5, 10;
-  disc 2: 14; disc 3: 2); Radiohead "I Might Be Wrong" (ripped at a wrong
-  -1151); old fre:ac albums without art/MBIDs

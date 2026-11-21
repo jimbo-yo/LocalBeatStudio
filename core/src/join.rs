@@ -23,8 +23,8 @@ use ureq::Agent;
 
 /// The admin page's port on the server (`localbeat-admin`).
 pub const ADMIN_PORT: u16 = 8443;
-/// The home server's usual address.
-pub const DEFAULT_SERVER: &str = "192.168.1.10";
+/// Default server address (empty: user enters their server's home IP/host).
+pub const DEFAULT_SERVER: &str = "";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -249,7 +249,7 @@ pub fn request(admin_url: &str, name: &str, user: &str, role: Role, keys: WgKeys
         bail!("name: lowercase letters, digits and -, e.g. my-laptop");
     }
     if !user.is_empty() && !valid_name(user) {
-        bail!("user: lowercase letters, digits and -, e.g. jim");
+        bail!("user: lowercase letters, digits and -, e.g. alex");
     }
     let mut body = serde_json::json!({
         "name": name,
@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn names() {
-        assert!(valid_name("my-laptop") && valid_name("a") && !valid_name("-x") && !valid_name("Jim") && !valid_name(""));
+        assert!(valid_name("my-laptop") && valid_name("a") && !valid_name("-x") && !valid_name("My") && !valid_name(""));
         assert!(valid_name(&suggested_name()));
         assert_eq!(admin_url("192.168.1.10"), "https://192.168.1.10:8443");
         assert_eq!(admin_url("https://h:9000/"), "https://h:9000");
@@ -361,7 +361,7 @@ mod tests {
         assert_eq!(a.role, Role::Admin);
         assert_eq!(a.writer.as_ref().unwrap().user, "musicuser");
         let p = Pending {
-            admin_url: admin_url(DEFAULT_SERVER),
+            admin_url: admin_url("192.168.1.10"),
             name: "pc".into(),
             role: Role::Admin,
             id: "0123456789abcdef".into(),

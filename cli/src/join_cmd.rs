@@ -32,6 +32,9 @@ pub fn run(a: JoinArgs) -> Result<bool> {
             return Ok(true);
         }
         None => {
+            if a.server.trim().is_empty() {
+                bail!("pass --server <ip-or-host> (your LocalBeat server's address on the home network)");
+            }
             let name = a.name.unwrap_or_else(join::suggested_name);
             let role = if a.admin { Role::Admin } else { Role::Listener };
             engine_join::ask(&s, &a.server, &name, a.user.as_deref().unwrap_or(""), role)?

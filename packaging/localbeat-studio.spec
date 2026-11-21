@@ -12,7 +12,7 @@ Version:        %{ver}
 Release:        %{rel}%{?dist}
 Summary:        LocalBeat Studio: music library, player, CD ripper and phone sync
 License:        MIT
-URL:            https://github.com/jimbo-yo/CDRipPipeline
+URL:            https://github.com/jimbo-yo/LocalBeatStudio
 Source0:        %{name}-%{version}.tar.gz
 
 # Rust release builds: no separate debuginfo package.

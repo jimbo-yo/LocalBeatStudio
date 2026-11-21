@@ -9,7 +9,7 @@
 
   Runs `localbeat join` (the same as Studio's Settings page): from the home
   network it sends a request with this computer's own keys and shows a code;
-  approve it on the server's admin page (https://192.168.1.10:8443) if the
+  approve it on the server's admin page (https://<server>:8443) if the
   code matches; then WireGuard's tunnel is installed (one Windows permission
   prompt) and Studio's music server login is saved. Ctrl+C while waiting and
   run it again to carry on; -Cancel withdraws the request.
@@ -21,7 +21,7 @@
 param(
     [Parameter(Position = 0)][string]$Name,
     [switch]$Admin,
-    [string]$Server = '192.168.1.10',
+    [Parameter(Mandatory = $true)][string]$Server,
     [switch]$Cancel
 )
 $ErrorActionPreference = 'Stop'

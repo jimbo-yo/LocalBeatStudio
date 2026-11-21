@@ -180,18 +180,9 @@ impl ServerTab {
         let p = theme::pal(ui);
         let saved = prefs.server.clone();
         let edit = self.edit.get_or_insert_with(|| {
-            // Not set up yet: start from the home server's usual values,
-            // filled in (grey hints alone looked filled in but saved nothing).
             let mut e = saved.clone();
-            for (f, v) in [
-                (&mut e.host, "192.168.1.10"),
-                (&mut e.user, "musicuser"),
-                (&mut e.key, "~/.ssh/localbeat-studio"),
-                (&mut e.url, "http://192.168.1.10:4533"),
-            ] {
-                if f.is_empty() && saved.host.is_empty() {
-                    *f = v.to_string();
-                }
+            if e.key.is_empty() && saved.host.is_empty() {
+                e.key = "~/.ssh/localbeat-studio".to_string();
             }
             e
         });
