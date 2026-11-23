@@ -89,6 +89,16 @@ fn absorb(info: &mut SourceInfo, rev: &MetadataRevision) {
         if value.is_empty() {
             continue;
         }
+        if tag.std_key.is_none() {
+            if tag.key.eq_ignore_ascii_case("MOOD") || tag.key.eq_ignore_ascii_case(crate::ai_enrich::MP4_MOOD_KEY) {
+                push_multi(info, "MOOD", &value);
+            } else if tag.key.eq_ignore_ascii_case(crate::ai_enrich::AI_ENRICHED_KEY)
+                || tag.key.eq_ignore_ascii_case(crate::ai_enrich::MP4_AI_ENRICHED_KEY)
+            {
+                set(info, crate::ai_enrich::AI_ENRICHED_KEY, &value);
+            }
+            continue;
+        }
         let Some(key) = tag.std_key else { continue };
         // "3/12" style track and disc numbers (iTunes, ID3).
         let split = |n: &str, total: &str, info: &mut SourceInfo| {
@@ -107,7 +117,8 @@ fn absorb(info: &mut SourceInfo, rev: &MetadataRevision) {
             StandardTagKey::DiscTotal => set(info, "DISCTOTAL", &value),
             StandardTagKey::Date | StandardTagKey::ReleaseDate => set(info, "DATE", &value),
             StandardTagKey::OriginalDate => set(info, "ORIGINALDATE", &value),
-            StandardTagKey::Genre => set(info, "GENRE", &value),
+            StandardTagKey::Genre => push_multi(info, "GENRE", &value),
+            StandardTagKey::Mood => push_multi(info, "MOOD", &value),
             StandardTagKey::Composer => set(info, "COMPOSER", &value),
             StandardTagKey::Comment => set(info, "COMMENT", &value),
             StandardTagKey::MusicBrainzAlbumId => set(info, "MUSICBRAINZ_ALBUMID", &value),
@@ -133,6 +144,16 @@ fn set(info: &mut SourceInfo, key: &str, value: &str) {
     }
     if !info.tags.iter().any(|(k, _)| k == key) {
         info.tags.push((key.to_string(), value.to_string()));
+    }
+}
+
+/// Appends each distinct `;` / `\0`-separated value (for multi-value GENRE / MOOD).
+fn push_multi(info: &mut SourceInfo, key: &str, value: &str) {
+    for part in value.split([';', '\0']) {
+        let p = part.trim();
+        if !p.is_empty() && !info.tags.iter().any(|(k, v)| k == key && v.eq_ignore_ascii_case(p)) {
+            info.tags.push((key.to_string(), p.to_string()));
+        }
     }
 }
 

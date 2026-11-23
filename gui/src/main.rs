@@ -20,7 +20,9 @@ use localbeat_engine::notify::Notifier;
 use localbeat_engine::{self as engine, Event, Frontend, Options, ReleaseChoice, TrackInfo};
 use localbeat_platform::phone_notify;
 
+mod ai_enrich_tab;
 mod cover_cache;
+mod cover_tab;
 mod library_ui;
 mod media_keys;
 mod phone_tab;
@@ -39,6 +41,8 @@ enum Tab {
     Repairs,
     Rip,
     Phone,
+    AiEnrich,
+    Covers,
     Review,
     Server,
     Settings,
@@ -242,6 +246,8 @@ struct App {
     notes: Receiver<String>,
     tab: Tab,
     phone: phone_tab::PhoneTab,
+    ai_enrich: ai_enrich_tab::AiEnrichTab,
+    covers: cover_tab::CoverTab,
     review: review_tab::ReviewTab,
     repairs: repairs_tab::RepairsTab,
     /// Running Ejects: drive (None = every idle drive) and the result.
@@ -306,6 +312,8 @@ impl App {
             notes,
             tab: if first_run { Tab::Settings } else { Tab::Library },
             phone: phone_tab::PhoneTab::new(),
+            ai_enrich: ai_enrich_tab::AiEnrichTab::new(),
+            covers: cover_tab::CoverTab::new(),
             review: review_tab::ReviewTab::new(),
             repairs: repairs_tab::RepairsTab::new(),
             eject: Vec::new(),
@@ -348,6 +356,7 @@ impl App {
             app.library.set_demo_volume();
             app.tab = match demo.as_str() {
                 "phone" => Tab::Phone,
+                "ai" | "ai-enrich" => Tab::AiEnrich,
                 "repairs" => Tab::Repairs,
                 "review" => Tab::Review,
                 "server" => Tab::Server,
@@ -656,6 +665,24 @@ impl App {
                     ui.add_space(8.0);
                     theme::section_label(ui, "Tools");
                 });
+                let ai_pending = self.ai_enrich.pending_count(&self.settings);
+                let ai_n = ai_pending.to_string();
+                let ai_status = (ai_pending > 0).then_some((ai_n.as_str(), theme::ACCENT));
+                if theme::nav_item(ui, theme::Icon::Tag, "AI Genres & Moods", self.tab == Tab::AiEnrich, ai_status)
+                    .on_hover_text("Export unenriched albums to an AI, review genres & moods, and write tags to files")
+                    .clicked()
+                {
+                    self.tab = Tab::AiEnrich;
+                }
+                let cov_missing = cover_tab::CoverTab::missing_count(self.library.lib.as_deref());
+                let cov_n = cov_missing.to_string();
+                let cov_status = (cov_missing > 0).then_some((cov_n.as_str(), theme::WARN));
+                if theme::nav_item(ui, theme::Icon::Albums, "Cover Art", self.tab == Tab::Covers, cov_status)
+                    .on_hover_text("Find and embed missing album covers from iTunes, Cover Art Archive, or local images")
+                    .clicked()
+                {
+                    self.tab = Tab::Covers;
+                }
                 if theme::nav_item(ui, theme::Icon::Tag, "Review tags", self.tab == Tab::Review, None).clicked() {
                     self.tab = Tab::Review;
                 }
@@ -1081,6 +1108,18 @@ impl App {
         for line in self.review.poll(ctx) {
             self.log(line);
         }
+        for line in self.ai_enrich.poll(&self.settings, ctx) {
+            self.log(line);
+        }
+        if std::mem::take(&mut self.ai_enrich.rescan_wanted) {
+            self.library.rescan(ctx);
+        }
+        for line in self.covers.poll(ctx) {
+            self.log(line);
+        }
+        if std::mem::take(&mut self.covers.rescan_wanted) {
+            self.library.rescan(ctx);
+        }
         let settings = self.settings.clone();
         for line in self.repairs.poll(&settings, ctx) {
             self.log(line);
@@ -1167,6 +1206,42 @@ impl App {
             egui::CentralPanel::default().frame(page).show(ui, |ui| {
                 theme::page_header(ui, "Repairs", "Discs with tracks that couldn't be read cleanly, and what the CUETools repair could do", |_| {});
                 lines = self.repairs.ui(ui, &self.settings);
+            });
+            for l in lines {
+                self.log(l);
+            }
+            self.choice_window(ctx);
+            return;
+        }
+        if self.tab == Tab::AiEnrich {
+            let mut lines = Vec::new();
+            let lib = self.library.lib.clone();
+            egui::CentralPanel::default().frame(page).show(ui, |ui| {
+                theme::page_header(
+                    ui,
+                    "AI Genres & Moods",
+                    "Export unenriched albums to any AI, review or discuss questionable labels, and write them into the files",
+                    |_| {},
+                );
+                lines = self.ai_enrich.ui(ui, &self.settings, &self.prefs, lib);
+            });
+            for l in lines {
+                self.log(l);
+            }
+            self.choice_window(ctx);
+            return;
+        }
+        if self.tab == Tab::Covers {
+            let mut lines = Vec::new();
+            let lib = self.library.lib.clone();
+            egui::CentralPanel::default().frame(page).show(ui, |ui| {
+                theme::page_header(
+                    ui,
+                    "Cover Art",
+                    "Find missing album covers on iTunes & Cover Art Archive, review previews, and embed them into files and server",
+                    |_| {},
+                );
+                lines = self.covers.ui(ui, &self.settings, &self.prefs, lib);
             });
             for l in lines {
                 self.log(l);

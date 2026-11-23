@@ -2,6 +2,8 @@
 //! here, so everything builds and tests the same on Windows and Linux.
 
 pub mod accuraterip;
+pub mod ai_enrich;
+pub mod cover_finder;
 pub mod covers;
 pub mod ctdb;
 pub mod ctdb_repair;

@@ -36,6 +36,9 @@ pub enum Origin {
     Server,
 }
 
+/// Bump when `Song` reads new tag fields so cached entries re-read once.
+const TAG_SCHEMA: u8 = 1;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Song {
     pub path: PathBuf,
@@ -43,6 +46,12 @@ pub struct Song {
     /// Seconds since 1970: modification (for the cache) and creation (when
     /// the song arrived, for "Recently added"; mtime if the system doesn't say).
     pub mtime: i64,
+    #[serde(default)]
+    pub ctime: i64,
+    #[serde(default)]
+    pub ctime_nsec: i64,
+    #[serde(default)]
+    pub tag_schema: u8,
     pub added: i64,
     pub title: String,
     pub artist: String,
@@ -54,6 +63,15 @@ pub struct Song {
     /// Original release year if tagged, else the release's.
     pub year: Option<u16>,
     pub genre: Option<String>,
+    /// All GENRE values (broad genre first when AI-enriched).
+    #[serde(default)]
+    pub genres: Vec<String>,
+    /// All MOOD values.
+    #[serde(default)]
+    pub moods: Vec<String>,
+    /// `LOCALBEAT_AI_ENRICHED` marker (e.g. `"v1"`), if AI-enriched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_enriched: Option<String>,
     pub seconds: f64,
     /// "FLAC", "MP3", "AAC", "ALAC", "Vorbis", "WAV", "AIFF".
     pub codec: String,
@@ -85,6 +103,10 @@ pub struct Album {
     pub artist: String,
     pub year: Option<u16>,
     pub genre: Option<String>,
+    pub genres: Vec<String>,
+    pub moods: Vec<String>,
+    /// Set when every song on the album carries a `LOCALBEAT_AI_ENRICHED` marker.
+    pub ai_enriched: Option<String>,
     /// Indices into `Library::songs`, in disc/track order.
     pub songs: Vec<usize>,
     pub origin: Origin,
@@ -168,6 +190,33 @@ fn save_cache(s: &Settings, songs: &[Song]) -> Result<()> {
     Ok(())
 }
 
+/// Drops `paths` from `<cache>/library.json` so the next scan re-reads their
+/// tags even when `mtime` and file size didn't change (e.g. in-place retag on Windows).
+pub fn invalidate_cache(s: &Settings, paths: &[PathBuf]) {
+    if paths.is_empty() {
+        return;
+    }
+    let drop_set: std::collections::HashSet<&PathBuf> = paths.iter().collect();
+    let mut cache = load_cache(s);
+    let before = cache.len();
+    cache.retain(|p, _| !drop_set.contains(p));
+    if cache.len() != before {
+        let songs: Vec<Song> = cache.into_values().collect();
+        let _ = save_cache(s, &songs);
+    }
+}
+
+#[cfg(unix)]
+fn file_ctime(md: &std::fs::Metadata) -> (i64, i64) {
+    use std::os::unix::fs::MetadataExt;
+    (md.ctime(), md.ctime_nsec())
+}
+
+#[cfg(not(unix))]
+fn file_ctime(_md: &std::fs::Metadata) -> (i64, i64) {
+    (0, 0)
+}
+
 fn secs(t: std::io::Result<std::time::SystemTime>) -> Option<i64> {
     t.ok()?.duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs() as i64)
 }
@@ -184,7 +233,7 @@ impl Library {
     }
 
     pub fn scan_roots(roots: &[(&Path, Origin)], s: &Settings, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<(Library, ScanStats)> {
-        let mut files: Vec<(PathBuf, Origin, u64, i64, i64)> = Vec::new();
+        let mut files: Vec<(PathBuf, Origin, u64, i64, i64, i64, i64)> = Vec::new();
         for (root, origin) in roots {
             if !root.is_dir() {
                 continue;
@@ -200,16 +249,26 @@ impl Library {
                 let Ok(md) = e.metadata() else { continue };
                 let mtime = secs(md.modified()).unwrap_or(0);
                 let added = secs(md.created()).unwrap_or(mtime);
-                files.push((e.into_path(), *origin, md.len(), mtime, added));
+                let (ctime, ctime_nsec) = file_ctime(&md);
+                files.push((e.into_path(), *origin, md.len(), mtime, ctime, ctime_nsec, added));
             }
         }
         let mut stats = ScanStats { files: files.len(), ..Default::default() };
         let cache = load_cache(s);
         let mut songs: Vec<Option<Song>> = vec![None; files.len()];
         let mut todo = Vec::new();
-        for (i, (path, origin, size, mtime, _)) in files.iter().enumerate() {
+        for (i, (path, origin, size, mtime, ctime, ctime_nsec, _)) in files.iter().enumerate() {
             match cache.get(path) {
-                Some(c) if c.size == *size && c.mtime == *mtime && c.origin == *origin => songs[i] = Some(c.clone()),
+                Some(c)
+                    if c.tag_schema == TAG_SCHEMA
+                        && c.size == *size
+                        && c.mtime == *mtime
+                        && c.ctime == *ctime
+                        && c.ctime_nsec == *ctime_nsec
+                        && c.origin == *origin =>
+                {
+                    songs[i] = Some(c.clone())
+                }
                 _ => todo.push(i),
             }
         }
@@ -229,8 +288,8 @@ impl Library {
                         chunk
                             .iter()
                             .map(|&i| {
-                                let (p, o, size, mtime, added) = &files[i];
-                                let r = read_song(p, *o, *size, *mtime, *added);
+                                let (p, o, size, mtime, ctime, ctime_nsec, added) = &files[i];
+                                let r = read_song(p, *o, *size, *mtime, *ctime, *ctime_nsec, *added);
                                 let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                                 if n % 25 == 0 {
                                     progress(n, total);
@@ -247,10 +306,10 @@ impl Library {
             match r {
                 Ok(song) => songs[i] = Some(song),
                 Err(e) => {
-                    let (p, o, size, mtime, added) = &files[i];
+                    let (p, o, size, mtime, ctime, ctime_nsec, added) = &files[i];
                     stats.failed.push((p.clone(), format!("{e:#}")));
                     // Still listed, named after the file and folder.
-                    songs[i] = Some(fallback_song(p, *o, *size, *mtime, *added));
+                    songs[i] = Some(fallback_song(p, *o, *size, *mtime, *ctime, *ctime_nsec, *added));
                 }
             }
         }
@@ -343,11 +402,35 @@ impl Library {
                 let mut dirs: Vec<PathBuf> = idx.iter().filter_map(|&i| songs[i].path.parent().map(Path::to_path_buf)).collect();
                 dirs.sort();
                 dirs.dedup();
+                let mut genres: Vec<String> = Vec::new();
+                for g in idx.iter().flat_map(|&i| songs[i].genres.iter().chain(songs[i].genre.iter())) {
+                    for part in g.split([';', '\0']) {
+                        let p = part.trim();
+                        if !p.is_empty() && !genres.iter().any(|x| x.eq_ignore_ascii_case(p)) {
+                            genres.push(p.to_string());
+                        }
+                    }
+                }
+                let mut moods: Vec<String> = Vec::new();
+                for m in idx.iter().flat_map(|&i| songs[i].moods.iter()) {
+                    let p = m.trim();
+                    if !p.is_empty() && !moods.iter().any(|x| x.eq_ignore_ascii_case(p)) {
+                        moods.push(p.to_string());
+                    }
+                }
+                let ai_enriched = if idx.iter().all(|&i| songs[i].ai_enriched.is_some()) {
+                    idx.iter().filter_map(|&i| songs[i].ai_enriched.as_deref()).min().map(str::to_string)
+                } else {
+                    None
+                };
                 Album {
                     title,
                     artist,
                     year: idx.iter().filter_map(|&i| songs[i].year).min(),
-                    genre: idx.iter().find_map(|&i| songs[i].genre.clone()),
+                    genre: genres.first().cloned(),
+                    genres,
+                    moods,
+                    ai_enriched,
                     origin: first.origin,
                     seconds: idx.iter().map(|&i| songs[i].seconds).sum(),
                     added: idx.iter().map(|&i| songs[i].added).max().unwrap_or(0),
@@ -381,11 +464,14 @@ fn file_stem(p: &Path) -> String {
     p.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
-fn fallback_song(p: &Path, origin: Origin, size: u64, mtime: i64, added: i64) -> Song {
+fn fallback_song(p: &Path, origin: Origin, size: u64, mtime: i64, ctime: i64, ctime_nsec: i64, added: i64) -> Song {
     Song {
         path: p.to_path_buf(),
         size,
         mtime,
+        ctime,
+        ctime_nsec,
+        tag_schema: TAG_SCHEMA,
         added,
         title: file_stem(p),
         artist: String::new(),
@@ -395,6 +481,9 @@ fn fallback_song(p: &Path, origin: Origin, size: u64, mtime: i64, added: i64) ->
         disc: None,
         year: None,
         genre: None,
+        genres: Vec::new(),
+        moods: Vec::new(),
+        ai_enriched: None,
         seconds: 0.0,
         codec: p.extension().map(|e| e.to_string_lossy().to_uppercase()).unwrap_or_default(),
         sample_rate: None,
@@ -407,7 +496,7 @@ fn fallback_song(p: &Path, origin: Origin, size: u64, mtime: i64, added: i64) ->
     }
 }
 
-fn read_song(p: &Path, origin: Origin, size: u64, mtime: i64, added: i64) -> Result<Song> {
+fn read_song(p: &Path, origin: Origin, size: u64, mtime: i64, ctime: i64, ctime_nsec: i64, added: i64) -> Result<Song> {
     // Relaxed: a malformed frame (e.g. a date with "_" in it) is skipped,
     // not the whole tag.
     let opts = lofty::config::ParseOptions::new().parsing_mode(lofty::config::ParsingMode::Relaxed);
@@ -415,7 +504,7 @@ fn read_song(p: &Path, origin: Origin, size: u64, mtime: i64, added: i64) -> Res
         .and_then(|pr| pr.options(opts).read())
         .with_context(|| format!("reading {}", p.display()))?;
     let props = tf.properties();
-    let mut song = fallback_song(p, origin, size, mtime, added);
+    let mut song = fallback_song(p, origin, size, mtime, ctime, ctime_nsec, added);
     song.seconds = props.duration().as_secs_f64();
     song.sample_rate = props.sample_rate();
     song.bitrate = props.audio_bitrate();
@@ -444,11 +533,23 @@ fn read_song(p: &Path, origin: Origin, size: u64, mtime: i64, added: i64) -> Res
         song.album_artist = tag.get_string(ItemKey::AlbumArtist).map(|s| s.trim().to_string()).unwrap_or_default();
         song.track = tag.track();
         song.disc = tag.disk();
-        song.genre = text(tag.genre());
+        let mut genres = Vec::new();
+        for g in tag.get_strings(ItemKey::Genre) {
+            for part in g.split([';', '\0']) {
+                let p = part.trim();
+                if !p.is_empty() && !genres.iter().any(|x: &String| x.eq_ignore_ascii_case(p)) {
+                    genres.push(p.to_string());
+                }
+            }
+        }
+        song.genre = genres.first().cloned().or_else(|| text(tag.genre()));
+        song.genres = genres;
+        song.moods = crate::ai_enrich::read_moods(tag);
         let original = tag.get_string(ItemKey::OriginalReleaseDate).and_then(|d| d.get(..4)?.parse::<u16>().ok());
         song.year = original.or_else(|| tag.date().map(|d| d.year)).filter(|&y| y > 0);
         song.picture = !tag.pictures().is_empty();
     }
+    song.ai_enriched = crate::ai_enrich::read_ai_enriched_path(p, tf.file_type());
     // iTunes keeps the art outside the file sometimes; a picture in any tag counts.
     song.picture |= tf.tags().iter().any(|t| !t.pictures().is_empty());
     Ok(song)
@@ -496,7 +597,7 @@ mod tests {
     use super::*;
 
     fn song(path: &str, album: &str, album_artist: &str, artist: &str, track: u32, origin: Origin) -> Song {
-        let mut s = fallback_song(Path::new(path), origin, 1, 1, 1);
+        let mut s = fallback_song(Path::new(path), origin, 1, 1, 0, 0, 1);
         s.album = album.into();
         s.album_artist = album_artist.into();
         s.artist = artist.into();
