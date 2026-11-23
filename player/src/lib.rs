@@ -33,6 +33,18 @@ pub enum State {
     Paused,
 }
 
+/// What follows the end of a song.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Repeat {
+    /// The next song; stop after the last.
+    #[default]
+    Off,
+    /// The next song; after the last, the first again.
+    All,
+    /// The same song again.
+    One,
+}
+
 /// A snapshot for the UI.
 #[derive(Debug, Clone, Default)]
 pub struct Status {
@@ -129,9 +141,15 @@ impl Player {
     pub fn seek(&self, secs: f64) {
         self.send(Cmd::Seek(secs));
     }
-    /// Play the queue again from the top when it ends.
-    pub fn set_repeat(&self, on: bool) {
-        self.send(Cmd::Repeat(on));
+    /// Off, the whole queue again, or the same song again.
+    pub fn set_repeat(&self, r: Repeat) {
+        self.send(Cmd::Repeat(r));
+    }
+    /// The queue becomes the songs at these positions, in this order (left
+    /// out = taken out): reorder, remove, shuffle what's left. The song
+    /// heard carries on; if it was taken out, what followed it plays.
+    pub fn rearrange(&self, order: Vec<usize>) {
+        self.send(Cmd::Rearrange(order));
     }
     /// 0..1, applied as is (the UI picks the curve).
     pub fn set_volume(&self, v: f32) {
@@ -218,6 +236,46 @@ mod tests {
         let want: Vec<i32> = (1..=3000).chain((1..=2000).map(|n: i32| -n)).collect();
         assert_eq!(got, want, "every frame of both songs, back to back");
         assert_eq!(fake.opened.lock().unwrap().len(), 1, "one stream for both");
+    }
+
+    #[test]
+    fn rearranging_keeps_the_song_heard_and_plays_the_new_order() {
+        let paths: Vec<_> = (0..4).map(|k| tmp(&format!("re-{k}.wav"))).collect();
+        for (k, p) in paths.iter().enumerate() {
+            // Song k is k+1 seconds long at value 1000*(k+1).
+            write_wav(p, 8000, 2, 8000 * (k + 1), move |_| 1000 * (k as i16 + 1));
+        }
+        let fake = FakeBackend::default();
+        let p = Player::with_backend(Box::new(fake.clone()));
+        p.load(paths.clone(), 0);
+        wait(&p, "playing", |s| s.state == State::Playing && s.position > 0.0);
+        // Take song 1 out and swap 2 and 3: the queue is 0, 3, 2.
+        p.rearrange(vec![0, 3, 2]);
+        let s = wait(&p, "the new queue", |_| p.queue() == vec![paths[0].clone(), paths[3].clone(), paths[2].clone()]);
+        assert_eq!(s.index, Some(0), "still on the first song");
+        wait(&p, "the end", |s| s.state == State::Stopped);
+        let mut heard: Vec<i32> = left(&fake.played.lock().unwrap());
+        heard.dedup();
+        assert_eq!(heard, vec![1000, 4000, 3000], "song 1 was skipped, 3 came before 2");
+    }
+
+    #[test]
+    fn repeat_one_plays_the_song_again() {
+        let a = tmp("one-a.wav");
+        let b = tmp("one-b.wav");
+        write_wav(&a, 8000, 2, 400, |_| 10);
+        write_wav(&b, 8000, 2, 400, |_| 20);
+        let fake = FakeBackend::default();
+        let p = Player::with_backend(Box::new(fake.clone()));
+        p.set_repeat(Repeat::One);
+        p.load(vec![a, b], 0);
+        let t = Instant::now();
+        while fake.played.lock().unwrap().len() < 2 * 1200 && t.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        p.stop();
+        let got = left(&fake.played.lock().unwrap());
+        assert!(got.len() >= 1200 && got[..1200].iter().all(|&v| v == 10), "three times song a, never b");
     }
 
     #[test]
@@ -320,7 +378,7 @@ mod tests {
         write_wav(&b, 8000, 2, 400, |_| 6);
         let fake = FakeBackend::default();
         let p = Player::with_backend(Box::new(fake.clone()));
-        p.set_repeat(true);
+        p.set_repeat(Repeat::All);
         p.load(vec![a, b], 0);
         let t = Instant::now();
         while fake.played.lock().unwrap().len() < 2 * 2000 && t.elapsed() < Duration::from_secs(5) {
@@ -330,7 +388,7 @@ mod tests {
         assert!(got.len() >= 2000, "kept playing: {}", got.len());
         assert_eq!(&got[..1600], &[vec![5; 400], vec![6; 400], vec![5; 400], vec![6; 400]].concat()[..]);
         assert_eq!(p.status().state, State::Playing);
-        p.set_repeat(false);
+        p.set_repeat(Repeat::Off);
     }
 
     #[test]

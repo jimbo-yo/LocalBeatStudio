@@ -68,7 +68,7 @@ impl LibraryUi {
         theme::page_header(ui, "Explore", &subtitle, |ui| {
             // Right to left: Shuffle all, then Random album.
             if !lib.albums.is_empty() && theme::button(ui, Some(Icon::Disc), "Random album", Kind::Secondary).clicked() {
-                let a = random_index(lib.albums.len());
+                let a = (super::rand_u64() as usize) % lib.albums.len();
                 self.actions.push(Action::Play(lib.albums[a].songs.clone(), 0));
                 self.actions.push(Action::OpenAlbum(a));
             }
@@ -446,15 +446,5 @@ fn page_name(page: Page) -> &'static str {
         Page::Songs => "Songs",
         Page::Playlists => "Playlists",
     }
-}
-
-/// Good enough for "Random album": no dependency for one dice roll.
-fn random_index(n: usize) -> usize {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-    let mut x = nanos as u64 ^ 0x9E37_79B9_7F4A_7C15;
-    x ^= x >> 33;
-    x = x.wrapping_mul(0xff51_afd7_ed55_8ccd);
-    x ^= x >> 33;
-    (x % n.max(1) as u64) as usize
 }
 

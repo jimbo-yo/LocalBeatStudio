@@ -15,7 +15,7 @@ use localbeat_core::config::Settings;
 use localbeat_core::library::{Library, Origin, ScanStats, Song, norm};
 use localbeat_core::server_library::{self, Catalogue, Fetcher};
 use localbeat_engine::remove;
-use localbeat_player::{Player, State, Status};
+use localbeat_player::{Player, Repeat, State, Status};
 
 use crate::cover_cache::CoverCache;
 use crate::media_keys::SharedLibrary;
@@ -120,7 +120,10 @@ struct Session {
     index: usize,
     position: f64,
     shuffle: bool,
+    /// Repeat the queue (as saved before Repeat one existed).
     repeat: bool,
+    #[serde(default)]
+    repeat_one: bool,
 }
 
 /// The LocalBeat server, as the library sees it.
@@ -190,7 +193,11 @@ pub struct LibraryUi {
     /// Scroll the queue to the current song once after opening.
     scroll_to_now: bool,
     shuffle: bool,
-    repeat: bool,
+    repeat: Repeat,
+    /// The queue as it was before Shuffle was turned on (to put it back).
+    unshuffled: Option<Vec<PathBuf>>,
+    /// The Queue panel row being dragged.
+    queue_drag: Option<usize>,
     volume: f32,
     seek_preview: Option<f32>,
     sort: AlbumSort,
@@ -234,7 +241,12 @@ impl LibraryUi {
             // Back where we were, paused.
             player.cue(session.queue.clone(), session.index.min(session.queue.len() - 1), session.position);
         }
-        player.set_repeat(session.repeat);
+        let repeat = match (session.repeat_one, session.repeat) {
+            (true, _) => Repeat::One,
+            (false, true) => Repeat::All,
+            _ => Repeat::Off,
+        };
+        player.set_repeat(repeat);
         let shared_lib: SharedLibrary = Default::default();
         let media_err = crate::media_keys::spawn(player.clone(), shared_lib.clone(), settings.cache_dir.clone(), ctx.clone(), hwnd).err();
         let mut me = LibraryUi {
@@ -270,7 +282,9 @@ impl LibraryUi {
             details: None,
             scroll_to_now: false,
             shuffle: session.shuffle,
-            repeat: session.repeat,
+            repeat,
+            unshuffled: None,
+            queue_drag: None,
             volume,
             seek_preview: None,
             sort: AlbumSort::Artist,
@@ -488,7 +502,8 @@ impl LibraryUi {
             index: s.index.unwrap_or(0),
             position: s.position,
             shuffle: self.shuffle,
-            repeat: self.repeat,
+            repeat: self.repeat == Repeat::All,
+            repeat_one: self.repeat == Repeat::One,
         };
         if self.saved.as_ref() == Some(&session) {
             return;
@@ -1794,12 +1809,9 @@ impl LibraryUi {
                 let row_w = 34.0 * 4.0 + 46.0 + 8.0 * 4.0;
                 ui.add_space((ui.available_width() - row_w) / 2.0);
                 ui.spacing_mut().item_spacing.x = 8.0;
-                let sh = theme::icon_button(ui, Icon::Shuffle, 34.0, "Shuffle (when you next play an album or list)");
-                if self.shuffle {
-                    ui.painter().circle_filled(sh.rect.center_bottom() + vec2(0.0, -2.0), 2.0, theme::prism_at(0.3));
-                }
+                let sh = theme::icon_button(ui, Icon::Shuffle, 34.0, if self.shuffle { "Shuffle: on" } else { "Shuffle: off" });
                 if sh.clicked() {
-                    self.shuffle = !self.shuffle;
+                    self.toggle_shuffle();
                 }
                 if theme::icon_button(ui, Icon::Prev, 34.0, "Previous (or start of the song)").clicked() {
                     self.player.prev();
@@ -1821,14 +1833,15 @@ impl LibraryUi {
                 if theme::icon_button(ui, Icon::Next, 34.0, "Next").clicked() {
                     self.player.next();
                 }
-                let rp = theme::icon_button(ui, Icon::Repeat, 34.0, "Repeat the queue");
-                if self.repeat {
-                    ui.painter().circle_filled(rp.rect.center_bottom() + vec2(0.0, -2.0), 2.0, theme::prism_at(0.3));
-                }
+                let rp = theme::icon_button(ui, Icon::Repeat, 34.0, match self.repeat {
+                    Repeat::Off => "Repeat: off",
+                    Repeat::All => "Repeat: all",
+                    Repeat::One => "Repeat: this song",
+                });
                 if rp.clicked() {
-                    self.repeat = !self.repeat;
-                    self.player.set_repeat(self.repeat);
+                    self.cycle_repeat();
                 }
+                self.mode_marks(ui, &sh, &rp, 2.0);
             });
             ui.horizontal(|ui| {
                 let dur = s.duration.unwrap_or(0.0);
@@ -1973,12 +1986,9 @@ impl LibraryUi {
                 let row_w = 40.0 * 4.0 + 64.0 + 14.0 * 4.0;
                 ui.add_space(((ui.available_width() - row_w) / 2.0).max(0.0));
                 ui.spacing_mut().item_spacing.x = 14.0;
-                let sh = theme::icon_button(ui, Icon::Shuffle, 40.0, "Shuffle (when you next play an album or list)");
-                if self.shuffle {
-                    ui.painter().circle_filled(sh.rect.center_bottom() + vec2(0.0, -2.0), 2.5, theme::prism_at(0.3));
-                }
+                let sh = theme::icon_button(ui, Icon::Shuffle, 40.0, if self.shuffle { "Shuffle: on" } else { "Shuffle: off" });
                 if sh.clicked() {
-                    self.shuffle = !self.shuffle;
+                    self.toggle_shuffle();
                 }
                 if theme::icon_button(ui, Icon::Prev, 40.0, "Previous (or start of the song)").clicked() {
                     self.player.prev();
@@ -1993,14 +2003,15 @@ impl LibraryUi {
                 if theme::icon_button(ui, Icon::Next, 40.0, "Next").clicked() {
                     self.player.next();
                 }
-                let rp = theme::icon_button(ui, Icon::Repeat, 40.0, "Repeat the queue");
-                if self.repeat {
-                    ui.painter().circle_filled(rp.rect.center_bottom() + vec2(0.0, -2.0), 2.5, theme::prism_at(0.3));
-                }
+                let rp = theme::icon_button(ui, Icon::Repeat, 40.0, match self.repeat {
+                    Repeat::Off => "Repeat: off",
+                    Repeat::All => "Repeat: all",
+                    Repeat::One => "Repeat: this song",
+                });
                 if rp.clicked() {
-                    self.repeat = !self.repeat;
-                    self.player.set_repeat(self.repeat);
+                    self.cycle_repeat();
                 }
+                self.mode_marks(ui, &sh, &rp, 2.5);
             });
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -2159,27 +2170,51 @@ impl LibraryUi {
         });
     }
 
-    /// The Queue panel (right side).
+    /// The Queue panel (right side): the song playing, then what's next.
+    /// Header like the phone's: "N songs · m:ss left · shuffled", Save, Clear.
+    /// Drag a row to move it; × takes it out.
     pub fn queue_panel(&mut self, ui: &mut egui::Ui) {
         let p = theme::pal(ui);
+        let queue = self.player.queue();
+        let cur = self.last.index.unwrap_or(0).min(queue.len().saturating_sub(1));
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Queue").font(theme::bold(20.0)).color(p.text));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if theme::icon_button(ui, Icon::Cross, 28.0, "Close").clicked() {
                     self.queue_open = false;
                 }
+                if queue.is_empty() {
+                    return;
+                }
+                if ui.add_enabled(queue.len() > cur + 1, egui::Button::new("Clear")).on_hover_text("Take out everything after the song playing").clicked() {
+                    self.player.rearrange((0..=cur).collect());
+                }
+                if self.playlists.available() && ui.button("Save").on_hover_text("Make a playlist of the queue").clicked() {
+                    let songs: Vec<usize> = queue.iter().filter_map(|q| self.by_path.get(q).copied()).collect();
+                    self.actions.push(Action::NewPlaylist(songs));
+                }
             });
         });
-        ui.add_space(6.0);
-        let queue = self.player.queue();
         let Some(lib) = self.lib.clone() else { return };
         if queue.is_empty() {
+            ui.add_space(6.0);
             ui.label(egui::RichText::new("Nothing queued. Play an album, or right-click one and choose Add to queue.").color(p.dim));
             return;
         }
-        let cur = self.last.index.unwrap_or(0);
+        let seconds = |path: &PathBuf| self.by_path.get(path).map_or(0.0, |&si| lib.songs[si].seconds);
+        let left = queue[cur + 1..].iter().map(seconds).sum::<f64>() + (seconds(&queue[cur]) - self.last.position).max(0.0);
+        let mut line = format!("{} · {} left", if queue.len() == 1 { "1 song".into() } else { format!("{} songs", queue.len()) }, mmss(left));
+        if self.shuffle {
+            line.push_str(" · shuffled");
+        }
+        ui.label(egui::RichText::new(line).color(p.dim));
+        ui.add_space(6.0);
         let mut jump = None;
+        let mut remove = None;
+        let mut moved = None;
+        let row_h = 42.0;
         egui::ScrollArea::vertical().id_salt("queue").auto_shrink([false, false]).show(ui, |ui| {
+            let mut rows: Vec<(usize, Rect)> = Vec::new();
             for (i, path) in queue.iter().enumerate().skip(cur) {
                 if i == cur {
                     theme::section_label(ui, "Now playing");
@@ -2191,29 +2226,157 @@ impl LibraryUi {
                     Some(&si) => (lib.songs[si].title.clone(), lib.songs[si].artist.clone()),
                     None => (path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), String::new()),
                 };
-                let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 42.0), Sense::click());
-                if i == cur {
+                let sense = if i == cur { Sense::click() } else { Sense::click_and_drag() };
+                let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), sense);
+                rows.push((i, rect));
+                let dragging = self.queue_drag == Some(i);
+                if i == cur || dragging {
                     ui.painter().rect_filled(rect, 8.0, p.card_hover);
                 } else if resp.hovered() {
                     ui.painter().rect_filled(rect, 8.0, p.card);
                 }
-                let w = rect.width() - 20.0;
+                let x_rect = Rect::from_center_size(rect.right_center() - vec2(18.0, 0.0), Vec2::splat(24.0));
+                let show_x = i != cur && (resp.hovered() || ui.rect_contains_pointer(x_rect)) && self.queue_drag.is_none();
+                let w = rect.width() - if show_x { 46.0 } else { 20.0 };
                 let t = theme::one_line(ui, &title, if i == cur { theme::medium(14.0) } else { egui::FontId::proportional(14.0) }, p.text, w);
                 ui.painter().galley(rect.left_top() + vec2(10.0, 4.0), t, p.text);
                 let a = theme::one_line(ui, &artist, egui::FontId::proportional(12.5), p.dim, w);
                 ui.painter().galley(rect.left_top() + vec2(10.0, 23.0), a, p.dim);
-                if resp.clicked() && i != cur {
+                if show_x {
+                    let x = ui.interact(x_rect, ui.scope_id().with(("queue-x", i)), Sense::click());
+                    theme::paint_icon(ui.painter(), x_rect.shrink(6.0), Icon::Cross, if x.hovered() { p.text } else { p.dim });
+                    if x.on_hover_text("Remove from queue").clicked() {
+                        remove = Some(i);
+                    }
+                }
+                if resp.drag_started() {
+                    self.queue_drag = Some(i);
+                }
+                if resp.clicked() && i != cur && remove.is_none() {
                     jump = Some(i);
                 }
+                resp.context_menu(|ui| {
+                    if i != cur && ui.button("Play next").clicked() {
+                        moved = Some((i, cur + 1));
+                        ui.close();
+                    }
+                    if i != cur && ui.button("Remove from queue").clicked() {
+                        remove = Some(i);
+                        ui.close();
+                    }
+                });
                 if i > cur + 300 {
                     ui.label(egui::RichText::new(format!("and {} more", queue.len() - i)).color(p.faint));
                     break;
                 }
             }
+            // Dragging: a line where the row would land; let go to move it there.
+            if let Some(from) = self.queue_drag {
+                if let Some(pos) = ui.ctx().pointer_interact_pos() {
+                    let to = rows.iter().filter(|(i, r)| *i > cur && pos.y > r.center().y).map(|(i, _)| *i).max().map_or(cur + 1, |i| i + 1);
+                    let y = rows.iter().find(|(i, _)| *i == to).map_or_else(|| rows.last().map_or(0.0, |(_, r)| r.bottom()), |(_, r)| r.top());
+                    let x = rows.first().map_or(ui.max_rect().x_range(), |(_, r)| r.x_range());
+                    ui.painter().hline(x, y, egui::Stroke::new(2.0, theme::prism_at(0.3)));
+                    if ui.input(|i| i.pointer.any_released()) {
+                        moved = Some((from, to));
+                        self.queue_drag = None;
+                    }
+                } else if ui.input(|i| i.pointer.any_released()) {
+                    self.queue_drag = None;
+                }
+            }
         });
-        if let Some(i) = jump {
+        if let Some(i) = remove {
+            self.player.rearrange((0..queue.len()).filter(|&k| k != i).collect());
+        } else if let Some((from, to)) = moved {
+            self.player.rearrange(moved_order(queue.len(), from, to));
+        } else if let Some(i) = jump {
             self.player.jump(i);
         }
+    }
+
+    /// Shuffle on: what's after the song playing is shuffled now (and what
+    /// you play next starts shuffled). Off: back in the order it was in.
+    fn toggle_shuffle(&mut self) {
+        self.shuffle = !self.shuffle;
+        let queue = self.player.queue();
+        let cur = self.last.index.unwrap_or(0);
+        if queue.len() <= cur + 1 {
+            self.unshuffled = None;
+            return;
+        }
+        let mut order: Vec<usize> = (0..queue.len()).collect();
+        if self.shuffle {
+            self.unshuffled = Some(queue.clone());
+            shuffle(&mut order[cur + 1..]);
+        } else if let Some(before) = self.unshuffled.take() {
+            // Each song's place in the order before shuffling (songs added
+            // since go last, as they are).
+            let mut used = vec![false; before.len()];
+            let mut rank = |path: &PathBuf| {
+                let k = before.iter().enumerate().position(|(k, b)| !used[k] && b == path);
+                k.inspect(|&k| used[k] = true).unwrap_or(usize::MAX)
+            };
+            let mut rest: Vec<(usize, usize)> = (cur + 1..queue.len()).map(|i| (rank(&queue[i]), i)).collect();
+            rest.sort_by_key(|&(r, i)| (r, i));
+            order.truncate(cur + 1);
+            order.extend(rest.into_iter().map(|(_, i)| i));
+        } else {
+            return;
+        }
+        self.player.rearrange(order);
+    }
+
+    /// Repeat cycles off → all → one, as on the phone.
+    fn cycle_repeat(&mut self) {
+        self.repeat = match self.repeat {
+            Repeat::Off => Repeat::All,
+            Repeat::All => Repeat::One,
+            Repeat::One => Repeat::Off,
+        };
+        self.player.set_repeat(self.repeat);
+    }
+
+    /// Marks the shuffle and repeat buttons: a dot when on, "1" for repeat one.
+    fn mode_marks(&self, ui: &egui::Ui, shuffle: &egui::Response, repeat: &egui::Response, r: f32) {
+        let c = theme::prism_at(0.3);
+        if self.shuffle {
+            ui.painter().circle_filled(shuffle.rect.center_bottom() + vec2(0.0, -2.0), r, c);
+        }
+        match self.repeat {
+            Repeat::Off => {}
+            Repeat::All => {
+                ui.painter().circle_filled(repeat.rect.center_bottom() + vec2(0.0, -2.0), r, c);
+            }
+            Repeat::One => {
+                ui.painter().text(repeat.rect.right_top() + vec2(-6.0, 7.0), egui::Align2::CENTER_CENTER, "1", theme::bold(10.0), c);
+            }
+        }
+    }
+}
+
+/// Positions 0..n with the song at `from` moved so it lands before what was at `to`.
+fn moved_order(n: usize, from: usize, to: usize) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..n).collect();
+    if from >= n {
+        return order;
+    }
+    let item = order.remove(from);
+    let to = if to > from { to - 1 } else { to }.min(order.len());
+    order.insert(to, item);
+    order
+}
+
+#[cfg(test)]
+mod queue_tests {
+    use super::moved_order;
+
+    #[test]
+    fn moving_a_queue_row() {
+        assert_eq!(moved_order(5, 3, 1), [0, 3, 1, 2, 4], "up");
+        assert_eq!(moved_order(5, 1, 4), [0, 2, 3, 1, 4], "down: lands before what was at 4");
+        assert_eq!(moved_order(5, 1, 5), [0, 2, 3, 4, 1], "to the end");
+        assert_eq!(moved_order(3, 1, 1), [0, 1, 2], "onto itself");
     }
 }
 
