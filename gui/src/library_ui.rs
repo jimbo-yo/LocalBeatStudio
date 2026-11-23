@@ -36,6 +36,10 @@ pub enum Page {
     Playlists,
 }
 
+/// How often the music server's catalogue is fetched again while connected
+/// (new rips show without a rescan; the phone does the same).
+const CATALOGUE_REFRESH: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
 /// How long to wait before asking a music server that didn't answer again.
 const SERVER_RETRY: std::time::Duration = std::time::Duration::from_secs(60);
 
@@ -158,6 +162,8 @@ pub struct LibraryUi {
     server_retry: Option<std::time::Instant>,
     /// The scan running is such a retry (its "Library:" line isn't logged).
     retrying: bool,
+    /// While connected: when to fetch the server's catalogue again.
+    catalogue_check: Option<std::time::Instant>,
     pub lib: Option<Arc<Library>>,
     by_path: HashMap<PathBuf, usize>,
     /// Lower-case "title artist album" per song, and "title artist" per album.
@@ -271,6 +277,7 @@ impl LibraryUi {
             genres_by_size: true,
             server_retry: None,
             retrying: false,
+            catalogue_check: None,
             album: None,
             album_from_search: None,
             artist: None,
@@ -306,6 +313,31 @@ impl LibraryUi {
         };
         me.rescan(ctx);
         me
+    }
+
+    /// Fetches the music server's catalogue again without rescanning this
+    /// computer's folders. Only a changed catalogue becomes a new library
+    /// (so covers and the open page stay put, and the log stays quiet);
+    /// a failed fetch waits for the next turn.
+    fn refresh_catalogue(&mut self, ctx: &egui::Context) {
+        let Some(lib) = self.lib.clone() else { return };
+        let (tx, rx) = channel();
+        let (settings, ctx, shared) = (self.settings.clone(), ctx.clone(), self.shared_lib.clone());
+        std::thread::spawn(move || {
+            let Some((sub, url)) = server_library::client(&settings) else { return };
+            let Ok(fresh) = Catalogue::fetch(&settings, &sub, &url) else { return };
+            if Catalogue::load(&settings, &url).is_some_and(|k| k.same_songs(&fresh)) {
+                return;
+            }
+            let _ = fresh.save(&settings);
+            let songs: Vec<Song> = lib.songs.iter().filter(|s| s.origin != Origin::Server).cloned().chain(fresh.songs.iter().cloned()).collect();
+            let mut st = ScanStats::default();
+            let new = Arc::new(Library::build(songs, &mut st));
+            *shared.lock().unwrap() = Some(new.clone());
+            let _ = tx.send(Ok((new, st, ServerView::Connected { songs: fresh.songs.len() })));
+            ctx.request_repaint();
+        });
+        self.scan = Some(rx);
     }
 
     /// Scans the library again in the background (after a rip, or asked).
@@ -445,6 +477,7 @@ impl LibraryUi {
             if self.server_retry.is_none() {
                 self.retrying = false;
             }
+            self.catalogue_check = matches!(self.server, ServerView::Connected { .. }).then(|| std::time::Instant::now() + CATALOGUE_REFRESH);
         }
         if finished && std::mem::take(&mut self.rescan_wanted) {
             self.rescan(ctx);
@@ -459,6 +492,16 @@ impl LibraryUi {
                 self.server_retry = None;
                 self.retrying = true;
                 self.rescan(ctx);
+            } else {
+                ctx.request_repaint_after(at - now);
+            }
+        } else if let Some(at) = self.catalogue_check
+            && self.scan.is_none()
+        {
+            let now = std::time::Instant::now();
+            if now >= at {
+                self.catalogue_check = None;
+                self.refresh_catalogue(ctx);
             } else {
                 ctx.request_repaint_after(at - now);
             }
