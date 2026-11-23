@@ -322,6 +322,8 @@ pub enum Icon {
     Artists,
     Songs,
     Clock,
+    /// A compass: Explore.
+    Explore,
     Plus,
     Lock,
     Info,
@@ -499,6 +501,11 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
         Icon::Clock => {
             painter.circle_stroke(c, 0.75 * s, stroke);
             painter.add(Shape::line(vec![c + vec2(0.0, -0.45 * s), c, c + vec2(0.35 * s, 0.2 * s)], stroke));
+        }
+        Icon::Explore => {
+            painter.circle_stroke(c, 0.75 * s, stroke);
+            let (n, e) = (vec2(0.28 * s, -0.42 * s), vec2(0.16 * s, 0.11 * s));
+            painter.add(Shape::convex_polygon(vec![c + n, c + e, c - n, c - e], color, Stroke::NONE));
         }
         Icon::Plus => {
             painter.line_segment([c + vec2(-0.6 * s, 0.0), c + vec2(0.6 * s, 0.0)], Stroke::new(w * 1.2, color));

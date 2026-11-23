@@ -21,8 +21,13 @@ use crate::cover_cache::CoverCache;
 use crate::media_keys::SharedLibrary;
 use crate::theme::{self, Icon, Kind};
 
+mod explore;
+pub use explore::{GroupKind, GroupView};
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Page {
+    /// Shuffle all, Random album, Recently added, Moods, Genres, Decades.
+    Explore,
     Albums,
     Recent,
     Artists,
@@ -69,6 +74,8 @@ enum Action {
     Append(Vec<usize>),
     OpenAlbum(usize),
     OpenArtist(usize),
+    /// A genre, mood or decade page.
+    OpenGroup(GroupView),
     OpenFolder(PathBuf),
     /// Add these songs to the playlist with this ID.
     AddToPlaylist(String, Vec<usize>),
@@ -133,6 +140,12 @@ type ScanResult = Result<(Arc<Library>, ScanStats, ServerView), String>;
 
 pub struct LibraryUi {
     settings: Settings,
+    /// Genres, moods and decades of `lib` (keyed by its address).
+    browse: Option<(usize, Arc<localbeat_core::browse::Browse>)>,
+    /// The genre, mood or decade page open, if any (over `page`).
+    pub group: Option<GroupView>,
+    /// Explore's genres by size (else A–Z).
+    genres_by_size: bool,
     pub lib: Option<Arc<Library>>,
     by_path: HashMap<PathBuf, usize>,
     /// Lower-case "title artist album" per song, and "title artist" per album.
@@ -231,7 +244,10 @@ impl LibraryUi {
             covers: CoverCache::new(settings.clone(), ctx.clone()),
             player,
             shared_lib,
-            page: Page::Albums,
+            page: Page::Explore,
+            browse: None,
+            group: None,
+            genres_by_size: true,
             album: None,
             album_from_search: None,
             artist: None,
@@ -589,7 +605,16 @@ impl LibraryUi {
                     let q = std::mem::take(&mut self.search);
                     self.album_from_search = (!q.trim().is_empty()).then_some(q);
                 }
+                Action::OpenGroup(v) => {
+                    self.now_open = false;
+                    self.album = None;
+                    self.album_from_search = None;
+                    self.search.clear();
+                    self.page = Page::Explore;
+                    self.group = Some(v);
+                }
                 Action::OpenArtist(i) => {
+                    self.group = None;
                     self.now_open = false;
                     self.artist = Some(i);
                     self.page = Page::Artists;
@@ -716,8 +741,11 @@ impl LibraryUi {
             self.search_page(ui, &lib);
         } else if let Some(a) = self.album.filter(|&a| a < lib.albums.len()) {
             self.album_page(ui, &lib, a);
+        } else if let Some(g) = self.group.clone() {
+            self.group_page(ui, &lib, g);
         } else {
             match self.page {
+                Page::Explore => self.explore_page(ui, &lib),
                 Page::Albums => {
                     let mut order: Vec<usize> = (0..lib.albums.len()).collect();
                     match self.sort {
@@ -749,6 +777,11 @@ impl LibraryUi {
                     self.grid(ui, &lib, &order, "albums");
                 }
                 Page::Recent => {
+                    // Opened from Explore's "See all".
+                    let p = theme::pal(ui);
+                    if ui.add(egui::Label::new(egui::RichText::new("‹  Explore").color(p.dim)).sense(Sense::click())).clicked() {
+                        self.page = Page::Explore;
+                    }
                     theme::page_header(ui, "Recently added", "Newest arrivals first: fresh rips and new files", |_| {});
                     let order = lib.recently_added(60);
                     self.grid(ui, &lib, &order, "recent");
@@ -1374,8 +1407,18 @@ impl LibraryUi {
         mesh.add_triangle(1, 3, 2);
         ui.painter().add(egui::Shape::mesh(mesh));
 
+        let group_name = self.group.clone().and_then(|g| {
+            let b = self.browse(lib);
+            match g.kind {
+                GroupKind::Genre => b.genre(&g.key).map(|x| x.group.name.clone()),
+                GroupKind::Mood => b.mood(&g.key).map(|x| x.name.clone()),
+                GroupKind::Decade => b.decade(&g.key).map(|x| x.name.clone()),
+            }
+        });
         let back = match (&self.album_from_search, self.page) {
             (Some(q), _) => format!("Search “{}”", q.trim()),
+            (None, _) if group_name.is_some() => group_name.clone().unwrap_or_default(),
+            (None, Page::Explore) => "Explore".into(),
             (None, Page::Recent) => "Recently added".into(),
             (None, Page::Artists) => "Artists".into(),
             (None, Page::Songs) => "Songs".into(),
@@ -1425,11 +1468,11 @@ impl LibraryUi {
                 if let Some(y) = album.year {
                     meta.push(y.to_string());
                 }
-                if let Some(g) = &album.genre {
-                    meta.push(g.clone());
-                }
                 meta.push(format!("{} songs, {}", album.songs.len(), long_duration(album.seconds)));
                 ui.label(egui::RichText::new(meta.join(" · ")).color(p.dim));
+                // Genre, mood and decade: each opens its page.
+                ui.add_space(6.0);
+                self.tag_chips(ui, lib, a);
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     if theme::button(ui, Some(Icon::Play), "Play", Kind::Primary).clicked() {
@@ -1577,11 +1620,12 @@ impl LibraryUi {
             self.playlists.lists.iter().filter(|pl| hit(&norm(&pl.name))).map(|pl| (pl.id.clone(), pl.name.clone())).collect();
         let subtitle = format!("{} playlists · {} artists · {} albums · {} songs", playlists.len(), artists.len(), albums.len(), songs.len());
         theme::page_header(ui, &format!("“{}”", self.search.trim()), &subtitle, |_| {});
-        if playlists.is_empty() && artists.is_empty() && albums.is_empty() && songs.is_empty() {
+        // The phone's order: Moods, Genres, Decades, Playlists, Artists, Albums, Songs.
+        let tags = self.search_chips(ui, lib, &hit);
+        if tags == 0 && playlists.is_empty() && artists.is_empty() && albums.is_empty() && songs.is_empty() {
             ui.label(egui::RichText::new("Nothing matches.").color(p.dim));
             return;
         }
-        // The phone's order: Playlists, Artists, Albums, Songs.
         if !playlists.is_empty() {
             ui.horizontal_wrapped(|ui| {
                 for (id, name) in &playlists {
@@ -1999,7 +2043,7 @@ impl LibraryUi {
     }
 
     /// The song's details: what the library knows, plus extra tags.
-    fn now_details(&mut self, ui: &mut egui::Ui, x: &Song, _si: usize) {
+    fn now_details(&mut self, ui: &mut egui::Ui, x: &Song, si: usize) {
         let p = theme::pal(ui);
         if self.details.as_ref().map(|(path, _)| path) != Some(&x.path) {
             self.details = Some((x.path.clone(), song_details(&x.path)));
@@ -2046,7 +2090,12 @@ impl LibraryUi {
             }
         }
         add("File", x.path.display().to_string());
+        let chips = self.lib.clone().zip(self.album_of(si));
         egui::ScrollArea::vertical().id_salt("now-details").auto_shrink([false, false]).show(ui, |ui| {
+            if let Some((lib, a)) = &chips {
+                self.tag_chips(ui, lib, *a);
+                ui.add_space(10.0);
+            }
             egui::Grid::new("details").num_columns(2).spacing([18.0, 9.0]).show(ui, |ui| {
                 for (k, v) in &rows {
                     ui.label(egui::RichText::new(k).color(p.faint));

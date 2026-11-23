@@ -12,6 +12,7 @@ pub mod library;
 pub mod acoustid;
 pub mod album_check;
 pub mod audio_source;
+pub mod browse;
 pub mod config;
 pub mod cover;
 pub mod enrich;

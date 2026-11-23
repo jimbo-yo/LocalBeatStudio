@@ -584,8 +584,9 @@ impl App {
                 }
                 let lib_counts = self.library.lib.as_ref().map(|l| (l.albums.len(), l.artists.len(), l.songs.len()));
                 for (page, icon, label, count) in [
+                    // Recently added is part of Explore (LocalBeat docs/ui-refinement.md).
+                    (library_ui::Page::Explore, theme::Icon::Explore, "Explore", None),
                     (library_ui::Page::Albums, theme::Icon::Albums, "Albums", lib_counts.map(|c| c.0)),
-                    (library_ui::Page::Recent, theme::Icon::Clock, "Recently added", None),
                     (library_ui::Page::Artists, theme::Icon::Artists, "Artists", lib_counts.map(|c| c.1)),
                     (library_ui::Page::Songs, theme::Icon::Songs, "Songs", lib_counts.map(|c| c.2)),
                     // The music server's playlists (shared with the phone): with a server login only.
@@ -594,12 +595,14 @@ impl App {
                     if page == library_ui::Page::Playlists && !self.library.playlists.available() {
                         continue;
                     }
-                    let selected = self.tab == Tab::Library && self.library.page == page && self.library.search.is_empty() && !self.library.now_open;
+                    let shown = if self.library.page == library_ui::Page::Recent { library_ui::Page::Explore } else { self.library.page };
+                    let selected = self.tab == Tab::Library && shown == page && self.library.search.is_empty() && !self.library.now_open;
                     let n = count.map(|n| n.to_string()).unwrap_or_default();
                     let status = (!n.is_empty()).then_some((n.as_str(), p.faint));
                     if theme::nav_item(ui, icon, label, selected, status).clicked() {
                         self.tab = Tab::Library;
                         self.library.page = page;
+                        self.library.group = None;
                         self.library.now_open = false;
                         self.library.album = None;
                         self.library.album_from_search = None;
