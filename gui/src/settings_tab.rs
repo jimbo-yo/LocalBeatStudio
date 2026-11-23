@@ -358,7 +358,7 @@ impl SettingsTab {
         let p = theme::pal(ui);
         theme::card(ui).show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(RichText::new("The LocalBeat server").font(theme::medium(16.0)).color(p.text));
+            ui.label(RichText::new("Music server").font(theme::medium(16.0)).color(p.text));
             ui.add_space(6.0);
             let joined = prefs.role.is_some() && !prefs.server.login.is_empty();
             if let Some(busy) = self.busy {

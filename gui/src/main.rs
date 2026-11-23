@@ -654,12 +654,12 @@ impl App {
                 if theme::nav_item(ui, theme::Icon::Phone, "Phone", self.tab == Tab::Phone, None).clicked() {
                     self.tab = Tab::Phone;
                 }
-                // Rips going to the LocalBeat server: how many wait.
+                // Rips going to the music server: how many wait.
                 let push = self.pusher.status();
                 let n = if push.sending { "…".to_string() } else { push.waiting.to_string() };
                 let colour = if push.failed > 0 { theme::WARN } else { p.faint };
                 let status = (push.enabled && (push.waiting > 0 || push.sending)).then_some((n.as_str(), colour));
-                let hint = if push.enabled { push.line.clone() } else { "The LocalBeat server: not set up on this computer".to_string() };
+                let hint = if push.enabled { push.line.clone() } else { "Music server: not set up on this computer".to_string() };
                 if theme::nav_item(ui, theme::Icon::Server, "Server", self.tab == Tab::Server, status).on_hover_text(hint).clicked() {
                     self.tab = Tab::Server;
                 }
@@ -1266,7 +1266,7 @@ impl App {
         }
         if self.tab == Tab::Server {
             egui::CentralPanel::default().frame(page).show(ui, |ui| {
-                theme::page_header(ui, "Server", "Albums ripped here go to the LocalBeat server when this computer is on the home network", |_| {});
+                theme::page_header(ui, "Server", "Albums ripped here go to the music server when this computer is on the home network", |_| {});
                 self.server.ui(ui, &self.settings, &mut self.prefs, &self.pusher);
             });
             self.choice_window(ctx);
@@ -1274,7 +1274,7 @@ impl App {
         }
         if self.tab == Tab::Settings {
             egui::CentralPanel::default().frame(page).show(ui, |ui| {
-                theme::page_header(ui, "Settings", "This computer and the LocalBeat server", |_| {});
+                theme::page_header(ui, "Settings", "This computer and the music server", |_| {});
                 self.settings_page.ui(ui, &self.settings, &mut self.prefs, &mut self.phone);
             });
             self.choice_window(ctx);
