@@ -3,6 +3,9 @@
 //! - only new or changed FLACs are converted (copy newer than its FLAC = done);
 //! - tags are copied except ReplayGain/R128 (opusenc once turned those into a
 //!   +99.6 dB header gain), and the front cover is embedded;
+//! - a copy made from a FLAC (the verified CD-rip library) gets
+//!   `LOCALBEAT_SOURCE=CD`, which the phone app shows as its "CD rip" badge
+//!   (LocalBeat `GLOSSARY.md`; the phone can't read `.ripshelf-sync.json`);
 //! - cover.jpg/folder.jpg (and .png) are copied alongside;
 //! - written to `<name>.part` then renamed; all CPU cores.
 //!
@@ -132,11 +135,14 @@ fn is_up_to_date(input: &Path, out: &Path) -> bool {
     }
 }
 
-/// Tags not copied to the phone copy.
+/// Tags not copied to the phone copy (`LOCALBEAT_SOURCE` is set here, never copied).
 fn skip_tag(name: &str) -> bool {
     let n = name.to_ascii_uppercase();
-    n.starts_with("REPLAYGAIN_") || n.starts_with("R128_") || n == "METADATA_BLOCK_PICTURE"
+    n.starts_with("REPLAYGAIN_") || n.starts_with("R128_") || n == "METADATA_BLOCK_PICTURE" || n == SOURCE_TAG
 }
+
+/// Marks a phone copy made from a verified CD rip (a FLAC): `LOCALBEAT_SOURCE=CD`.
+pub const SOURCE_TAG: &str = "LOCALBEAT_SOURCE";
 
 fn is_flac(p: &Path) -> bool {
     p.extension().is_some_and(|e| e.eq_ignore_ascii_case("flac"))
@@ -153,7 +159,10 @@ pub fn convert_file(input: &Path, out: &Path, bitrate_kbps: u32) -> Result<()> {
     let (tags, embedded, kbps) = if is_flac(input) {
         let pictures = flacfile::read_pictures(input).unwrap_or_default();
         let cover = pictures.iter().find(|p| p.kind == 3).or(pictures.first()).map(|p| p.data.clone());
-        (flacfile::read_tags(input)?.tags, cover, bitrate_kbps)
+        let mut tags = flacfile::read_tags(input)?.tags;
+        tags.retain(|(k, _)| !skip_tag(k));
+        tags.push((SOURCE_TAG.to_string(), "CD".to_string()));
+        (tags, cover, bitrate_kbps)
     } else {
         if audio_source::is_protected(input) {
             bail!("{} is DRM-protected (iTunes .m4p) and can't be converted", input.display());
@@ -246,7 +255,8 @@ fn encode(input: &Path, tmp: &Path, tags: &[(String, String)], cover: Option<&[u
         if comments.0.is_null() {
             bail!("libopusenc: out of memory");
         }
-        for (k, v) in tags.iter().filter(|(k, _)| !skip_tag(k)) {
+        let source = tags.iter().filter(|(k, _)| k == SOURCE_TAG);
+        for (k, v) in tags.iter().filter(|(k, _)| !skip_tag(k)).chain(source) {
             let (Ok(k), Ok(v)) = (CString::new(k.as_str()), CString::new(v.as_str())) else { continue };
             ope_check(ope::ope_comments_add(comments.0, k.as_ptr(), v.as_ptr()), "adding a tag")?;
         }
@@ -347,6 +357,7 @@ mod tests {
         let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
         assert!(has("TITLE=Sittin’ on Top".as_bytes()));
         assert!(!has(b"REPLAYGAIN"), "gain tags must not be copied");
+        assert!(has(b"LOCALBEAT_SOURCE=CD"), "a FLAC's copy is marked as a CD rip");
         assert!(has(b"METADATA_BLOCK_PICTURE"), "cover embedded");
         assert!(phone.join("Björk").join("Who？").join("cover.png").exists());
 
