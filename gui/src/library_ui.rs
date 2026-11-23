@@ -36,6 +36,9 @@ pub enum Page {
     Playlists,
 }
 
+/// How long to wait before asking a music server that didn't answer again.
+const SERVER_RETRY: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// LOCALBEAT_DEMO=playlist opens the first playlist once the list is fetched.
 const DEMO_FIRST_PLAYLIST: &str = "\u{0}first";
 
@@ -146,6 +149,12 @@ pub struct LibraryUi {
     pub group: Option<GroupView>,
     /// Explore's genres by size (else A–Z).
     genres_by_size: bool,
+    /// While the music server isn't connected: when to look again. A slow
+    /// first answer (the tunnel waking up) left the library without the
+    /// server's albums until a restart.
+    server_retry: Option<std::time::Instant>,
+    /// The scan running is such a retry (its "Library:" line isn't logged).
+    retrying: bool,
     pub lib: Option<Arc<Library>>,
     by_path: HashMap<PathBuf, usize>,
     /// Lower-case "title artist album" per song, and "title artist" per album.
@@ -248,6 +257,8 @@ impl LibraryUi {
             browse: None,
             group: None,
             genres_by_size: true,
+            server_retry: None,
+            retrying: false,
             album: None,
             album_from_search: None,
             artist: None,
@@ -387,13 +398,16 @@ impl LibraryUi {
                         }
                         self.server = server;
                     }
-                    self.log.push(format!(
-                        "Library: {} songs, {} albums ({} files read{})",
-                        lib.songs.len(),
-                        lib.albums.len(),
-                        st.read,
-                        if st.failed.is_empty() { String::new() } else { format!(", {} unreadable", st.failed.len()) }
-                    ));
+                    // A retry while the server stays away changes nothing: no line for it.
+                    if !self.retrying || matches!(self.server, ServerView::Connected { .. }) {
+                        self.log.push(format!(
+                            "Library: {} songs, {} albums ({} files read{})",
+                            lib.songs.len(),
+                            lib.albums.len(),
+                            st.read,
+                            if st.failed.is_empty() { String::new() } else { format!(", {} unreadable", st.failed.len()) }
+                        ));
+                    }
                     self.by_path = lib.songs.iter().enumerate().map(|(i, s)| (s.path.clone(), i)).collect();
                     self.song_text = lib.songs.iter().map(|s| norm(&format!("{} {} {} {}", s.title, s.artist, s.album, s.album_artist))).collect();
                     self.album_text = lib.albums.iter().map(|a| norm(&format!("{} {}", a.title, a.artist))).collect();
@@ -411,8 +425,29 @@ impl LibraryUi {
                 Err(e) => self.log.push(format!("Library scan failed: {e}")),
             }
         }
+        if finished {
+            // Not connected: try again in a while (the phone does the same).
+            self.server_retry = matches!(self.server, ServerView::NotConnected(_)).then(|| std::time::Instant::now() + SERVER_RETRY);
+            if self.server_retry.is_none() {
+                self.retrying = false;
+            }
+        }
         if finished && std::mem::take(&mut self.rescan_wanted) {
             self.rescan(ctx);
+        } else if let Some(at) = self.server_retry
+            && self.scan.is_none()
+        {
+            let now = std::time::Instant::now();
+            if now >= at {
+                if !self.retrying {
+                    self.log.push(format!("Server: trying again every {} s", SERVER_RETRY.as_secs()));
+                }
+                self.server_retry = None;
+                self.retrying = true;
+                self.rescan(ctx);
+            } else {
+                ctx.request_repaint_after(at - now);
+            }
         }
         let s = self.player.status();
         // Volume may have been changed from the desktop's media widget.
