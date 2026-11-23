@@ -1,6 +1,6 @@
 //! The music side of the app: the library (Albums, Recently added, Artists,
 //! Songs, search, album pages), the now-playing bar on every page, and the
-//! Up Next queue. Playback is localbeat-player; the library comes from
+//! queue. Playback is localbeat-player; the library comes from
 //! core::library (scanned in the background, cached).
 
 use std::collections::HashMap;
@@ -54,7 +54,10 @@ enum NowTab {
 enum AlbumSort {
     Artist,
     Title,
+    /// Original release year, newest first.
     Year,
+    /// Newest arrival first.
+    Recent,
 }
 
 /// Something the user asked for that the page can't do while drawing.
@@ -162,7 +165,7 @@ pub struct LibraryUi {
     now_tab: NowTab,
     /// Extra tags of the song in Details, read when it changes.
     details: Option<(PathBuf, Vec<(String, String)>)>,
-    /// Scroll Up Next to the current song once after opening.
+    /// Scroll the queue to the current song once after opening.
     scroll_to_now: bool,
     shuffle: bool,
     repeat: bool,
@@ -655,8 +658,8 @@ impl LibraryUi {
 
     /// The extra items for song rows' menus: "Add to playlist" when this
     /// computer has a music server login; Move/Remove on a playlist's page.
-    fn row_menu(&self, in_playlist: Option<(usize, usize)>) -> RowMenu {
-        RowMenu { playlists: self.playlists.available().then(|| self.playlists.mine()), in_playlist }
+    fn row_menu(&self, in_playlist: Option<(usize, usize)>, go_to_album: bool) -> RowMenu {
+        RowMenu { playlists: self.playlists.available().then(|| self.playlists.mine()), in_playlist, go_to_album }
     }
 
     /// What a song row's menu asks for, as an action.
@@ -670,7 +673,25 @@ impl LibraryUi {
             MenuChoice::Remove(pos) => Action::PlaylistRemove(pos),
             MenuChoice::Move(pos, by) => Action::PlaylistMove(pos, by),
             MenuChoice::RemoveFromLibrary => Action::AskRemove(vec![si]),
+            MenuChoice::GoToAlbum => match self.album_of(si) {
+                Some(a) => Action::OpenAlbum(a),
+                None => return,
+            },
+            MenuChoice::GoToArtist => match self.album_of(si).and_then(|a| self.artist_of(a)) {
+                Some(i) => Action::OpenArtist(i),
+                None => return,
+            },
         });
+    }
+
+    /// The album a song (library index) is on.
+    fn album_of(&self, si: usize) -> Option<usize> {
+        self.lib.as_ref()?.albums.iter().position(|x| x.songs.contains(&si))
+    }
+
+    /// The artist an album is filed under.
+    fn artist_of(&self, a: usize) -> Option<usize> {
+        self.lib.as_ref()?.artists.iter().position(|x| x.albums.contains(&a))
     }
 
     /// The song playing now (library index).
@@ -703,19 +724,21 @@ impl LibraryUi {
                         AlbumSort::Artist => {}
                         AlbumSort::Title => order.sort_by_key(|&i| localbeat_core::library::sort_name(&lib.albums[i].title)),
                         AlbumSort::Year => order.sort_by_key(|&i| (std::cmp::Reverse(lib.albums[i].year), localbeat_core::library::sort_name(&lib.albums[i].artist))),
+                        AlbumSort::Recent => order.sort_by_key(|&i| std::cmp::Reverse(lib.albums[i].added)),
                     }
                     let mut subtitle = format!("{} albums · {} songs", lib.albums.len(), lib.songs.len());
                     match &self.server {
                         ServerView::Connected { .. } => {
                             let n = lib.albums.iter().filter(|a| a.origin == Origin::Server).count();
-                            subtitle.push_str(&format!(" · {n} from the server"));
+                            subtitle.push_str(&format!(" · {n} on the music server"));
                         }
-                        ServerView::NotConnected(_) => subtitle.push_str(" · server not connected"),
+                        ServerView::NotConnected(_) => subtitle.push_str(" · music server not connected"),
                         ServerView::Off => {}
                     }
                     let mut sort = self.sort;
                     theme::page_header(ui, "Albums", &subtitle, |ui| {
-                        for (s, label) in [(AlbumSort::Year, "Year"), (AlbumSort::Title, "Title"), (AlbumSort::Artist, "Artist")] {
+                        // Right to left: the header lays these out from the right edge.
+                        for (s, label) in [(AlbumSort::Recent, "Recently added"), (AlbumSort::Year, "Year"), (AlbumSort::Artist, "Artist"), (AlbumSort::Title, "Title")] {
                             if ui.selectable_label(sort == s, label).clicked() {
                                 sort = s;
                             }
@@ -893,7 +916,7 @@ impl LibraryUi {
             for k in range {
                 let (pos, si) = rows[k];
                 let s = &lib.songs[si];
-                let menu = self.row_menu(if pl.readonly { None } else { Some((pos, len)) });
+                let menu = self.row_menu(if pl.readonly { None } else { Some((pos, len)) }, true);
                 let album = if s.album.is_empty() { None } else { Some(s.album.as_str()) };
                 if let Some(click) = song_row(ui, s, k + 1, true, now == Some(si), playing, time, album, &menu) {
                     match click {
@@ -1267,8 +1290,9 @@ impl LibraryUi {
         }
         let songs = album.songs.clone();
         let dir = album.dirs.first().cloned();
+        let artist = lib.artists.iter().position(|x| x.albums.contains(&a));
         resp.context_menu(|ui| {
-            self.song_menu(ui, songs.clone(), dir.clone());
+            self.song_menu(ui, songs.clone(), dir.clone(), artist);
         });
     }
 
@@ -1286,16 +1310,14 @@ impl LibraryUi {
         }
     }
 
-    fn song_menu(&mut self, ui: &mut egui::Ui, songs: Vec<usize>, dir: Option<PathBuf>) {
-        if ui.button("Play").clicked() {
-            self.actions.push(Action::Play(songs.clone(), 0));
-            ui.close();
-        }
+    /// An album's right-click menu, in the suite's shared order: Play next, Add to
+    /// queue, Add to playlist…, Go to artist; then Studio's own.
+    fn song_menu(&mut self, ui: &mut egui::Ui, songs: Vec<usize>, dir: Option<PathBuf>, artist: Option<usize>) {
         if ui.button("Play next").clicked() {
             self.actions.push(Action::PlayNext(songs.clone()));
             ui.close();
         }
-        if ui.button("Add to Up Next").clicked() {
+        if ui.button("Add to queue").clicked() {
             self.actions.push(Action::Append(songs.clone()));
             ui.close();
         }
@@ -1315,6 +1337,13 @@ impl LibraryUi {
                 }
             });
         }
+        if let Some(i) = artist
+            && ui.button("Go to artist").clicked()
+        {
+            self.actions.push(Action::OpenArtist(i));
+            ui.close();
+        }
+        // Studio's own items, after the shared ones (LocalBeat docs/ui-refinement.md).
         ui.separator();
         if let Some(d) = dir
             && ui.button("Show in folder").clicked()
@@ -1373,11 +1402,11 @@ impl LibraryUi {
             ui.vertical(|ui| {
                 ui.add_space(26.0);
                 ui.horizontal(|ui| {
-                    if album.origin == Origin::Flac {
-                        theme::badge(ui, "CD RIP", theme::OK).on_hover_text("Ripped and verified with LocalBeat Studio");
+                    if !songs.is_empty() && songs.iter().all(|s| is_cd_rip(s)) {
+                        theme::badge(ui, "CD rip", theme::OK).on_hover_text("Ripped and verified with LocalBeat Studio");
                     }
                     if album.origin == Origin::Server {
-                        theme::badge(ui, "ON THE SERVER", theme::ACCENT).on_hover_text("Not on this computer: played from the LocalBeat server");
+                        theme::badge(ui, "On the music server", theme::ACCENT).on_hover_text("Not on this computer: played from the music server");
                     }
                     if let Some(f) = format_label(&songs) {
                         theme::badge(ui, &f, if songs.iter().all(|s| s.lossless()) { theme::prism_at(0.1) } else { p.dim });
@@ -1409,7 +1438,7 @@ impl LibraryUi {
                     if theme::button(ui, Some(Icon::Shuffle), "Shuffle", Kind::Secondary).clicked() {
                         self.actions.push(Action::Shuffle(album.songs.clone()));
                     }
-                    if theme::button(ui, Some(Icon::Plus), "Up Next", Kind::Secondary).on_hover_text("Add the album to the end of Up Next").clicked() {
+                    if theme::button(ui, Some(Icon::Plus), "Add to queue", Kind::Secondary).on_hover_text("Add the album to the end of the queue").clicked() {
                         self.actions.push(Action::Append(album.songs.clone()));
                     }
                     if let Some(d) = album.dirs.first() && theme::icon_button(ui, Icon::Folder, 32.0, "Show in folder").clicked() {
@@ -1428,7 +1457,7 @@ impl LibraryUi {
         let now = self.now();
         let time = ui.input(|i| i.time);
         let playing = self.last.state == State::Playing;
-        let menu = self.row_menu(None);
+        let menu = self.row_menu(None, false);
         egui::ScrollArea::vertical().id_salt(("album", a)).auto_shrink([false, false]).show(ui, |ui| {
             let mut disc = None;
             for (k, &si) in album.songs.iter().enumerate() {
@@ -1492,10 +1521,11 @@ impl LibraryUi {
             let songs: Vec<usize> = a.albums.iter().flat_map(|&al| lib.albums[al].songs.iter().copied()).collect();
             let subtitle = format!("{} albums · {} songs", a.albums.len(), songs.len());
             theme::page_header(ui, &a.name, &subtitle, |ui| {
+                // Right to left: Play, then Shuffle.
                 if theme::button(ui, Some(Icon::Shuffle), "Shuffle", Kind::Secondary).clicked() {
                     self.actions.push(Action::Shuffle(songs.clone()));
                 }
-                if theme::button(ui, Some(Icon::Play), "Play all", Kind::Primary).clicked() {
+                if theme::button(ui, Some(Icon::Play), "Play", Kind::Primary).clicked() {
                     self.actions.push(Action::Play(songs.clone(), 0));
                 }
             });
@@ -1520,7 +1550,7 @@ impl LibraryUi {
         let now = self.now();
         let time = ui.input(|i| i.time);
         let playing = self.last.state == State::Playing;
-        let menu = self.row_menu(None);
+        let menu = self.row_menu(None, true);
         egui::ScrollArea::vertical().id_salt(id).auto_shrink([false, false]).show_rows(ui, 38.0, order.len(), |ui, range| {
             for k in range {
                 let si = order[k];
@@ -1543,11 +1573,27 @@ impl LibraryUi {
         let artists: Vec<usize> = (0..lib.artists.len()).filter(|&i| hit(&norm(&lib.artists[i].name))).take(12).collect();
         let albums: Vec<usize> = (0..lib.albums.len()).filter(|&i| hit(&self.album_text[i])).take(60).collect();
         let songs: Vec<usize> = lib.albums.iter().flat_map(|a| a.songs.iter().copied()).filter(|&i| hit(&self.song_text[i])).take(300).collect();
-        let subtitle = format!("{} artists · {} albums · {} songs", artists.len(), albums.len(), songs.len());
+        let playlists: Vec<(String, String)> =
+            self.playlists.lists.iter().filter(|pl| hit(&norm(&pl.name))).map(|pl| (pl.id.clone(), pl.name.clone())).collect();
+        let subtitle = format!("{} playlists · {} artists · {} albums · {} songs", playlists.len(), artists.len(), albums.len(), songs.len());
         theme::page_header(ui, &format!("“{}”", self.search.trim()), &subtitle, |_| {});
-        if artists.is_empty() && albums.is_empty() && songs.is_empty() {
+        if playlists.is_empty() && artists.is_empty() && albums.is_empty() && songs.is_empty() {
             ui.label(egui::RichText::new("Nothing matches.").color(p.dim));
             return;
+        }
+        // The phone's order: Playlists, Artists, Albums, Songs.
+        if !playlists.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                for (id, name) in &playlists {
+                    if theme::button(ui, Some(Icon::Queue), name, Kind::Secondary).clicked() {
+                        self.search.clear();
+                        self.album = None;
+                        self.page = Page::Playlists;
+                        self.playlist = Some(id.clone());
+                    }
+                }
+            });
+            ui.add_space(6.0);
         }
         if !artists.is_empty() {
             ui.horizontal_wrapped(|ui| {
@@ -1633,7 +1679,7 @@ impl LibraryUi {
         // Right: format, volume, queue.
         let right = Rect::from_min_max(pos2(full.right() - 300.0, full.top()), full.max);
         ui.scope_builder(egui::UiBuilder::new().max_rect(right).layout(egui::Layout::right_to_left(egui::Align::Center)), |ui| {
-            let q = theme::icon_button(ui, Icon::Queue, 34.0, "Up Next");
+            let q = theme::icon_button(ui, Icon::Queue, 34.0, "Queue");
             if self.queue_open {
                 ui.painter().circle_stroke(q.rect.center(), 16.0, egui::Stroke::new(1.5, theme::ACCENT));
             }
@@ -1736,7 +1782,7 @@ impl LibraryUi {
     }
 
     /// The full-size Now Playing view: big cover, names, transport on the
-    /// left; Up Next or the song's details on the right.
+    /// left; the queue or the song's details on the right.
     fn now_view(&mut self, ui: &mut egui::Ui, lib: &Arc<Library>) {
         let p = theme::pal(ui);
         let s = self.last.clone();
@@ -1825,8 +1871,8 @@ impl LibraryUi {
                     };
                     theme::badge(ui, &text, if f.lossless { theme::prism_at(0.1) } else { p.dim });
                 }
-                if x.origin == Origin::Flac {
-                    theme::badge(ui, "CD RIP", theme::OK).on_hover_text("Ripped and verified with LocalBeat Studio");
+                if is_cd_rip(&x) {
+                    theme::badge(ui, "CD rip", theme::OK).on_hover_text("Ripped and verified with LocalBeat Studio");
                 }
             });
             ui.add_space(10.0);
@@ -1892,10 +1938,10 @@ impl LibraryUi {
             });
         });
 
-        // ---- right: Up Next / Details
+        // ---- right: Queue / Details
         ui.scope_builder(egui::UiBuilder::new().max_rect(right).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
             ui.horizontal(|ui| {
-                for (tab, label) in [(NowTab::Queue, "Up Next"), (NowTab::Details, "Details")] {
+                for (tab, label) in [(NowTab::Queue, "Queue"), (NowTab::Details, "Details")] {
                     let on = self.now_tab == tab;
                     let text = egui::RichText::new(label).font(if on { theme::bold(18.0) } else { theme::medium(18.0) }).color(if on { p.text } else { p.faint });
                     let r = ui.add(egui::Label::new(text).sense(Sense::click()));
@@ -1921,7 +1967,7 @@ impl LibraryUi {
         self.run_actions();
     }
 
-    /// Up Next in the Now Playing view: the whole queue, current one marked.
+    /// The queue in the Now Playing view: the whole of it, current one marked.
     fn now_queue(&mut self, ui: &mut egui::Ui, lib: &Arc<Library>) {
         let p = theme::pal(ui);
         let queue = self.player.queue();
@@ -1988,7 +2034,8 @@ impl LibraryUi {
             match x.origin {
                 Origin::Flac => "CD rip (verified FLAC library)",
                 Origin::Misc => "Miscellaneous library",
-                Origin::Server => "The LocalBeat server",
+                Origin::Server if is_cd_rip(x) => "CD rip (verified FLAC library, on the music server)",
+                Origin::Server => "The music server",
             }
             .into(),
         );
@@ -2028,11 +2075,11 @@ impl LibraryUi {
         });
     }
 
-    /// The Up Next panel (right side).
+    /// The Queue panel (right side).
     pub fn queue_panel(&mut self, ui: &mut egui::Ui) {
         let p = theme::pal(ui);
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Up Next").font(theme::bold(20.0)).color(p.text));
+            ui.label(egui::RichText::new("Queue").font(theme::bold(20.0)).color(p.text));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if theme::icon_button(ui, Icon::Cross, 28.0, "Close").clicked() {
                     self.queue_open = false;
@@ -2043,7 +2090,7 @@ impl LibraryUi {
         let queue = self.player.queue();
         let Some(lib) = self.lib.clone() else { return };
         if queue.is_empty() {
-            ui.label(egui::RichText::new("Nothing queued. Play an album, or right-click one and choose Add to Up Next.").color(p.dim));
+            ui.label(egui::RichText::new("Nothing queued. Play an album, or right-click one and choose Add to queue.").color(p.dim));
             return;
         }
         let cur = self.last.index.unwrap_or(0);
@@ -2098,6 +2145,8 @@ enum MenuChoice {
     Move(usize, isize),
     /// Take the song out of the library (asks first).
     RemoveFromLibrary,
+    GoToAlbum,
+    GoToArtist,
 }
 
 /// What a song row's right-click menu offers besides playing.
@@ -2107,6 +2156,8 @@ struct RowMenu {
     playlists: Option<Vec<(String, String)>>,
     /// On a playlist's page: the row's position and the playlist's length (Move, Remove).
     in_playlist: Option<(usize, usize)>,
+    /// "Go to album" (not on the album's own page).
+    go_to_album: bool,
 }
 
 enum RowClick {
@@ -2178,7 +2229,7 @@ fn song_row(ui: &mut egui::Ui, s: &Song, number: usize, show_artist: bool, is_no
             out = Some(RowClick::Menu(MenuChoice::PlayNext));
             ui.close();
         }
-        if ui.add_enabled(!s.drm, egui::Button::new("Add to Up Next")).clicked() {
+        if ui.add_enabled(!s.drm, egui::Button::new("Add to queue")).clicked() {
             out = Some(RowClick::Menu(MenuChoice::Append));
             ui.close();
         }
@@ -2199,6 +2250,15 @@ fn song_row(ui: &mut egui::Ui, s: &Song, number: usize, show_artist: bool, is_no
                 }
             });
         }
+        if menu.go_to_album && ui.button("Go to album").clicked() {
+            out = Some(RowClick::Menu(MenuChoice::GoToAlbum));
+            ui.close();
+        }
+        if ui.button("Go to artist").clicked() {
+            out = Some(RowClick::Menu(MenuChoice::GoToArtist));
+            ui.close();
+        }
+        // Studio's own items, after the shared ones.
         if let Some((pos, len)) = menu.in_playlist {
             ui.separator();
             if ui.add_enabled(pos > 0, egui::Button::new("Move up")).clicked() {
@@ -2225,6 +2285,12 @@ fn song_row(ui: &mut egui::Ui, s: &Song, number: usize, show_artist: bool, is_no
         }
     });
     out
+}
+
+/// From a verified CD rip: the FLAC library here, or the music server's FLAC
+/// library (it serves an album from its FLAC rip; LocalBeat `GLOSSARY.md`).
+fn is_cd_rip(s: &Song) -> bool {
+    s.origin == Origin::Flac || (s.origin == Origin::Server && s.codec.eq_ignore_ascii_case("flac"))
 }
 
 /// "FLAC 16/44.1" for an album whose songs share one format.

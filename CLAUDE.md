@@ -25,6 +25,14 @@ users-and-devices contract (LocalBeat `docs/control.md`), update all three
 repos. The LocalBeat mark (`gui/assets/localbeat.svg`, gold disc #F2B33D +
 navy #1B2A3A note) is also shared (`docs/brand/` in the other two).
 
+**Shared interface** (2026-11-23): Studio, the phone app and Android Auto
+use one map of the library and one vocabulary. The single copy of the terms
+is LocalBeat **`GLOSSARY.md`** (Queue, not Up Next; music server; CD rip;
+Kept vs Synced…), the plan **`docs/ui-refinement.md`** there. Change wording
+in step with them. CD rip = from a FLAC: the FLAC library here, a server song
+with `suffix` flac, or a phone copy tagged `LOCALBEAT_SOURCE=CD` (written by
+`core/src/phone_copy.rs`).
+
 ## Development environment
 
 - Tested on Linux (Fedora, Ubuntu) and Windows (MSVC). Personal machine/SSH
