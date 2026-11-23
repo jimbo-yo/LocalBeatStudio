@@ -2415,6 +2415,17 @@ mod queue_tests {
     use super::moved_order;
 
     #[test]
+    fn shuffle_mixes_songs() {
+        // 50 "albums" of 12 songs in a row: after shuffling, a song should
+        // seldom still be followed by the next one from its album.
+        let mut v: Vec<usize> = (0..600).collect();
+        super::shuffle(&mut v);
+        let kept = v.windows(2).filter(|w| w[1] == w[0] + 1).count();
+        eprintln!("neighbours kept: {kept} of 599; first 24: {:?}", &v[..24]);
+        assert!(kept < 20, "{kept} songs still followed by their album's next song");
+    }
+
+    #[test]
     fn moving_a_queue_row() {
         assert_eq!(moved_order(5, 3, 1), [0, 3, 1, 2, 4], "up");
         assert_eq!(moved_order(5, 1, 4), [0, 2, 3, 1, 4], "down: lands before what was at 4");
