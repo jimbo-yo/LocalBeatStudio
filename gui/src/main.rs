@@ -23,6 +23,7 @@ use localbeat_platform::phone_notify;
 mod ai_enrich_tab;
 mod cover_cache;
 mod cover_tab;
+mod invite_ui;
 mod library_ui;
 mod media_keys;
 mod phone_tab;
@@ -34,6 +35,7 @@ mod server_push;
 mod server_status;
 mod settings_tab;
 mod theme;
+mod welcome_ui;
 
 #[derive(PartialEq, Clone, Copy)]
 enum Tab {
@@ -259,6 +261,9 @@ struct App {
     server: server_tab::ServerTab,
     /// Joining the server, folders, phone, what's installed, drives.
     settings_page: settings_tab::SettingsTab,
+    welcome: welcome_ui::WelcomeUi,
+    welcome_fullscreen: bool,
+    invites: invite_ui::InviteWindow,
     drive_action: Option<(String, DriveAction)>,
 }
 
@@ -282,13 +287,16 @@ impl App {
             }),
         );
         let library = library_ui::LibraryUi::new(&settings, &ctx, hwnd);
-        // A new install (no settings file yet) opens on Settings.
+        // A new install (no settings file yet) opens on the Welcome screen.
         let first_run = !Prefs::exists(&settings);
         let mut app = App {
             library,
             pusher,
             server: server_tab::ServerTab::new(&settings),
             settings_page: settings_tab::SettingsTab::new(&settings, &prefs),
+            welcome: welcome_ui::WelcomeUi::new(),
+            welcome_fullscreen: first_run,
+            invites: invite_ui::InviteWindow::new(),
             ctx,
             settings,
             rx: None,
@@ -310,7 +318,7 @@ impl App {
             prefs,
             notifier,
             notes,
-            tab: if first_run { Tab::Settings } else { Tab::Library },
+            tab: Tab::Library,
             phone: phone_tab::PhoneTab::new(),
             ai_enrich: ai_enrich_tab::AiEnrichTab::new(),
             covers: cover_tab::CoverTab::new(),
@@ -363,6 +371,14 @@ impl App {
                 "1" | "sr2" | "choice" | "alert" => Tab::Rip,
                 _ => Tab::Library,
             };
+            if demo == "welcome" {
+                app.welcome_fullscreen = true;
+            } else {
+                app.welcome_fullscreen = false;
+            }
+            if demo == "invite" {
+                app.invites.open_demo();
+            }
             app.library.demo = Some(demo.clone());
             app.session = vec![(true, "Radiohead – OK Computer: 12/12".into()), (false, "Lenny Kravitz – Let Love Rule: 11/12".into())];
         } else if app.prefs.is_admin() {
@@ -1086,13 +1102,53 @@ impl eframe::App for App {
 }
 
 impl App {
+    fn handle_welcome_event(&mut self, ev: welcome_ui::WelcomeEvent, ctx: &egui::Context) {
+        match ev {
+            welcome_ui::WelcomeEvent::Claimed(outcome) => {
+                for line in outcome.log {
+                    self.log(format!("Onboarding: {line}"));
+                }
+                self.welcome_fullscreen = false;
+                self.tab = Tab::Library;
+                self.library.rescan(ctx);
+                if self.prefs.is_admin() && !self.running {
+                    self.start();
+                }
+            }
+            welcome_ui::WelcomeEvent::LocalOnly => {
+                self.welcome_fullscreen = false;
+                self.tab = Tab::Library;
+            }
+            welcome_ui::WelcomeEvent::Cancelled => {}
+        }
+    }
+
     fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = &ui.ctx().clone();
+        if let Some(ev) = self.welcome.poll(&mut self.prefs) {
+            self.handle_welcome_event(ev, ctx);
+        }
+        if self.welcome_fullscreen {
+            if let Some(ev) = self.welcome.show_fullscreen(ui, &self.settings, &mut self.prefs) {
+                self.handle_welcome_event(ev, ctx);
+            }
+            return;
+        }
+        if let Some(ev) = self.welcome.show_modal(ctx, &self.settings, &mut self.prefs) {
+            self.handle_welcome_event(ev, ctx);
+        }
+        self.invites.show(ctx, &self.settings, &self.prefs);
         for line in self.phone.poll(&self.settings, &mut self.prefs, ctx) {
             self.log(line);
         }
         for line in self.settings_page.poll(&self.settings, &mut self.prefs, ctx) {
             self.log(line);
+        }
+        if std::mem::take(&mut self.settings_page.open_invite_modal) {
+            self.welcome.open_modal(None, &self.prefs);
+        }
+        if std::mem::take(&mut self.settings_page.open_admin_invites) {
+            self.invites.open(&self.settings, &self.prefs, ctx);
         }
         if std::mem::take(&mut self.settings_page.restart_wanted) {
             // A fresh start reads the new folders and the server's library.

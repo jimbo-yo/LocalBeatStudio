@@ -80,6 +80,10 @@ pub struct SettingsTab {
     status: crate::server_status::StatusWindow,
     /// Set by a button: the app starts itself again (new folders, joined).
     pub restart_wanted: bool,
+    /// Set by a button: open the "Join with an invite" modal.
+    pub open_invite_modal: bool,
+    /// Set by a button: open the Admin "Invite a device" QR/link window.
+    pub open_admin_invites: bool,
 }
 
 fn run_checks() -> Checks {
@@ -205,6 +209,8 @@ impl SettingsTab {
             connection: None,
             status: Default::default(),
             restart_wanted: false,
+            open_invite_modal: false,
+            open_admin_invites: false,
         }
     }
 
@@ -396,15 +402,45 @@ impl SettingsTab {
                 let role = prefs.role.map(|r| if r == Role::Admin { "an admin: rips CDs and sends them to the server" } else { "a listener" }).unwrap_or("");
                 ui.label(RichText::new(format!("This computer is {} on the server, {role}.", prefs.server.login)).color(p.text));
                 ui.label(RichText::new(format!("Music server: {}", prefs.server.url)).color(p.dim));
-                let tunnel = match self.checks.as_ref().map(|c| c.tunnel) {
-                    Some(tunnel::State::Up) => "Tunnel: running (for playing away from home; Check the connection to be sure)",
-                    Some(tunnel::State::Down) => "Tunnel: installed, not connected right now",
-                    Some(tunnel::State::Missing) => "Tunnel: not on this computer (the library plays at home only)",
-                    None => "Tunnel: …",
-                };
-                ui.label(RichText::new(tunnel).color(p.dim));
+                if prefs.server.is_local_loopback() {
+                    ui.colored_label(theme::OK, "Connection: this computer (local server)");
+                } else if prefs.server.tunnel.is_some() {
+                    use localbeat_core::tunnel::{EndpointKind, LinkState};
+                    match localbeat_core::tunnel::active_link_state() {
+                        Some(LinkState::Connected(EndpointKind::Lan)) => {
+                            ui.colored_label(theme::OK, "Built-in tunnel: connected (home network)");
+                        }
+                        Some(LinkState::Connected(EndpointKind::Public)) => {
+                            ui.colored_label(theme::OK, "Built-in tunnel: connected (away from home)");
+                        }
+                        Some(LinkState::Stalled) => {
+                            ui.colored_label(
+                                theme::WARN,
+                                "Can't reach the music server — if this device was removed, ask for a new invite.",
+                            );
+                        }
+                        Some(LinkState::Connecting) | None => {
+                            ui.label(RichText::new("Built-in tunnel: ready (connects automatically)").color(p.dim));
+                        }
+                    }
+                } else {
+                    let tunnel = match self.checks.as_ref().map(|c| c.tunnel) {
+                        Some(tunnel::State::Up) => "Tunnel: running (for playing away from home; Check the connection to be sure)",
+                        Some(tunnel::State::Down) => "Tunnel: installed, not connected right now",
+                        Some(tunnel::State::Missing) => "Tunnel: not on this computer (the library plays at home only)",
+                        None => "Tunnel: …",
+                    };
+                    ui.label(RichText::new(tunnel).color(p.dim));
+                }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
+                    if prefs.is_admin()
+                        && theme::button(ui, Some(theme::Icon::Server), "Invite a device…", theme::Kind::Primary)
+                            .on_hover_text("Create a QR code or link to connect a phone or another computer")
+                            .clicked()
+                    {
+                        self.open_admin_invites = true;
+                    }
                     if theme::button(ui, Some(theme::Icon::Refresh), "Check the connection", theme::Kind::Secondary).clicked() {
                         self.connection = None;
                         let sp = prefs.server.clone();
@@ -420,6 +456,9 @@ impl SettingsTab {
                         .clicked()
                     {
                         self.status.open(&ctx, &prefs.server);
+                    }
+                    if theme::button(ui, None, "Join with a new invite…", theme::Kind::Secondary).clicked() {
+                        self.open_invite_modal = true;
                     }
                     match &self.connection {
                         Some(Ok(())) => {
@@ -452,8 +491,17 @@ impl SettingsTab {
                     self.done.clear();
                 }
             } else {
-                ui.label("Ask the server to let this computer play its library. Joining works on the home network; the admin approves it on the server's admin page.");
+                ui.horizontal(|ui| {
+                    if theme::button(ui, Some(theme::Icon::Server), "Join with an invite link…", theme::Kind::Primary).clicked() {
+                        self.open_invite_modal = true;
+                    }
+                    ui.label(RichText::new("Paste a localbeat://join/... link from the server admin (works at home and away).").small().color(p.dim));
+                });
+                ui.add_space(10.0);
+                ui.separator();
                 ui.add_space(6.0);
+                ui.label(RichText::new("Legacy home-network request:").small().color(p.faint));
+                ui.add_space(4.0);
                 egui::Grid::new("join").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                     ui.label(RichText::new("This computer's name").color(p.dim));
                     ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(260.0));
