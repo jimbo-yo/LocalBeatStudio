@@ -29,3 +29,5 @@ md5 = "0.8"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 getrandom = "0.2"
 base64 = "0.22"
+boringtun = "0.7"
+smoltcp = { version = "0.14", default-features = false, features = ["std", "medium-ip", "proto-ipv4", "socket-tcp"] }

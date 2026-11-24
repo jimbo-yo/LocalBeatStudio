@@ -39,9 +39,17 @@ pub fn token(password: &str, salt: &str) -> String {
 
 impl Subsonic {
     /// None if the settings don't have a music server login.
+    /// When `p.tunnel` is set, routes through the shared embedded WireGuard
+    /// loopback bridge (`core/src/tunnel.rs`); when `None`, connects directly
+    /// (co-located loopback `127.0.0.1` or legacy OS tunnel).
     pub fn new(p: &ServerPrefs) -> Option<Self> {
-        (!p.url.trim().is_empty() && !p.login.trim().is_empty() && !p.secret.is_empty()).then(|| Subsonic {
-            base: p.url.trim().trim_end_matches('/').to_string(),
+        if p.url.trim().is_empty() || p.login.trim().is_empty() || p.secret.is_empty() {
+            return None;
+        }
+        let base = crate::tunnel::resolve_base_url(p, None, None)
+            .unwrap_or_else(|_| p.url.trim().trim_end_matches('/').to_string());
+        Some(Subsonic {
+            base,
             user: p.login.trim().to_string(),
             password: p.secret.clone(),
         })

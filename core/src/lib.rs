@@ -32,4 +32,5 @@ pub mod secure_read;
 pub mod server_library;
 pub mod song_match;
 pub mod subsonic;
+pub mod tunnel;
 pub mod vote;
