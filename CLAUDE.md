@@ -266,6 +266,20 @@ ID_SERIAL_SHORT as fallback.
   roles; the protocol shared with LocalBeatServer's `localbeat-admin`)
 - `docs/history.md`: the full project journal up to 2026-11-14
 
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `jimbo-yo/LocalBeatStudio`, via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default roles as-is: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context, but the glossary is the suite's shared `../LocalBeat/GLOSSARY.md`; ADRs in `docs/adr/` here. See `docs/agents/domain.md`.
+
 ## AI control and playlists (planned 2026-11-17)
 
 Design and order of work: LocalBeat **`docs/control.md`**. Playlists live
