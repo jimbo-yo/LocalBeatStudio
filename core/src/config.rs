@@ -121,11 +121,37 @@ pub struct ServerPrefs {
     /// This computer's login on the music server.
     pub login: String,
     pub secret: String,
+    /// Embedded userspace WireGuard tunnel config (docs/onboarding.md).
+    /// `None` for a co-located local server on 127.0.0.1 (or legacy pre-onboarding configs).
+    pub tunnel: Option<crate::join::EmbeddedTunnel>,
 }
 
 impl ServerPrefs {
     pub fn enabled(&self) -> bool {
         !self.host.is_empty() && !self.user.is_empty() && !self.key.is_empty()
+    }
+
+    /// True when talking directly to a co-located server on this computer
+    /// (loopback URL, no WireGuard tunnel needed).
+    pub fn is_local_loopback(&self) -> bool {
+        if self.tunnel.is_some() {
+            return false;
+        }
+        let host = self
+            .url
+            .trim()
+            .strip_prefix("http://")
+            .or_else(|| self.url.trim().strip_prefix("https://"))
+            .unwrap_or("")
+            .split('/')
+            .next()
+            .unwrap_or("");
+        let host = if let Some(rest) = host.strip_prefix('[') {
+            rest.split(']').next().unwrap_or("")
+        } else {
+            host.split(':').next().unwrap_or("")
+        };
+        matches!(host, "127.0.0.1" | "localhost" | "::1")
     }
 
     /// `key` with a leading `~/` expanded.
@@ -208,7 +234,19 @@ impl Prefs {
             server: {
                 let sv = &v["server"];
                 let f = |k: &str| sv.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
-                ServerPrefs { host: f("host"), user: f("user"), key: f("key"), url: f("url"), login: f("login"), secret: f("secret") }
+                let tunnel = sv
+                    .get("tunnel")
+                    .filter(|x| !x.is_null())
+                    .and_then(|x| serde_json::from_value::<crate::join::EmbeddedTunnel>(x.clone()).ok());
+                ServerPrefs {
+                    host: f("host"),
+                    user: f("user"),
+                    key: f("key"),
+                    url: f("url"),
+                    login: f("login"),
+                    secret: f("secret"),
+                    tunnel,
+                }
             },
             role: match v.get("role").and_then(|x| x.as_str()) {
                 Some(r) => crate::join::Role::parse(r),
@@ -231,9 +269,13 @@ impl Prefs {
         v["reserve_gb"] = self.reserve_gb.into();
         v["acoustid_key"] = self.acoustid_key.clone().into();
         let sv = &self.server;
-        v["server"] = serde_json::json!({
+        let mut server_obj = serde_json::json!({
             "host": sv.host, "user": sv.user, "key": sv.key, "url": sv.url, "login": sv.login, "secret": sv.secret,
         });
+        if let Some(t) = &sv.tunnel {
+            server_obj["tunnel"] = serde_json::to_value(t)?;
+        }
+        v["server"] = server_obj;
         v["role"] = match self.role {
             Some(r) => r.as_str().into(),
             None => "none".into(), // set up, not joined: not the old-file admin default
@@ -343,6 +385,15 @@ mod tests {
                 url: "http://192.168.1.10:4533".into(),
                 login: "my-laptop".into(),
                 secret: "s3cret".into(),
+                tunnel: Some(crate::join::EmbeddedTunnel {
+                    private_key: "PRIV".into(),
+                    address: "10.8.0.12/32".into(),
+                    server_key: "SRV".into(),
+                    preshared_key: "PSK".into(),
+                    endpoint_public: Some("vpn.example.com:51820".into()),
+                    endpoint_lan: Some("192.168.1.10:51820".into()),
+                    allowed_ips: "10.8.0.1/32".into(),
+                }),
             },
             role: Some(crate::join::Role::Listener),
             folders: Folders { flac: Some(PathBuf::from("/music/FLAC")), misc: None },
@@ -397,5 +448,29 @@ mod tests {
         assert!(text.contains("HL-DT-ST_DVDRW_GX50N_KZ4F9KI4627-0:0 6"));
         assert_eq!(lookup_offset(&f, "hp_DVDRAM_GTA0N_423442525150313439373432-0:0", ""), Some(103));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn local_loopback_detection() {
+        let mut s = ServerPrefs { url: "http://127.0.0.1:4533".into(), ..Default::default() };
+        assert!(s.is_local_loopback());
+        s.url = "http://localhost:4533/".into();
+        assert!(s.is_local_loopback());
+        s.url = "http://[::1]:4533".into();
+        assert!(s.is_local_loopback());
+        s.url = "http://10.8.0.1:4533".into();
+        assert!(!s.is_local_loopback());
+        // With an embedded tunnel present, it's never direct loopback.
+        s.url = "http://127.0.0.1:4533".into();
+        s.tunnel = Some(crate::join::EmbeddedTunnel {
+            private_key: "K".into(),
+            address: "10.8.0.12/32".into(),
+            server_key: "S".into(),
+            preshared_key: "P".into(),
+            endpoint_public: None,
+            endpoint_lan: Some("192.168.1.10:51820".into()),
+            allowed_ips: "10.8.0.1/32".into(),
+        });
+        assert!(!s.is_local_loopback());
     }
 }
