@@ -17,10 +17,12 @@ use localbeat_core::secure_read::SectorSource;
 use localbeat_core::{cover, lock};
 use localbeat_platform::drive::{self, Drive, DriveIdentity};
 
+pub mod cover_apply;
 pub mod join;
 pub mod notify;
 pub mod push;
 pub mod remove;
+pub mod retag;
 
 #[derive(Debug, Clone, Default)]
 pub struct Options {

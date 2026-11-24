@@ -18,7 +18,7 @@ use crate::decode::{Format, Source};
 use crate::output::Backend;
 use crate::render::{Renderer, Shared};
 use crate::resample::Linear;
-use crate::State;
+use crate::{Repeat, State};
 
 pub enum Cmd {
     Load(Vec<PathBuf>, usize),
@@ -34,8 +34,11 @@ pub enum Cmd {
     Next,
     Prev,
     Seek(f64),
-    /// At the end of the queue, start again from the top (gapless).
-    Repeat(bool),
+    /// What follows the end of a song: the next one, or the same again.
+    Repeat(Repeat),
+    /// The queue in a new order: the songs at these (old) positions. Left
+    /// out = taken out. The song heard carries on where it is.
+    Rearrange(Vec<usize>),
     Quit,
 }
 
@@ -102,7 +105,7 @@ pub struct Engine {
     draining: bool,
     /// The next song needs another output rate: switch when the ring is empty.
     reopen_pending: Option<f64>,
-    repeat: bool,
+    repeat: Repeat,
 }
 
 impl Engine {
@@ -123,7 +126,7 @@ impl Engine {
             state: State::Stopped,
             draining: false,
             reopen_pending: None,
-            repeat: false,
+            repeat: Repeat::Off,
         }
     }
 
@@ -267,7 +270,8 @@ impl Engine {
                     }
                 }
             }
-            Cmd::Repeat(on) => self.repeat = on,
+            Cmd::Repeat(r) => self.repeat = r,
+            Cmd::Rearrange(order) => self.rearrange(order),
             Cmd::Quit => {}
         }
         self.publish();
@@ -311,6 +315,59 @@ impl Engine {
             let info = self.common.info.lock().unwrap();
             info.stopped_index.map(|i| (i, info.resume_at))
         })
+    }
+
+    /// The queue becomes the songs at `order` (old positions). The song
+    /// heard keeps playing; if it was taken out, what followed it plays.
+    /// Audio already decoded for a song that isn't next any more is
+    /// dropped (the song heard restarts where it is: a short gap).
+    fn rearrange(&mut self, order: Vec<usize>) {
+        let old_len = self.queue.len();
+        let order: Vec<usize> = order.into_iter().filter(|&i| i < old_len).collect();
+        let mut map = vec![None; old_len];
+        for (new, &old) in order.iter().enumerate() {
+            if map[old].is_none() {
+                map[old] = Some(new);
+            }
+        }
+        // Where song `old` went; if it went, the place of what followed it.
+        let place = |old: usize| map[old].unwrap_or_else(|| order.iter().filter(|&&o| o < old).count());
+        let heard = if self.state == State::Playing { self.current() } else { None };
+        self.queue = order.iter().map(|&i| self.queue[i].clone()).collect();
+        {
+            let mut info = self.common.info.lock().unwrap();
+            if let Some(s) = info.stopped_index.filter(|&s| s < old_len) {
+                if map[s].is_none() {
+                    info.resume_at = 0.0;
+                }
+                info.stopped_index = Some(place(s));
+            }
+        }
+        let Some((h, pos)) = heard else { return };
+        let Some(nh) = map[h] else {
+            self.play_from(place(h), 0.0);
+            return;
+        };
+        for seg in self.common.segments.lock().unwrap().iter_mut() {
+            seg.index = map.get(seg.index).copied().flatten().unwrap_or(nh);
+        }
+        let d = self.dec_index;
+        let after = match self.repeat {
+            Repeat::One => nh,
+            _ => nh + 1,
+        };
+        if d == h {
+            self.dec_index = nh;
+            if self.draining && self.src.is_none() && after < self.queue.len() {
+                // The queue had run out under the last song: carry on into what's after it now.
+                self.draining = false;
+                self.begin(after, 0.0, true);
+            }
+        } else if map.get(d).copied().flatten() == Some(after) {
+            self.dec_index = after;
+        } else {
+            self.play_from(nh, pos);
+        }
     }
 
     /// Starts song `i` at `at` seconds, dropping whatever is buffered.
@@ -499,8 +556,10 @@ impl Engine {
 
     fn after_song(&mut self) {
         let mut next = self.dec_index + 1;
-        if next >= self.queue.len() && self.repeat {
-            next = 0;
+        match self.repeat {
+            Repeat::One => next = self.dec_index,
+            Repeat::All if next >= self.queue.len() => next = 0,
+            _ => {}
         }
         if next < self.queue.len() {
             self.begin(next, 0.0, true);

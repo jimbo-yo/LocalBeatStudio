@@ -91,10 +91,41 @@ pub fn song_from(s: &Settings, v: &Value) -> Option<Song> {
     }
     let added = v["created"].as_str().and_then(|c| chrono::DateTime::parse_from_rfc3339(c).ok()).map(|d| d.timestamp()).unwrap_or(0);
     let album_artist = v["displayAlbumArtist"].as_str().or(v["albumArtist"].as_str()).unwrap_or("").to_string();
+    let mut genres: Vec<String> = v["genres"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|g| g["name"].as_str().or_else(|| g.as_str()))
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    if genres.is_empty() {
+        if let Some(g) = v["genre"].as_str().filter(|g| !g.trim().is_empty()) {
+            genres.extend(g.split([';', '\0']).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string));
+        }
+    }
+    let moods: Vec<String> = v["moods"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m.as_str().or_else(|| m["name"].as_str()))
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let ai_enriched = v["aiEnriched"].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
     Some(Song {
         path: song_path(s, &album_id, &id, &suffix),
         size: v["size"].as_u64().unwrap_or(0),
         mtime: added,
+        ctime: 0,
+        ctime_nsec: 0,
+        tag_schema: 1,
         added,
         title: st("title"),
         artist: st("artist"),
@@ -103,7 +134,10 @@ pub fn song_from(s: &Settings, v: &Value) -> Option<Song> {
         track: v["track"].as_u64().map(|n| n as u32),
         disc: v["discNumber"].as_u64().map(|n| n as u32),
         year: v["year"].as_u64().filter(|&y| y > 0).map(|y| y as u16),
-        genre: v["genre"].as_str().filter(|g| !g.is_empty()).map(str::to_string),
+        genre: genres.first().cloned(),
+        genres,
+        moods,
+        ai_enriched,
         seconds: v["duration"].as_f64().unwrap_or(0.0),
         codec: codec(&suffix).to_string(),
         sample_rate: v["samplingRate"].as_u64().map(|n| n as u32),
@@ -111,7 +145,7 @@ pub fn song_from(s: &Settings, v: &Value) -> Option<Song> {
         bitrate: v["bitRate"].as_u64().map(|n| n as u32),
         drm: suffix == "m4p",
         origin: Origin::Server,
-        picture: false,
+        picture: v["coverArt"].as_str().is_some_and(|c| !c.is_empty()),
         server_path: v["path"].as_str().filter(|p| !p.is_empty()).map(str::to_string),
     })
 }

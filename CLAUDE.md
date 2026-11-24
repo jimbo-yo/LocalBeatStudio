@@ -25,6 +25,14 @@ users-and-devices contract (LocalBeat `docs/control.md`), update all three
 repos. The LocalBeat mark (`gui/assets/localbeat.svg`, gold disc #F2B33D +
 navy #1B2A3A note) is also shared (`docs/brand/` in the other two).
 
+**Shared interface** (2026-11-23): Studio, the phone app and Android Auto
+use one map of the library and one vocabulary. The single copy of the terms
+is LocalBeat **`GLOSSARY.md`** (Queue, not Up Next; music server; CD rip;
+Kept vs Synced…), the plan **`docs/ui-refinement.md`** there. Change wording
+in step with them. CD rip = from a FLAC: the FLAC library here, a server song
+with `suffix` flac, or a phone copy tagged `LOCALBEAT_SOURCE=CD` (written by
+`core/src/phone_copy.rs`).
+
 ## Development environment
 
 - Tested on Linux (Fedora, Ubuntu) and Windows (MSVC). Personal machine/SSH
@@ -257,6 +265,20 @@ ID_SERIAL_SHORT as fallback.
   + approve on the admin page, keys made on the computer, listener / admin
   roles; the protocol shared with LocalBeatServer's `localbeat-admin`)
 - `docs/history.md`: the full project journal up to 2026-11-14
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `jimbo-yo/LocalBeatStudio`, via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default roles as-is: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context, but the glossary is the suite's shared `../LocalBeat/GLOSSARY.md`; ADRs in `docs/adr/` here. See `docs/agents/domain.md`.
 
 ## AI control and playlists (planned 2026-11-17)
 

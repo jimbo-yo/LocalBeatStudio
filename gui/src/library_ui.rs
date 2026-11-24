@@ -1,6 +1,6 @@
 //! The music side of the app: the library (Albums, Recently added, Artists,
 //! Songs, search, album pages), the now-playing bar on every page, and the
-//! Up Next queue. Playback is localbeat-player; the library comes from
+//! queue. Playback is localbeat-player; the library comes from
 //! core::library (scanned in the background, cached).
 
 use std::collections::HashMap;
@@ -15,14 +15,19 @@ use localbeat_core::config::Settings;
 use localbeat_core::library::{Library, Origin, ScanStats, Song, norm};
 use localbeat_core::server_library::{self, Catalogue, Fetcher};
 use localbeat_engine::remove;
-use localbeat_player::{Player, State, Status};
+use localbeat_player::{Player, Repeat, State, Status};
 
 use crate::cover_cache::CoverCache;
 use crate::media_keys::SharedLibrary;
 use crate::theme::{self, Icon, Kind};
 
+mod explore;
+pub use explore::{GroupKind, GroupView};
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Page {
+    /// Shuffle all, Random album, Recently added, Moods, Genres, Decades.
+    Explore,
     Albums,
     Recent,
     Artists,
@@ -30,6 +35,13 @@ pub enum Page {
     /// The user's playlists on the music server.
     Playlists,
 }
+
+/// How often the music server's catalogue is fetched again while connected
+/// (new rips show without a rescan; the phone does the same).
+const CATALOGUE_REFRESH: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// How long to wait before asking a music server that didn't answer again.
+const SERVER_RETRY: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// LOCALBEAT_DEMO=playlist opens the first playlist once the list is fetched.
 const DEMO_FIRST_PLAYLIST: &str = "\u{0}first";
@@ -54,7 +66,10 @@ enum NowTab {
 enum AlbumSort {
     Artist,
     Title,
+    /// Original release year, newest first.
     Year,
+    /// Newest arrival first.
+    Recent,
 }
 
 /// Something the user asked for that the page can't do while drawing.
@@ -66,6 +81,8 @@ enum Action {
     Append(Vec<usize>),
     OpenAlbum(usize),
     OpenArtist(usize),
+    /// A genre, mood or decade page.
+    OpenGroup(GroupView),
     OpenFolder(PathBuf),
     /// Add these songs to the playlist with this ID.
     AddToPlaylist(String, Vec<usize>),
@@ -107,7 +124,10 @@ struct Session {
     index: usize,
     position: f64,
     shuffle: bool,
+    /// Repeat the queue (as saved before Repeat one existed).
     repeat: bool,
+    #[serde(default)]
+    repeat_one: bool,
 }
 
 /// The LocalBeat server, as the library sees it.
@@ -130,6 +150,20 @@ type ScanResult = Result<(Arc<Library>, ScanStats, ServerView), String>;
 
 pub struct LibraryUi {
     settings: Settings,
+    /// Genres, moods and decades of `lib` (keyed by its address).
+    browse: Option<(usize, Arc<localbeat_core::browse::Browse>)>,
+    /// The genre, mood or decade page open, if any (over `page`).
+    pub group: Option<GroupView>,
+    /// Explore's genres by size (else A–Z).
+    genres_by_size: bool,
+    /// While the music server isn't connected: when to look again. A slow
+    /// first answer (the tunnel waking up) left the library without the
+    /// server's albums until a restart.
+    server_retry: Option<std::time::Instant>,
+    /// The scan running is such a retry (its "Library:" line isn't logged).
+    retrying: bool,
+    /// While connected: when to fetch the server's catalogue again.
+    catalogue_check: Option<std::time::Instant>,
     pub lib: Option<Arc<Library>>,
     by_path: HashMap<PathBuf, usize>,
     /// Lower-case "title artist album" per song, and "title artist" per album.
@@ -162,10 +196,14 @@ pub struct LibraryUi {
     now_tab: NowTab,
     /// Extra tags of the song in Details, read when it changes.
     details: Option<(PathBuf, Vec<(String, String)>)>,
-    /// Scroll Up Next to the current song once after opening.
+    /// Scroll the queue to the current song once after opening.
     scroll_to_now: bool,
     shuffle: bool,
-    repeat: bool,
+    repeat: Repeat,
+    /// The queue as it was before Shuffle was turned on (to put it back).
+    unshuffled: Option<Vec<PathBuf>>,
+    /// The Queue panel row being dragged.
+    queue_drag: Option<usize>,
     volume: f32,
     seek_preview: Option<f32>,
     sort: AlbumSort,
@@ -209,7 +247,12 @@ impl LibraryUi {
             // Back where we were, paused.
             player.cue(session.queue.clone(), session.index.min(session.queue.len() - 1), session.position);
         }
-        player.set_repeat(session.repeat);
+        let repeat = match (session.repeat_one, session.repeat) {
+            (true, _) => Repeat::One,
+            (false, true) => Repeat::All,
+            _ => Repeat::Off,
+        };
+        player.set_repeat(repeat);
         let shared_lib: SharedLibrary = Default::default();
         let media_err = crate::media_keys::spawn(player.clone(), shared_lib.clone(), settings.cache_dir.clone(), ctx.clone(), hwnd).err();
         let mut me = LibraryUi {
@@ -228,7 +271,13 @@ impl LibraryUi {
             covers: CoverCache::new(settings.clone(), ctx.clone()),
             player,
             shared_lib,
-            page: Page::Albums,
+            page: Page::Explore,
+            browse: None,
+            group: None,
+            genres_by_size: true,
+            server_retry: None,
+            retrying: false,
+            catalogue_check: None,
             album: None,
             album_from_search: None,
             artist: None,
@@ -240,7 +289,9 @@ impl LibraryUi {
             details: None,
             scroll_to_now: false,
             shuffle: session.shuffle,
-            repeat: session.repeat,
+            repeat,
+            unshuffled: None,
+            queue_drag: None,
             volume,
             seek_preview: None,
             sort: AlbumSort::Artist,
@@ -262,6 +313,31 @@ impl LibraryUi {
         };
         me.rescan(ctx);
         me
+    }
+
+    /// Fetches the music server's catalogue again without rescanning this
+    /// computer's folders. Only a changed catalogue becomes a new library
+    /// (so covers and the open page stay put, and the log stays quiet);
+    /// a failed fetch waits for the next turn.
+    fn refresh_catalogue(&mut self, ctx: &egui::Context) {
+        let Some(lib) = self.lib.clone() else { return };
+        let (tx, rx) = channel();
+        let (settings, ctx, shared) = (self.settings.clone(), ctx.clone(), self.shared_lib.clone());
+        std::thread::spawn(move || {
+            let Some((sub, url)) = server_library::client(&settings) else { return };
+            let Ok(fresh) = Catalogue::fetch(&settings, &sub, &url) else { return };
+            if Catalogue::load(&settings, &url).is_some_and(|k| k.same_songs(&fresh)) {
+                return;
+            }
+            let _ = fresh.save(&settings);
+            let songs: Vec<Song> = lib.songs.iter().filter(|s| s.origin != Origin::Server).cloned().chain(fresh.songs.iter().cloned()).collect();
+            let mut st = ScanStats::default();
+            let new = Arc::new(Library::build(songs, &mut st));
+            *shared.lock().unwrap() = Some(new.clone());
+            let _ = tx.send(Ok((new, st, ServerView::Connected { songs: fresh.songs.len() })));
+            ctx.request_repaint();
+        });
+        self.scan = Some(rx);
     }
 
     /// Scans the library again in the background (after a rip, or asked).
@@ -368,13 +444,16 @@ impl LibraryUi {
                         }
                         self.server = server;
                     }
-                    self.log.push(format!(
-                        "Library: {} songs, {} albums ({} files read{})",
-                        lib.songs.len(),
-                        lib.albums.len(),
-                        st.read,
-                        if st.failed.is_empty() { String::new() } else { format!(", {} unreadable", st.failed.len()) }
-                    ));
+                    // A retry while the server stays away changes nothing: no line for it.
+                    if !self.retrying || matches!(self.server, ServerView::Connected { .. }) {
+                        self.log.push(format!(
+                            "Library: {} songs, {} albums ({} files read{})",
+                            lib.songs.len(),
+                            lib.albums.len(),
+                            st.read,
+                            if st.failed.is_empty() { String::new() } else { format!(", {} unreadable", st.failed.len()) }
+                        ));
+                    }
                     self.by_path = lib.songs.iter().enumerate().map(|(i, s)| (s.path.clone(), i)).collect();
                     self.song_text = lib.songs.iter().map(|s| norm(&format!("{} {} {} {}", s.title, s.artist, s.album, s.album_artist))).collect();
                     self.album_text = lib.albums.iter().map(|a| norm(&format!("{} {}", a.title, a.artist))).collect();
@@ -392,8 +471,40 @@ impl LibraryUi {
                 Err(e) => self.log.push(format!("Library scan failed: {e}")),
             }
         }
+        if finished {
+            // Not connected: try again in a while (the phone does the same).
+            self.server_retry = matches!(self.server, ServerView::NotConnected(_)).then(|| std::time::Instant::now() + SERVER_RETRY);
+            if self.server_retry.is_none() {
+                self.retrying = false;
+            }
+            self.catalogue_check = matches!(self.server, ServerView::Connected { .. }).then(|| std::time::Instant::now() + CATALOGUE_REFRESH);
+        }
         if finished && std::mem::take(&mut self.rescan_wanted) {
             self.rescan(ctx);
+        } else if let Some(at) = self.server_retry
+            && self.scan.is_none()
+        {
+            let now = std::time::Instant::now();
+            if now >= at {
+                if !self.retrying {
+                    self.log.push(format!("Server: trying again every {} s", SERVER_RETRY.as_secs()));
+                }
+                self.server_retry = None;
+                self.retrying = true;
+                self.rescan(ctx);
+            } else {
+                ctx.request_repaint_after(at - now);
+            }
+        } else if let Some(at) = self.catalogue_check
+            && self.scan.is_none()
+        {
+            let now = std::time::Instant::now();
+            if now >= at {
+                self.catalogue_check = None;
+                self.refresh_catalogue(ctx);
+            } else {
+                ctx.request_repaint_after(at - now);
+            }
         }
         let s = self.player.status();
         // Volume may have been changed from the desktop's media widget.
@@ -434,7 +545,8 @@ impl LibraryUi {
             index: s.index.unwrap_or(0),
             position: s.position,
             shuffle: self.shuffle,
-            repeat: self.repeat,
+            repeat: self.repeat == Repeat::All,
+            repeat_one: self.repeat == Repeat::One,
         };
         if self.saved.as_ref() == Some(&session) {
             return;
@@ -586,7 +698,16 @@ impl LibraryUi {
                     let q = std::mem::take(&mut self.search);
                     self.album_from_search = (!q.trim().is_empty()).then_some(q);
                 }
+                Action::OpenGroup(v) => {
+                    self.now_open = false;
+                    self.album = None;
+                    self.album_from_search = None;
+                    self.search.clear();
+                    self.page = Page::Explore;
+                    self.group = Some(v);
+                }
                 Action::OpenArtist(i) => {
+                    self.group = None;
                     self.now_open = false;
                     self.artist = Some(i);
                     self.page = Page::Artists;
@@ -655,8 +776,8 @@ impl LibraryUi {
 
     /// The extra items for song rows' menus: "Add to playlist" when this
     /// computer has a music server login; Move/Remove on a playlist's page.
-    fn row_menu(&self, in_playlist: Option<(usize, usize)>) -> RowMenu {
-        RowMenu { playlists: self.playlists.available().then(|| self.playlists.mine()), in_playlist }
+    fn row_menu(&self, in_playlist: Option<(usize, usize)>, go_to_album: bool) -> RowMenu {
+        RowMenu { playlists: self.playlists.available().then(|| self.playlists.mine()), in_playlist, go_to_album }
     }
 
     /// What a song row's menu asks for, as an action.
@@ -670,7 +791,25 @@ impl LibraryUi {
             MenuChoice::Remove(pos) => Action::PlaylistRemove(pos),
             MenuChoice::Move(pos, by) => Action::PlaylistMove(pos, by),
             MenuChoice::RemoveFromLibrary => Action::AskRemove(vec![si]),
+            MenuChoice::GoToAlbum => match self.album_of(si) {
+                Some(a) => Action::OpenAlbum(a),
+                None => return,
+            },
+            MenuChoice::GoToArtist => match self.album_of(si).and_then(|a| self.artist_of(a)) {
+                Some(i) => Action::OpenArtist(i),
+                None => return,
+            },
         });
+    }
+
+    /// The album a song (library index) is on.
+    fn album_of(&self, si: usize) -> Option<usize> {
+        self.lib.as_ref()?.albums.iter().position(|x| x.songs.contains(&si))
+    }
+
+    /// The artist an album is filed under.
+    fn artist_of(&self, a: usize) -> Option<usize> {
+        self.lib.as_ref()?.artists.iter().position(|x| x.albums.contains(&a))
     }
 
     /// The song playing now (library index).
@@ -695,27 +834,32 @@ impl LibraryUi {
             self.search_page(ui, &lib);
         } else if let Some(a) = self.album.filter(|&a| a < lib.albums.len()) {
             self.album_page(ui, &lib, a);
+        } else if let Some(g) = self.group.clone() {
+            self.group_page(ui, &lib, g);
         } else {
             match self.page {
+                Page::Explore => self.explore_page(ui, &lib),
                 Page::Albums => {
                     let mut order: Vec<usize> = (0..lib.albums.len()).collect();
                     match self.sort {
                         AlbumSort::Artist => {}
                         AlbumSort::Title => order.sort_by_key(|&i| localbeat_core::library::sort_name(&lib.albums[i].title)),
                         AlbumSort::Year => order.sort_by_key(|&i| (std::cmp::Reverse(lib.albums[i].year), localbeat_core::library::sort_name(&lib.albums[i].artist))),
+                        AlbumSort::Recent => order.sort_by_key(|&i| std::cmp::Reverse(lib.albums[i].added)),
                     }
                     let mut subtitle = format!("{} albums · {} songs", lib.albums.len(), lib.songs.len());
                     match &self.server {
                         ServerView::Connected { .. } => {
                             let n = lib.albums.iter().filter(|a| a.origin == Origin::Server).count();
-                            subtitle.push_str(&format!(" · {n} from the server"));
+                            subtitle.push_str(&format!(" · {n} on the music server"));
                         }
-                        ServerView::NotConnected(_) => subtitle.push_str(" · server not connected"),
+                        ServerView::NotConnected(_) => subtitle.push_str(" · music server not connected"),
                         ServerView::Off => {}
                     }
                     let mut sort = self.sort;
                     theme::page_header(ui, "Albums", &subtitle, |ui| {
-                        for (s, label) in [(AlbumSort::Year, "Year"), (AlbumSort::Title, "Title"), (AlbumSort::Artist, "Artist")] {
+                        // Right to left: the header lays these out from the right edge.
+                        for (s, label) in [(AlbumSort::Recent, "Recently added"), (AlbumSort::Year, "Year"), (AlbumSort::Artist, "Artist"), (AlbumSort::Title, "Title")] {
                             if ui.selectable_label(sort == s, label).clicked() {
                                 sort = s;
                             }
@@ -726,6 +870,11 @@ impl LibraryUi {
                     self.grid(ui, &lib, &order, "albums");
                 }
                 Page::Recent => {
+                    // Opened from Explore's "See all".
+                    let p = theme::pal(ui);
+                    if ui.add(egui::Label::new(egui::RichText::new("‹  Explore").color(p.dim)).sense(Sense::click())).clicked() {
+                        self.page = Page::Explore;
+                    }
                     theme::page_header(ui, "Recently added", "Newest arrivals first: fresh rips and new files", |_| {});
                     let order = lib.recently_added(60);
                     self.grid(ui, &lib, &order, "recent");
@@ -893,7 +1042,7 @@ impl LibraryUi {
             for k in range {
                 let (pos, si) = rows[k];
                 let s = &lib.songs[si];
-                let menu = self.row_menu(if pl.readonly { None } else { Some((pos, len)) });
+                let menu = self.row_menu(if pl.readonly { None } else { Some((pos, len)) }, true);
                 let album = if s.album.is_empty() { None } else { Some(s.album.as_str()) };
                 if let Some(click) = song_row(ui, s, k + 1, true, now == Some(si), playing, time, album, &menu) {
                     match click {
@@ -1267,8 +1416,9 @@ impl LibraryUi {
         }
         let songs = album.songs.clone();
         let dir = album.dirs.first().cloned();
+        let artist = lib.artists.iter().position(|x| x.albums.contains(&a));
         resp.context_menu(|ui| {
-            self.song_menu(ui, songs.clone(), dir.clone());
+            self.song_menu(ui, songs.clone(), dir.clone(), artist);
         });
     }
 
@@ -1286,16 +1436,14 @@ impl LibraryUi {
         }
     }
 
-    fn song_menu(&mut self, ui: &mut egui::Ui, songs: Vec<usize>, dir: Option<PathBuf>) {
-        if ui.button("Play").clicked() {
-            self.actions.push(Action::Play(songs.clone(), 0));
-            ui.close();
-        }
+    /// An album's right-click menu, in the suite's shared order: Play next, Add to
+    /// queue, Add to playlist…, Go to artist; then Studio's own.
+    fn song_menu(&mut self, ui: &mut egui::Ui, songs: Vec<usize>, dir: Option<PathBuf>, artist: Option<usize>) {
         if ui.button("Play next").clicked() {
             self.actions.push(Action::PlayNext(songs.clone()));
             ui.close();
         }
-        if ui.button("Add to Up Next").clicked() {
+        if ui.button("Add to queue").clicked() {
             self.actions.push(Action::Append(songs.clone()));
             ui.close();
         }
@@ -1315,6 +1463,13 @@ impl LibraryUi {
                 }
             });
         }
+        if let Some(i) = artist
+            && ui.button("Go to artist").clicked()
+        {
+            self.actions.push(Action::OpenArtist(i));
+            ui.close();
+        }
+        // Studio's own items, after the shared ones (LocalBeat docs/ui-refinement.md).
         ui.separator();
         if let Some(d) = dir
             && ui.button("Show in folder").clicked()
@@ -1345,8 +1500,18 @@ impl LibraryUi {
         mesh.add_triangle(1, 3, 2);
         ui.painter().add(egui::Shape::mesh(mesh));
 
+        let group_name = self.group.clone().and_then(|g| {
+            let b = self.browse(lib);
+            match g.kind {
+                GroupKind::Genre => b.genre(&g.key).map(|x| x.group.name.clone()),
+                GroupKind::Mood => b.mood(&g.key).map(|x| x.name.clone()),
+                GroupKind::Decade => b.decade(&g.key).map(|x| x.name.clone()),
+            }
+        });
         let back = match (&self.album_from_search, self.page) {
             (Some(q), _) => format!("Search “{}”", q.trim()),
+            (None, _) if group_name.is_some() => group_name.clone().unwrap_or_default(),
+            (None, Page::Explore) => "Explore".into(),
             (None, Page::Recent) => "Recently added".into(),
             (None, Page::Artists) => "Artists".into(),
             (None, Page::Songs) => "Songs".into(),
@@ -1373,11 +1538,11 @@ impl LibraryUi {
             ui.vertical(|ui| {
                 ui.add_space(26.0);
                 ui.horizontal(|ui| {
-                    if album.origin == Origin::Flac {
-                        theme::badge(ui, "CD RIP", theme::OK).on_hover_text("Ripped and verified with LocalBeat Studio");
+                    if !songs.is_empty() && songs.iter().all(|s| is_cd_rip(s)) {
+                        theme::badge(ui, "CD rip", theme::OK).on_hover_text("Ripped and verified with LocalBeat Studio");
                     }
                     if album.origin == Origin::Server {
-                        theme::badge(ui, "ON THE SERVER", theme::ACCENT).on_hover_text("Not on this computer: played from the LocalBeat server");
+                        theme::badge(ui, "On the music server", theme::ACCENT).on_hover_text("Not on this computer: played from the music server");
                     }
                     if let Some(f) = format_label(&songs) {
                         theme::badge(ui, &f, if songs.iter().all(|s| s.lossless()) { theme::prism_at(0.1) } else { p.dim });
@@ -1396,11 +1561,11 @@ impl LibraryUi {
                 if let Some(y) = album.year {
                     meta.push(y.to_string());
                 }
-                if let Some(g) = &album.genre {
-                    meta.push(g.clone());
-                }
                 meta.push(format!("{} songs, {}", album.songs.len(), long_duration(album.seconds)));
                 ui.label(egui::RichText::new(meta.join(" · ")).color(p.dim));
+                // Genre, mood and decade: each opens its page.
+                ui.add_space(6.0);
+                self.tag_chips(ui, lib, a);
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     if theme::button(ui, Some(Icon::Play), "Play", Kind::Primary).clicked() {
@@ -1409,7 +1574,7 @@ impl LibraryUi {
                     if theme::button(ui, Some(Icon::Shuffle), "Shuffle", Kind::Secondary).clicked() {
                         self.actions.push(Action::Shuffle(album.songs.clone()));
                     }
-                    if theme::button(ui, Some(Icon::Plus), "Up Next", Kind::Secondary).on_hover_text("Add the album to the end of Up Next").clicked() {
+                    if theme::button(ui, Some(Icon::Plus), "Add to queue", Kind::Secondary).on_hover_text("Add the album to the end of the queue").clicked() {
                         self.actions.push(Action::Append(album.songs.clone()));
                     }
                     if let Some(d) = album.dirs.first() && theme::icon_button(ui, Icon::Folder, 32.0, "Show in folder").clicked() {
@@ -1428,7 +1593,7 @@ impl LibraryUi {
         let now = self.now();
         let time = ui.input(|i| i.time);
         let playing = self.last.state == State::Playing;
-        let menu = self.row_menu(None);
+        let menu = self.row_menu(None, false);
         egui::ScrollArea::vertical().id_salt(("album", a)).auto_shrink([false, false]).show(ui, |ui| {
             let mut disc = None;
             for (k, &si) in album.songs.iter().enumerate() {
@@ -1492,10 +1657,11 @@ impl LibraryUi {
             let songs: Vec<usize> = a.albums.iter().flat_map(|&al| lib.albums[al].songs.iter().copied()).collect();
             let subtitle = format!("{} albums · {} songs", a.albums.len(), songs.len());
             theme::page_header(ui, &a.name, &subtitle, |ui| {
+                // Right to left: Play, then Shuffle.
                 if theme::button(ui, Some(Icon::Shuffle), "Shuffle", Kind::Secondary).clicked() {
                     self.actions.push(Action::Shuffle(songs.clone()));
                 }
-                if theme::button(ui, Some(Icon::Play), "Play all", Kind::Primary).clicked() {
+                if theme::button(ui, Some(Icon::Play), "Play", Kind::Primary).clicked() {
                     self.actions.push(Action::Play(songs.clone(), 0));
                 }
             });
@@ -1520,7 +1686,7 @@ impl LibraryUi {
         let now = self.now();
         let time = ui.input(|i| i.time);
         let playing = self.last.state == State::Playing;
-        let menu = self.row_menu(None);
+        let menu = self.row_menu(None, true);
         egui::ScrollArea::vertical().id_salt(id).auto_shrink([false, false]).show_rows(ui, 38.0, order.len(), |ui, range| {
             for k in range {
                 let si = order[k];
@@ -1543,11 +1709,28 @@ impl LibraryUi {
         let artists: Vec<usize> = (0..lib.artists.len()).filter(|&i| hit(&norm(&lib.artists[i].name))).take(12).collect();
         let albums: Vec<usize> = (0..lib.albums.len()).filter(|&i| hit(&self.album_text[i])).take(60).collect();
         let songs: Vec<usize> = lib.albums.iter().flat_map(|a| a.songs.iter().copied()).filter(|&i| hit(&self.song_text[i])).take(300).collect();
-        let subtitle = format!("{} artists · {} albums · {} songs", artists.len(), albums.len(), songs.len());
+        let playlists: Vec<(String, String)> =
+            self.playlists.lists.iter().filter(|pl| hit(&norm(&pl.name))).map(|pl| (pl.id.clone(), pl.name.clone())).collect();
+        let subtitle = format!("{} playlists · {} artists · {} albums · {} songs", playlists.len(), artists.len(), albums.len(), songs.len());
         theme::page_header(ui, &format!("“{}”", self.search.trim()), &subtitle, |_| {});
-        if artists.is_empty() && albums.is_empty() && songs.is_empty() {
+        // The phone's order: Moods, Genres, Decades, Playlists, Artists, Albums, Songs.
+        let tags = self.search_chips(ui, lib, &hit);
+        if tags == 0 && playlists.is_empty() && artists.is_empty() && albums.is_empty() && songs.is_empty() {
             ui.label(egui::RichText::new("Nothing matches.").color(p.dim));
             return;
+        }
+        if !playlists.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                for (id, name) in &playlists {
+                    if theme::button(ui, Some(Icon::Queue), name, Kind::Secondary).clicked() {
+                        self.search.clear();
+                        self.album = None;
+                        self.page = Page::Playlists;
+                        self.playlist = Some(id.clone());
+                    }
+                }
+            });
+            ui.add_space(6.0);
         }
         if !artists.is_empty() {
             ui.horizontal_wrapped(|ui| {
@@ -1633,7 +1816,7 @@ impl LibraryUi {
         // Right: format, volume, queue.
         let right = Rect::from_min_max(pos2(full.right() - 300.0, full.top()), full.max);
         ui.scope_builder(egui::UiBuilder::new().max_rect(right).layout(egui::Layout::right_to_left(egui::Align::Center)), |ui| {
-            let q = theme::icon_button(ui, Icon::Queue, 34.0, "Up Next");
+            let q = theme::icon_button(ui, Icon::Queue, 34.0, "Queue");
             if self.queue_open {
                 ui.painter().circle_stroke(q.rect.center(), 16.0, egui::Stroke::new(1.5, theme::ACCENT));
             }
@@ -1669,12 +1852,9 @@ impl LibraryUi {
                 let row_w = 34.0 * 4.0 + 46.0 + 8.0 * 4.0;
                 ui.add_space((ui.available_width() - row_w) / 2.0);
                 ui.spacing_mut().item_spacing.x = 8.0;
-                let sh = theme::icon_button(ui, Icon::Shuffle, 34.0, "Shuffle (when you next play an album or list)");
-                if self.shuffle {
-                    ui.painter().circle_filled(sh.rect.center_bottom() + vec2(0.0, -2.0), 2.0, theme::prism_at(0.3));
-                }
+                let sh = theme::icon_button(ui, Icon::Shuffle, 34.0, if self.shuffle { "Shuffle: on" } else { "Shuffle: off" });
                 if sh.clicked() {
-                    self.shuffle = !self.shuffle;
+                    self.toggle_shuffle();
                 }
                 if theme::icon_button(ui, Icon::Prev, 34.0, "Previous (or start of the song)").clicked() {
                     self.player.prev();
@@ -1696,14 +1876,15 @@ impl LibraryUi {
                 if theme::icon_button(ui, Icon::Next, 34.0, "Next").clicked() {
                     self.player.next();
                 }
-                let rp = theme::icon_button(ui, Icon::Repeat, 34.0, "Repeat the queue");
-                if self.repeat {
-                    ui.painter().circle_filled(rp.rect.center_bottom() + vec2(0.0, -2.0), 2.0, theme::prism_at(0.3));
-                }
+                let rp = theme::icon_button(ui, Icon::Repeat, 34.0, match self.repeat {
+                    Repeat::Off => "Repeat: off",
+                    Repeat::All => "Repeat: all",
+                    Repeat::One => "Repeat: this song",
+                });
                 if rp.clicked() {
-                    self.repeat = !self.repeat;
-                    self.player.set_repeat(self.repeat);
+                    self.cycle_repeat();
                 }
+                self.mode_marks(ui, &sh, &rp, 2.0);
             });
             ui.horizontal(|ui| {
                 let dur = s.duration.unwrap_or(0.0);
@@ -1736,7 +1917,7 @@ impl LibraryUi {
     }
 
     /// The full-size Now Playing view: big cover, names, transport on the
-    /// left; Up Next or the song's details on the right.
+    /// left; the queue or the song's details on the right.
     fn now_view(&mut self, ui: &mut egui::Ui, lib: &Arc<Library>) {
         let p = theme::pal(ui);
         let s = self.last.clone();
@@ -1825,8 +2006,8 @@ impl LibraryUi {
                     };
                     theme::badge(ui, &text, if f.lossless { theme::prism_at(0.1) } else { p.dim });
                 }
-                if x.origin == Origin::Flac {
-                    theme::badge(ui, "CD RIP", theme::OK).on_hover_text("Ripped and verified with LocalBeat Studio");
+                if is_cd_rip(&x) {
+                    theme::badge(ui, "CD rip", theme::OK).on_hover_text("Ripped and verified with LocalBeat Studio");
                 }
             });
             ui.add_space(10.0);
@@ -1848,12 +2029,9 @@ impl LibraryUi {
                 let row_w = 40.0 * 4.0 + 64.0 + 14.0 * 4.0;
                 ui.add_space(((ui.available_width() - row_w) / 2.0).max(0.0));
                 ui.spacing_mut().item_spacing.x = 14.0;
-                let sh = theme::icon_button(ui, Icon::Shuffle, 40.0, "Shuffle (when you next play an album or list)");
-                if self.shuffle {
-                    ui.painter().circle_filled(sh.rect.center_bottom() + vec2(0.0, -2.0), 2.5, theme::prism_at(0.3));
-                }
+                let sh = theme::icon_button(ui, Icon::Shuffle, 40.0, if self.shuffle { "Shuffle: on" } else { "Shuffle: off" });
                 if sh.clicked() {
-                    self.shuffle = !self.shuffle;
+                    self.toggle_shuffle();
                 }
                 if theme::icon_button(ui, Icon::Prev, 40.0, "Previous (or start of the song)").clicked() {
                     self.player.prev();
@@ -1868,14 +2046,15 @@ impl LibraryUi {
                 if theme::icon_button(ui, Icon::Next, 40.0, "Next").clicked() {
                     self.player.next();
                 }
-                let rp = theme::icon_button(ui, Icon::Repeat, 40.0, "Repeat the queue");
-                if self.repeat {
-                    ui.painter().circle_filled(rp.rect.center_bottom() + vec2(0.0, -2.0), 2.5, theme::prism_at(0.3));
-                }
+                let rp = theme::icon_button(ui, Icon::Repeat, 40.0, match self.repeat {
+                    Repeat::Off => "Repeat: off",
+                    Repeat::All => "Repeat: all",
+                    Repeat::One => "Repeat: this song",
+                });
                 if rp.clicked() {
-                    self.repeat = !self.repeat;
-                    self.player.set_repeat(self.repeat);
+                    self.cycle_repeat();
                 }
+                self.mode_marks(ui, &sh, &rp, 2.5);
             });
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -1892,10 +2071,10 @@ impl LibraryUi {
             });
         });
 
-        // ---- right: Up Next / Details
+        // ---- right: Queue / Details
         ui.scope_builder(egui::UiBuilder::new().max_rect(right).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
             ui.horizontal(|ui| {
-                for (tab, label) in [(NowTab::Queue, "Up Next"), (NowTab::Details, "Details")] {
+                for (tab, label) in [(NowTab::Queue, "Queue"), (NowTab::Details, "Details")] {
                     let on = self.now_tab == tab;
                     let text = egui::RichText::new(label).font(if on { theme::bold(18.0) } else { theme::medium(18.0) }).color(if on { p.text } else { p.faint });
                     let r = ui.add(egui::Label::new(text).sense(Sense::click()));
@@ -1921,7 +2100,7 @@ impl LibraryUi {
         self.run_actions();
     }
 
-    /// Up Next in the Now Playing view: the whole queue, current one marked.
+    /// The queue in the Now Playing view: the whole of it, current one marked.
     fn now_queue(&mut self, ui: &mut egui::Ui, lib: &Arc<Library>) {
         let p = theme::pal(ui);
         let queue = self.player.queue();
@@ -1953,7 +2132,7 @@ impl LibraryUi {
     }
 
     /// The song's details: what the library knows, plus extra tags.
-    fn now_details(&mut self, ui: &mut egui::Ui, x: &Song, _si: usize) {
+    fn now_details(&mut self, ui: &mut egui::Ui, x: &Song, si: usize) {
         let p = theme::pal(ui);
         if self.details.as_ref().map(|(path, _)| path) != Some(&x.path) {
             self.details = Some((x.path.clone(), song_details(&x.path)));
@@ -1988,7 +2167,8 @@ impl LibraryUi {
             match x.origin {
                 Origin::Flac => "CD rip (verified FLAC library)",
                 Origin::Misc => "Miscellaneous library",
-                Origin::Server => "The LocalBeat server",
+                Origin::Server if is_cd_rip(x) => "CD rip (verified FLAC library, on the music server)",
+                Origin::Server => "The music server",
             }
             .into(),
         );
@@ -1999,7 +2179,12 @@ impl LibraryUi {
             }
         }
         add("File", x.path.display().to_string());
+        let chips = self.lib.clone().zip(self.album_of(si));
         egui::ScrollArea::vertical().id_salt("now-details").auto_shrink([false, false]).show(ui, |ui| {
+            if let Some((lib, a)) = &chips {
+                self.tag_chips(ui, lib, *a);
+                ui.add_space(10.0);
+            }
             egui::Grid::new("details").num_columns(2).spacing([18.0, 9.0]).show(ui, |ui| {
                 for (k, v) in &rows {
                     ui.label(egui::RichText::new(k).color(p.faint));
@@ -2028,27 +2213,51 @@ impl LibraryUi {
         });
     }
 
-    /// The Up Next panel (right side).
+    /// The Queue panel (right side): the song playing, then what's next.
+    /// Header like the phone's: "N songs · m:ss left · shuffled", Save, Clear.
+    /// Drag a row to move it; × takes it out.
     pub fn queue_panel(&mut self, ui: &mut egui::Ui) {
         let p = theme::pal(ui);
+        let queue = self.player.queue();
+        let cur = self.last.index.unwrap_or(0).min(queue.len().saturating_sub(1));
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Up Next").font(theme::bold(20.0)).color(p.text));
+            ui.label(egui::RichText::new("Queue").font(theme::bold(20.0)).color(p.text));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if theme::icon_button(ui, Icon::Cross, 28.0, "Close").clicked() {
                     self.queue_open = false;
                 }
+                if queue.is_empty() {
+                    return;
+                }
+                if ui.add_enabled(queue.len() > cur + 1, egui::Button::new("Clear")).on_hover_text("Take out everything after the song playing").clicked() {
+                    self.player.rearrange((0..=cur).collect());
+                }
+                if self.playlists.available() && ui.button("Save").on_hover_text("Make a playlist of the queue").clicked() {
+                    let songs: Vec<usize> = queue.iter().filter_map(|q| self.by_path.get(q).copied()).collect();
+                    self.actions.push(Action::NewPlaylist(songs));
+                }
             });
         });
-        ui.add_space(6.0);
-        let queue = self.player.queue();
         let Some(lib) = self.lib.clone() else { return };
         if queue.is_empty() {
-            ui.label(egui::RichText::new("Nothing queued. Play an album, or right-click one and choose Add to Up Next.").color(p.dim));
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new("Nothing queued. Play an album, or right-click one and choose Add to queue.").color(p.dim));
             return;
         }
-        let cur = self.last.index.unwrap_or(0);
+        let seconds = |path: &PathBuf| self.by_path.get(path).map_or(0.0, |&si| lib.songs[si].seconds);
+        let left = queue[cur + 1..].iter().map(seconds).sum::<f64>() + (seconds(&queue[cur]) - self.last.position).max(0.0);
+        let mut line = format!("{} · {} left", if queue.len() == 1 { "1 song".into() } else { format!("{} songs", queue.len()) }, mmss(left));
+        if self.shuffle {
+            line.push_str(" · shuffled");
+        }
+        ui.label(egui::RichText::new(line).color(p.dim));
+        ui.add_space(6.0);
         let mut jump = None;
+        let mut remove = None;
+        let mut moved = None;
+        let row_h = 42.0;
         egui::ScrollArea::vertical().id_salt("queue").auto_shrink([false, false]).show(ui, |ui| {
+            let mut rows: Vec<(usize, Rect)> = Vec::new();
             for (i, path) in queue.iter().enumerate().skip(cur) {
                 if i == cur {
                     theme::section_label(ui, "Now playing");
@@ -2060,29 +2269,168 @@ impl LibraryUi {
                     Some(&si) => (lib.songs[si].title.clone(), lib.songs[si].artist.clone()),
                     None => (path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), String::new()),
                 };
-                let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 42.0), Sense::click());
-                if i == cur {
+                let sense = if i == cur { Sense::click() } else { Sense::click_and_drag() };
+                let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), sense);
+                rows.push((i, rect));
+                let dragging = self.queue_drag == Some(i);
+                if i == cur || dragging {
                     ui.painter().rect_filled(rect, 8.0, p.card_hover);
                 } else if resp.hovered() {
                     ui.painter().rect_filled(rect, 8.0, p.card);
                 }
-                let w = rect.width() - 20.0;
+                let x_rect = Rect::from_center_size(rect.right_center() - vec2(18.0, 0.0), Vec2::splat(24.0));
+                let show_x = i != cur && (resp.hovered() || ui.rect_contains_pointer(x_rect)) && self.queue_drag.is_none();
+                let w = rect.width() - if show_x { 46.0 } else { 20.0 };
                 let t = theme::one_line(ui, &title, if i == cur { theme::medium(14.0) } else { egui::FontId::proportional(14.0) }, p.text, w);
                 ui.painter().galley(rect.left_top() + vec2(10.0, 4.0), t, p.text);
                 let a = theme::one_line(ui, &artist, egui::FontId::proportional(12.5), p.dim, w);
                 ui.painter().galley(rect.left_top() + vec2(10.0, 23.0), a, p.dim);
-                if resp.clicked() && i != cur {
+                if show_x {
+                    let x = ui.interact(x_rect, ui.scope_id().with(("queue-x", i)), Sense::click());
+                    theme::paint_icon(ui.painter(), x_rect.shrink(6.0), Icon::Cross, if x.hovered() { p.text } else { p.dim });
+                    if x.on_hover_text("Remove from queue").clicked() {
+                        remove = Some(i);
+                    }
+                }
+                if resp.drag_started() {
+                    self.queue_drag = Some(i);
+                }
+                if resp.clicked() && i != cur && remove.is_none() {
                     jump = Some(i);
                 }
+                resp.context_menu(|ui| {
+                    if i != cur && ui.button("Play next").clicked() {
+                        moved = Some((i, cur + 1));
+                        ui.close();
+                    }
+                    if i != cur && ui.button("Remove from queue").clicked() {
+                        remove = Some(i);
+                        ui.close();
+                    }
+                });
                 if i > cur + 300 {
                     ui.label(egui::RichText::new(format!("and {} more", queue.len() - i)).color(p.faint));
                     break;
                 }
             }
+            // Dragging: a line where the row would land; let go to move it there.
+            if let Some(from) = self.queue_drag {
+                if let Some(pos) = ui.ctx().pointer_interact_pos() {
+                    let to = rows.iter().filter(|(i, r)| *i > cur && pos.y > r.center().y).map(|(i, _)| *i).max().map_or(cur + 1, |i| i + 1);
+                    let y = rows.iter().find(|(i, _)| *i == to).map_or_else(|| rows.last().map_or(0.0, |(_, r)| r.bottom()), |(_, r)| r.top());
+                    let x = rows.first().map_or(ui.max_rect().x_range(), |(_, r)| r.x_range());
+                    ui.painter().hline(x, y, egui::Stroke::new(2.0, theme::prism_at(0.3)));
+                    if ui.input(|i| i.pointer.any_released()) {
+                        moved = Some((from, to));
+                        self.queue_drag = None;
+                    }
+                } else if ui.input(|i| i.pointer.any_released()) {
+                    self.queue_drag = None;
+                }
+            }
         });
-        if let Some(i) = jump {
+        if let Some(i) = remove {
+            self.player.rearrange((0..queue.len()).filter(|&k| k != i).collect());
+        } else if let Some((from, to)) = moved {
+            self.player.rearrange(moved_order(queue.len(), from, to));
+        } else if let Some(i) = jump {
             self.player.jump(i);
         }
+    }
+
+    /// Shuffle on: what's after the song playing is shuffled now (and what
+    /// you play next starts shuffled). Off: back in the order it was in.
+    fn toggle_shuffle(&mut self) {
+        self.shuffle = !self.shuffle;
+        let queue = self.player.queue();
+        let cur = self.last.index.unwrap_or(0);
+        if queue.len() <= cur + 1 {
+            self.unshuffled = None;
+            return;
+        }
+        let mut order: Vec<usize> = (0..queue.len()).collect();
+        if self.shuffle {
+            self.unshuffled = Some(queue.clone());
+            shuffle(&mut order[cur + 1..]);
+        } else if let Some(before) = self.unshuffled.take() {
+            // Each song's place in the order before shuffling (songs added
+            // since go last, as they are).
+            let mut used = vec![false; before.len()];
+            let mut rank = |path: &PathBuf| {
+                let k = before.iter().enumerate().position(|(k, b)| !used[k] && b == path);
+                k.inspect(|&k| used[k] = true).unwrap_or(usize::MAX)
+            };
+            let mut rest: Vec<(usize, usize)> = (cur + 1..queue.len()).map(|i| (rank(&queue[i]), i)).collect();
+            rest.sort_by_key(|&(r, i)| (r, i));
+            order.truncate(cur + 1);
+            order.extend(rest.into_iter().map(|(_, i)| i));
+        } else {
+            return;
+        }
+        self.player.rearrange(order);
+    }
+
+    /// Repeat cycles off → all → one, as on the phone.
+    fn cycle_repeat(&mut self) {
+        self.repeat = match self.repeat {
+            Repeat::Off => Repeat::All,
+            Repeat::All => Repeat::One,
+            Repeat::One => Repeat::Off,
+        };
+        self.player.set_repeat(self.repeat);
+    }
+
+    /// Marks the shuffle and repeat buttons: a dot when on, "1" for repeat one.
+    fn mode_marks(&self, ui: &egui::Ui, shuffle: &egui::Response, repeat: &egui::Response, r: f32) {
+        let c = theme::prism_at(0.3);
+        if self.shuffle {
+            ui.painter().circle_filled(shuffle.rect.center_bottom() + vec2(0.0, -2.0), r, c);
+        }
+        match self.repeat {
+            Repeat::Off => {}
+            Repeat::All => {
+                ui.painter().circle_filled(repeat.rect.center_bottom() + vec2(0.0, -2.0), r, c);
+            }
+            Repeat::One => {
+                ui.painter().text(repeat.rect.right_top() + vec2(-6.0, 7.0), egui::Align2::CENTER_CENTER, "1", theme::bold(10.0), c);
+            }
+        }
+    }
+}
+
+/// Positions 0..n with the song at `from` moved so it lands before what was at `to`.
+fn moved_order(n: usize, from: usize, to: usize) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..n).collect();
+    if from >= n {
+        return order;
+    }
+    let item = order.remove(from);
+    let to = if to > from { to - 1 } else { to }.min(order.len());
+    order.insert(to, item);
+    order
+}
+
+#[cfg(test)]
+mod queue_tests {
+    use super::moved_order;
+
+    #[test]
+    fn shuffle_mixes_songs() {
+        // 50 "albums" of 12 songs in a row: after shuffling, a song should
+        // seldom still be followed by the next one from its album.
+        let mut v: Vec<usize> = (0..600).collect();
+        super::shuffle(&mut v);
+        let kept = v.windows(2).filter(|w| w[1] == w[0] + 1).count();
+        eprintln!("neighbours kept: {kept} of 599; first 24: {:?}", &v[..24]);
+        assert!(kept < 20, "{kept} songs still followed by their album's next song");
+    }
+
+    #[test]
+    fn moving_a_queue_row() {
+        assert_eq!(moved_order(5, 3, 1), [0, 3, 1, 2, 4], "up");
+        assert_eq!(moved_order(5, 1, 4), [0, 2, 3, 1, 4], "down: lands before what was at 4");
+        assert_eq!(moved_order(5, 1, 5), [0, 2, 3, 4, 1], "to the end");
+        assert_eq!(moved_order(3, 1, 1), [0, 1, 2], "onto itself");
     }
 }
 
@@ -2098,6 +2446,8 @@ enum MenuChoice {
     Move(usize, isize),
     /// Take the song out of the library (asks first).
     RemoveFromLibrary,
+    GoToAlbum,
+    GoToArtist,
 }
 
 /// What a song row's right-click menu offers besides playing.
@@ -2107,6 +2457,8 @@ struct RowMenu {
     playlists: Option<Vec<(String, String)>>,
     /// On a playlist's page: the row's position and the playlist's length (Move, Remove).
     in_playlist: Option<(usize, usize)>,
+    /// "Go to album" (not on the album's own page).
+    go_to_album: bool,
 }
 
 enum RowClick {
@@ -2178,7 +2530,7 @@ fn song_row(ui: &mut egui::Ui, s: &Song, number: usize, show_artist: bool, is_no
             out = Some(RowClick::Menu(MenuChoice::PlayNext));
             ui.close();
         }
-        if ui.add_enabled(!s.drm, egui::Button::new("Add to Up Next")).clicked() {
+        if ui.add_enabled(!s.drm, egui::Button::new("Add to queue")).clicked() {
             out = Some(RowClick::Menu(MenuChoice::Append));
             ui.close();
         }
@@ -2199,6 +2551,15 @@ fn song_row(ui: &mut egui::Ui, s: &Song, number: usize, show_artist: bool, is_no
                 }
             });
         }
+        if menu.go_to_album && ui.button("Go to album").clicked() {
+            out = Some(RowClick::Menu(MenuChoice::GoToAlbum));
+            ui.close();
+        }
+        if ui.button("Go to artist").clicked() {
+            out = Some(RowClick::Menu(MenuChoice::GoToArtist));
+            ui.close();
+        }
+        // Studio's own items, after the shared ones.
         if let Some((pos, len)) = menu.in_playlist {
             ui.separator();
             if ui.add_enabled(pos > 0, egui::Button::new("Move up")).clicked() {
@@ -2225,6 +2586,12 @@ fn song_row(ui: &mut egui::Ui, s: &Song, number: usize, show_artist: bool, is_no
         }
     });
     out
+}
+
+/// From a verified CD rip: the FLAC library here, or the music server's FLAC
+/// library (it serves an album from its FLAC rip; LocalBeat `GLOSSARY.md`).
+fn is_cd_rip(s: &Song) -> bool {
+    s.origin == Origin::Flac || (s.origin == Origin::Server && s.codec.eq_ignore_ascii_case("flac"))
 }
 
 /// "FLAC 16/44.1" for an album whose songs share one format.

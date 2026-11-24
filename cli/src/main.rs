@@ -1,3 +1,5 @@
+mod ai_enrich_cmd;
+mod cover_cmd;
 mod repair_cmd;
 mod ctdb_cmd;
 mod library_cmd;
@@ -165,6 +167,17 @@ enum Command {
         /// Save your AcoustID application key (https://acoustid.org/new-application)
         #[arg(long)]
         acoustid_key: Option<String>,
+    },
+    /// AI-assisted genre, subgenre and mood enrichment (export prompt, import
+    /// JSON, review/follow-up, apply tags to files and server)
+    AiEnrich {
+        #[command(subcommand)]
+        action: Option<ai_enrich_cmd::AiEnrichAction>,
+    },
+    /// Find and embed missing album cover art (local files and server)
+    Covers {
+        #[command(subcommand)]
+        action: Option<cover_cmd::CoversAction>,
     },
     /// Your playlists on the music server: list, show, new (from a song
     /// list with --from), add, remove, move, rename, share, delete
@@ -335,6 +348,8 @@ fn main() -> ExitCode {
         Command::Enrich { patterns, dry_run, limit, retry, undo, sound, acoustid_key } => {
             enrich_cmd::enrich(enrich_cmd::EnrichArgs { patterns, dry_run, limit, retry, undo, sound, acoustid_key })
         }
+        Command::AiEnrich { action } => ai_enrich_cmd::run(action),
+        Command::Covers { action } => cover_cmd::run(action),
         Command::Fingerprint { file } => (|| -> anyhow::Result<bool> {
             let s = localbeat_core::config::Settings::load();
             let key = localbeat_core::config::Prefs::load(&s).acoustid_key;

@@ -2,6 +2,8 @@
 //! here, so everything builds and tests the same on Windows and Linux.
 
 pub mod accuraterip;
+pub mod ai_enrich;
+pub mod cover_finder;
 pub mod covers;
 pub mod ctdb;
 pub mod ctdb_repair;
@@ -10,6 +12,7 @@ pub mod library;
 pub mod acoustid;
 pub mod album_check;
 pub mod audio_source;
+pub mod browse;
 pub mod config;
 pub mod cover;
 pub mod enrich;

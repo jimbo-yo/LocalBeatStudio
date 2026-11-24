@@ -2441,6 +2441,7 @@ dependencies = [
  "dirs",
  "localbeat-core",
  "localbeat-platform",
+ "serde",
  "serde_json",
  "trash",
 ]
