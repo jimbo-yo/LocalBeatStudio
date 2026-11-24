@@ -551,11 +551,14 @@ impl App {
                     .inner
                 })
                 .inner;
-            if search.changed() && !self.library.search.is_empty() {
-                self.tab = Tab::Library;
+            if search.changed() {
+                if !self.library.search.trim().is_empty() {
+                    self.tab = Tab::Library;
+                }
+                self.library.on_search_changed();
             }
             if search.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                self.library.search.clear();
+                self.library.clear_search();
             }
             ui.add_space(16.0);
             // The pages scroll when the window is too short for them all;
@@ -574,12 +577,11 @@ impl App {
                 let playing = self.library.playing();
                 let has_song = self.library.has_song();
                 let status = playing.then_some(("", theme::prism_at(0.3)));
-                if theme::nav_item(ui, theme::Icon::Songs, "Now Playing", self.tab == Tab::Library && self.library.now_open, status)
+                if theme::nav_item(ui, theme::Icon::Songs, "Now Playing", self.tab == Tab::Library && self.library.is_now_open(), status)
                     .on_hover_text(if has_song { "The song playing, big" } else { "Nothing playing yet" })
                     .clicked()
                 {
                     self.tab = Tab::Library;
-                    self.library.search.clear();
                     self.library.open_now();
                 }
                 let lib_counts = self.library.lib.as_ref().map(|l| (l.albums.len(), l.artists.len(), l.songs.len()));
@@ -595,19 +597,12 @@ impl App {
                     if page == library_ui::Page::Playlists && !self.library.playlists.available() {
                         continue;
                     }
-                    let shown = if self.library.page == library_ui::Page::Recent { library_ui::Page::Explore } else { self.library.page };
-                    let selected = self.tab == Tab::Library && shown == page && self.library.search.is_empty() && !self.library.now_open;
+                    let selected = self.tab == Tab::Library && self.library.sidebar_page() == Some(page);
                     let n = count.map(|n| n.to_string()).unwrap_or_default();
                     let status = (!n.is_empty()).then_some((n.as_str(), p.faint));
                     if theme::nav_item(ui, icon, label, selected, status).clicked() {
                         self.tab = Tab::Library;
-                        self.library.page = page;
-                        self.library.group = None;
-                        self.library.now_open = false;
-                        self.library.album = None;
-                        self.library.album_from_search = None;
-                        self.library.playlist = None;
-                        self.library.search.clear();
+                        self.library.open_page(page);
                     }
                 }
                 ui.add_space(16.0);
@@ -1158,7 +1153,7 @@ impl App {
 
         let p = theme::pal(ui);
         // The full-size Now Playing view has its own controls: no bar then.
-        let full_player = self.tab == Tab::Library && self.library.now_open;
+        let full_player = self.tab == Tab::Library && self.library.is_now_open();
         if !full_player {
         egui::Panel::bottom("player")
             .exact_size(94.0)
