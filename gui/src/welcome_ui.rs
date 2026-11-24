@@ -56,6 +56,12 @@ impl WelcomeUi {
         }
     }
 
+    /// Pre-fills the fullscreen Welcome screen (e.g. launched via `localbeat://join/...`).
+    pub fn prefill(&mut self, uri: String) {
+        self.input = uri;
+        self.error = None;
+    }
+
     /// Opens the invite-claim modal (optionally pre-filled with a `localbeat://join/...` URI).
     pub fn open_modal(&mut self, prefill: Option<String>, prefs: &Prefs) {
         self.modal_open = true;

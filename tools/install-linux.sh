@@ -19,16 +19,18 @@ Type=Application
 Name=LocalBeat Studio
 GenericName=Music library, player and CD ripper
 Comment=Play your music, rip CDs to verified FLAC, sync to the phone
-Exec=$HOME/.local/bin/localbeat-studio
+Exec=$HOME/.local/bin/localbeat-studio %u
 Icon=localbeat-studio
 Terminal=false
 StartupWMClass=localbeat-studio
 Categories=AudioVideo;Audio;Player;
+MimeType=x-scheme-handler/localbeat;
 Keywords=music;player;cd;rip;flac;opus;phone;sync;accuraterip;localbeat;ripshelf;
 DESKTOP
 # Before the rename to LocalBeat Studio (2026-11-11).
 rm -f "$HOME/.local/bin/ripshelf" "$HOME/.local/bin/ripshelf-gui" "$HOME/.local/share/applications/ripshelf.desktop"
 update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+command -v xdg-mime >/dev/null && xdg-mime default localbeat-studio.desktop x-scheme-handler/localbeat 2>/dev/null || true
 gtk-update-icon-cache -q -t "$ICONS" 2>/dev/null || true
 command -v kbuildsycoca6 >/dev/null && kbuildsycoca6 >/dev/null 2>&1 || true
 echo

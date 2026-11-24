@@ -106,14 +106,24 @@ if (-not (($userPath -split ';') -contains $dest)) {
     Write-Host "Added $dest to your PATH (new terminals)"
 }
 
+$studioExe = Join-Path $dest 'localbeat-studio.exe'
 $lnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'LocalBeat Studio.lnk'
 $shell = New-Object -ComObject WScript.Shell
 $s = $shell.CreateShortcut($lnk)
-$s.TargetPath = Join-Path $dest 'localbeat-studio.exe'
+$s.TargetPath = $studioExe
 $s.WorkingDirectory = $dest
 $s.Description = 'Music library, player, CD ripper and phone sync'
-$s.IconLocation = "$(Join-Path $dest 'localbeat-studio.exe'),0"
+$s.IconLocation = "$studioExe,0"
 $s.Save()
+
+# Register per-user `localbeat://` URI handler (no admin/UAC required).
+$protoKey = 'HKCU:\Software\Classes\localbeat'
+New-Item -Path "$protoKey\DefaultIcon" -Force | Out-Null
+New-Item -Path "$protoKey\shell\open\command" -Force | Out-Null
+Set-ItemProperty -Path $protoKey -Name '(Default)' -Value 'URL:LocalBeat Protocol'
+Set-ItemProperty -Path $protoKey -Name 'URL Protocol' -Value ''
+Set-ItemProperty -Path "$protoKey\DefaultIcon" -Name '(Default)' -Value "`"$studioExe`",0"
+Set-ItemProperty -Path "$protoKey\shell\open\command" -Name '(Default)' -Value "`"$studioExe`" `"%1`""
 
 Write-Host ''
 Write-Host "Installed to $dest"

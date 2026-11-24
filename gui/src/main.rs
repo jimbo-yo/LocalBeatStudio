@@ -385,6 +385,18 @@ impl App {
             // Only an admin computer rips (docs/joining.md).
             app.start();
         }
+        // If launched via a `localbeat://join/...` URI handler, pre-fill or open
+        // the invite-claim modal (with confirmation guard if already joined).
+        if let Some(uri) = std::env::args()
+            .skip(1)
+            .find_map(|a| localbeat_core::join::extract_invite_uri(&a).map(str::to_string))
+        {
+            if app.welcome_fullscreen {
+                app.welcome.prefill(uri);
+            } else {
+                app.welcome.open_modal(Some(uri), &app.prefs);
+            }
+        }
         app
     }
 
