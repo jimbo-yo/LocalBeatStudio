@@ -291,6 +291,26 @@ pub struct ServerStatus {
     pub folders: Vec<ServerFolder>,
     pub disks: Vec<ServerDisk>,
     pub opus: OpusProgress,
+    pub backup: Option<BackupStatus>,
+}
+
+/// Encrypted backup summary from `localbeat-backup` (`/var/lib/localbeat/backup-status.json`).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BackupStatus {
+    pub state: String,
+    pub paused: bool,
+    pub running: bool,
+    pub seeded: bool,
+    pub seed_percent: f64,
+    pub seed_included_bytes: u64,
+    pub seed_total_bytes: u64,
+    pub last_run_at: Option<String>,
+    pub last_run_ok: Option<bool>,
+    pub last_error: Option<String>,
+    pub snapshot_count: u64,
+    pub last_check_at: Option<String>,
+    pub last_check_ok: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
