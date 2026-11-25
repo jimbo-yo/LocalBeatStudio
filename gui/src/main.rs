@@ -728,9 +728,7 @@ impl App {
                 if theme::nav_item(ui, theme::Icon::Log, "Activity log", self.show_log, None).clicked() {
                     self.show_log = !self.show_log;
                 }
-                let joining = self.settings_page.waiting();
-                let status = joining.then_some(("…", theme::BRAND_GOLD));
-                if theme::nav_item(ui, theme::Icon::Gear, "Settings", self.tab == Tab::Settings, status)
+                if theme::nav_item(ui, theme::Icon::Gear, "Settings", self.tab == Tab::Settings, None)
                     .on_hover_text("The server, music folders, phone, what's installed")
                     .clicked()
                 {

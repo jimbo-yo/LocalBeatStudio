@@ -5,7 +5,6 @@ pub mod disk;
 pub mod drive;
 pub mod phone;
 pub mod phone_notify;
-pub mod tunnel;
 
 /// A command for a console program (adb, rsync, ssh…). On Windows it runs
 /// without a console window: Studio has none, so each run would flash one up.

@@ -1,23 +1,13 @@
-//! Settings: joining the LocalBeat server (docs/joining.md), music folders,
-//! the phone, what this computer needs installed and, for an admin, the CD
-//! drives. Opens by itself on a new install (no settings file yet).
-//!
-//! Joining: this computer asks as a listener (plays the server's library);
-//! a quiet "Admin access" link asks as an admin instead (rips CDs and sends
-//! them). The request shows a code; the admin approves it on the server's
-//! admin page; then the tunnel, login and (admin) the sending key are set up
-//! here. Work runs on background threads; `poll` carries on while another
-//! page is open.
+//! Settings: music server connection (docs/onboarding.md), music folders,
+//! the phone, optional tools (adb / rsync / OpenSSH for admins), and CD drives.
 
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::time::{Duration, Instant};
 
 use eframe::egui::{self, RichText};
 use localbeat_core::config::{self, Prefs, Settings};
-use localbeat_core::join::{self, Pending, Role, Status};
+use localbeat_core::join::Role;
 use localbeat_core::subsonic::Subsonic;
-use localbeat_engine::join as joining;
-use localbeat_platform::tunnel;
+use localbeat_core::tunnel::{EndpointKind, LinkState};
 
 use crate::phone_tab::PhoneTab;
 use crate::theme;
@@ -25,20 +15,15 @@ use crate::theme;
 type Answer<T> = Result<T, String>;
 
 enum Msg {
-    Asked(Answer<Pending>),
-    Checked(Pending, Answer<Status>),
-    Finished(Answer<(Vec<String>, Prefs)>),
     Checks(Checks),
     Installed(&'static str, Answer<String>),
     Drives(Answer<Vec<DriveRow>>),
     Connection(Answer<()>),
 }
 
-/// What's installed (worked out in the background: each is a program run).
+/// Optional tools installed on this computer (checked in the background).
 #[derive(Clone)]
 struct Checks {
-    tunnel: tunnel::State,
-    wireguard: Answer<()>,
     adb: Answer<String>,
     rsync: Answer<String>,
     ssh_keygen: Answer<()>,
@@ -57,16 +42,6 @@ struct DriveRow {
 pub struct SettingsTab {
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
-    name: String,
-    server: String,
-    /// Whose computer this is (a user on the server; empty: the admin decides).
-    user: String,
-    as_admin: bool,
-    pending: Option<Pending>,
-    busy: Option<&'static str>,
-    next_check: Option<Instant>,
-    join_error: Option<String>,
-    done: Vec<String>,
     checks: Option<Checks>,
     checking: bool,
     installing: Option<&'static str>,
@@ -78,7 +53,7 @@ pub struct SettingsTab {
     finding_drives: bool,
     connection: Option<Answer<()>>,
     status: crate::server_status::StatusWindow,
-    /// Set by a button: the app starts itself again (new folders, joined).
+    /// Set by a button: the app starts itself again (new folders).
     pub restart_wanted: bool,
     /// Set by a button: open the "Join with an invite" modal.
     pub open_invite_modal: bool,
@@ -100,16 +75,12 @@ fn run_checks() -> Checks {
         Err(_) => Err("OpenSSH (ssh-keygen) isn't installed".into()),
     };
     Checks {
-        tunnel: tunnel::state(),
-        wireguard: tunnel::available(),
         adb: localbeat_platform::phone::adb_version(),
         rsync,
         ssh_keygen,
     }
 }
 
-/// Windows: installs with winget (no console window; winget asks for
-/// permission itself when a package needs it).
 #[cfg(windows)]
 fn winget(id: &str) -> Answer<String> {
     let out = localbeat_platform::command("winget")
@@ -125,14 +96,12 @@ fn winget(id: &str) -> Answer<String> {
     }
 }
 
-/// Windows: MSYS2's rsync + ssh in C:\msys64, as tools\install-windows.ps1.
 #[cfg(windows)]
 fn msys_rsync() -> Answer<String> {
     let bash = std::path::Path::new(r"C:\msys64\usr\bin\bash.exe");
     if !bash.is_file() {
         winget("MSYS2.MSYS2")?;
     }
-    // Twice: the first update can replace pacman/the runtime and stop early.
     for cmd in ["pacman -Syu --noconfirm", "pacman -Syu --noconfirm", "pacman -S --needed --noconfirm rsync openssh"] {
         let _ = localbeat_platform::command(bash).args(["-lc", cmd]).output();
     }
@@ -147,7 +116,6 @@ fn install(what: &'static str) -> Answer<String> {
     #[cfg(windows)]
     {
         match what {
-            "wireguard" => winget("WireGuard.WireGuard"),
             "adb" => winget("Google.PlatformTools"),
             "rsync" => msys_rsync(),
             _ => Err(format!("nothing to install for {what}")),
@@ -182,21 +150,11 @@ fn ok_mark(ui: &mut egui::Ui, ok: bool) {
 }
 
 impl SettingsTab {
-    pub fn new(s: &Settings, prefs: &Prefs) -> Self {
+    pub fn new(s: &Settings, _prefs: &Prefs) -> Self {
         let (tx, rx) = channel();
-        let pending = Pending::load(&s.config_dir);
         SettingsTab {
             tx,
             rx,
-            name: if prefs.server.login.is_empty() { join::suggested_name() } else { prefs.server.login.clone() },
-            server: if prefs.server.host.is_empty() { join::DEFAULT_SERVER.into() } else { prefs.server.host.clone() },
-            user: String::new(),
-            as_admin: pending.as_ref().is_some_and(|p| p.role == Role::Admin),
-            next_check: pending.as_ref().map(|_| Instant::now()),
-            pending,
-            busy: None,
-            join_error: None,
-            done: Vec::new(),
             checks: None,
             checking: false,
             installing: None,
@@ -214,11 +172,6 @@ impl SettingsTab {
         }
     }
 
-    /// A join request is out (for the sidebar).
-    pub fn waiting(&self) -> bool {
-        self.pending.is_some()
-    }
-
     fn spawn(&self, ctx: &egui::Context, f: impl FnOnce() -> Msg + Send + 'static) {
         let (tx, ctx) = (self.tx.clone(), ctx.clone());
         std::thread::spawn(move || {
@@ -234,71 +187,10 @@ impl SettingsTab {
         }
     }
 
-    fn finish(&mut self, s: &Settings, prefs: &Prefs, ctx: &egui::Context) {
-        let Some(p) = self.pending.clone() else { return };
-        self.busy = Some("Setting up this computer (Windows asks for permission once, for the tunnel)…");
-        self.join_error = None;
-        let (s, mut prefs) = (s.clone(), prefs.clone());
-        self.spawn(ctx, move || {
-            Msg::Finished(joining::finish(&s, &p, &mut prefs).map(|lines| (lines, prefs)).map_err(|e| format!("{e:#}")))
-        });
-    }
-
-    /// Takes in background results (every frame, whichever page is open);
-    /// returns lines for the activity log.
-    pub fn poll(&mut self, s: &Settings, prefs: &mut Prefs, ctx: &egui::Context) -> Vec<String> {
+    pub fn poll(&mut self, _s: &Settings, _prefs: &mut Prefs, _ctx: &egui::Context) -> Vec<String> {
         let mut log = Vec::new();
-        let msgs: Vec<Msg> = self.rx.try_iter().collect();
-        for m in msgs {
+        for m in self.rx.try_iter() {
             match m {
-                Msg::Asked(Ok(p)) => {
-                    log.push(format!("Asked the server to join as {} ({}), code {}", p.name, p.role.as_str(), p.code));
-                    self.pending = Some(p);
-                    self.busy = None;
-                    self.next_check = Some(Instant::now() + Duration::from_secs(2));
-                }
-                Msg::Asked(Err(e)) | Msg::Finished(Err(e)) => {
-                    self.busy = None;
-                    self.join_error = Some(e);
-                }
-                Msg::Checked(p, r) => {
-                    self.busy = None;
-                    match r {
-                        Ok(Status::Waiting) => {
-                            self.pending = Some(p);
-                            self.next_check = Some(Instant::now() + Duration::from_secs(3));
-                        }
-                        Ok(Status::Denied) => {
-                            joining::cancel(s, &p);
-                            self.pending = None;
-                            self.join_error = Some("The admin said no.".into());
-                            log.push("Joining the server: the admin said no".into());
-                        }
-                        Ok(Status::Approved(_)) => {
-                            self.pending = Some(p);
-                            log.push("Joining the server: approved".into());
-                            self.finish(s, prefs, ctx);
-                        }
-                        Err(e) => {
-                            if e.contains("no longer knows") {
-                                Pending::remove(&s.config_dir);
-                                self.pending = None;
-                            } else {
-                                self.pending = Some(p);
-                                self.next_check = Some(Instant::now() + Duration::from_secs(10));
-                            }
-                            self.join_error = Some(e);
-                        }
-                    }
-                }
-                Msg::Finished(Ok((lines, new))) => {
-                    self.busy = None;
-                    self.pending = None;
-                    *prefs = new;
-                    log.extend(lines.iter().map(|l| format!("Joining the server: {l}")));
-                    self.done = lines;
-                    self.checks = None;
-                }
                 Msg::Checks(c) => {
                     self.checking = false;
                     self.checks = Some(c);
@@ -320,21 +212,6 @@ impl SettingsTab {
                 Msg::Connection(r) => self.connection = Some(r),
             }
         }
-        // Waiting for the admin: ask now and then.
-        if let (Some(p), None, Some(t)) = (&self.pending, self.busy, self.next_check)
-            && p.approval.is_none()
-        {
-            if Instant::now() >= t {
-                self.next_check = None;
-                let (s, mut p) = (s.clone(), p.clone());
-                self.spawn(ctx, move || {
-                    let r = joining::check(&s, &mut p).map_err(|e| format!("{e:#}"));
-                    Msg::Checked(p, r)
-                });
-            } else {
-                ctx.request_repaint_after(t - Instant::now());
-            }
-        }
         log
     }
 
@@ -349,9 +226,9 @@ impl SettingsTab {
             self.folders_card(ui, s, prefs);
             ui.add_space(12.0);
             self.phone_card(ui, phone);
-            ui.add_space(12.0);
-            self.needs_card(ui, prefs);
             if prefs.is_admin() {
+                ui.add_space(12.0);
+                self.needs_card(ui, prefs);
                 ui.add_space(12.0);
                 self.drives_card(ui, s);
             }
@@ -367,45 +244,16 @@ impl SettingsTab {
             ui.label(RichText::new("Music server").font(theme::medium(16.0)).color(p.text));
             ui.add_space(6.0);
             let joined = prefs.role.is_some() && !prefs.server.login.is_empty();
-            if let Some(busy) = self.busy {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label(busy);
-                });
-            } else if let Some(pend) = self.pending.clone() {
-                if pend.approval.is_none() {
-                    ui.label(format!("Asked to join as {} ({}). On the server's admin page, approve it if the code matches:", pend.name, pend.role.as_str()));
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(&pend.code).font(theme::bold(34.0)).color(theme::BRAND_GOLD));
-                        ui.add_space(12.0);
-                        ui.spinner();
-                        ui.label(RichText::new("waiting for the admin…").color(p.dim));
-                    });
-                    ui.hyperlink_to(format!("Open the admin page ({})", pend.admin_url), &pend.admin_url);
-                    ui.small("The browser warns about the page's certificate once: it's the server's own.");
-                } else {
-                    ui.label("Approved, but setting this computer up didn't finish.");
-                }
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    if pend.approval.is_some() && theme::button(ui, Some(theme::Icon::Refresh), "Try again", theme::Kind::Primary).clicked() {
-                        self.finish(s, prefs, &ctx);
-                    }
-                    if theme::button(ui, None, "Withdraw", theme::Kind::Secondary).clicked() {
-                        joining::cancel(s, &pend);
-                        self.pending = None;
-                        self.join_error = None;
-                    }
-                });
-            } else if joined {
-                let role = prefs.role.map(|r| if r == Role::Admin { "an admin: rips CDs and sends them to the server" } else { "a listener" }).unwrap_or("");
+            if joined {
+                let role = prefs
+                    .role
+                    .map(|r| if r == Role::Admin { "an admin: rips CDs and sends them to the server" } else { "a listener" })
+                    .unwrap_or("");
                 ui.label(RichText::new(format!("This computer is {} on the server, {role}.", prefs.server.login)).color(p.text));
                 ui.label(RichText::new(format!("Music server: {}", prefs.server.url)).color(p.dim));
                 if prefs.server.is_local_loopback() {
                     ui.colored_label(theme::OK, "Connection: this computer (local server)");
                 } else if prefs.server.tunnel.is_some() {
-                    use localbeat_core::tunnel::{EndpointKind, LinkState};
                     match localbeat_core::tunnel::active_link_state() {
                         Some(LinkState::Connected(EndpointKind::Lan)) => {
                             ui.colored_label(theme::OK, "Built-in tunnel: connected (home network)");
@@ -423,14 +271,6 @@ impl SettingsTab {
                             ui.label(RichText::new("Built-in tunnel: ready (connects automatically)").color(p.dim));
                         }
                     }
-                } else {
-                    let tunnel = match self.checks.as_ref().map(|c| c.tunnel) {
-                        Some(tunnel::State::Up) => "Tunnel: running (for playing away from home; Check the connection to be sure)",
-                        Some(tunnel::State::Down) => "Tunnel: installed, not connected right now",
-                        Some(tunnel::State::Missing) => "Tunnel: not on this computer (the library plays at home only)",
-                        None => "Tunnel: …",
-                    };
-                    ui.label(RichText::new(tunnel).color(p.dim));
                 }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
@@ -470,82 +310,24 @@ impl SettingsTab {
                         None => {}
                     }
                 });
-                if !self.done.is_empty() {
-                    ui.add_space(6.0);
-                    for l in &self.done {
-                        ui.label(RichText::new(format!("✓ {l}")).small().color(p.dim));
-                    }
-                    if theme::button(ui, None, "Restart Studio to load the server's library", theme::Kind::Primary).clicked() {
-                        self.restart_wanted = true;
-                    }
-                }
                 ui.add_space(8.0);
-                let again = ui
-                    .add(egui::Label::new(RichText::new("Set this computer up again…").small().color(p.faint)).sense(egui::Sense::click()))
-                    .on_hover_text("Forgets this computer's login here. Ask the admin to remove its old name first, or pick a new one.");
-                if again.clicked() {
+                let disconnect = ui
+                    .add(egui::Label::new(RichText::new("Disconnect from this server…").small().color(p.faint)).sense(egui::Sense::click()))
+                    .on_hover_text("Forgets this computer's server login and built-in tunnel here.");
+                if disconnect.clicked() {
                     prefs.role = None;
                     prefs.server.login.clear();
                     prefs.server.secret.clear();
+                    prefs.server.tunnel = None;
                     let _ = prefs.save(s);
-                    self.done.clear();
+                    localbeat_core::tunnel::reset_active_tunnel();
                 }
             } else {
-                ui.horizontal(|ui| {
-                    if theme::button(ui, Some(theme::Icon::Server), "Join with an invite link…", theme::Kind::Primary).clicked() {
-                        self.open_invite_modal = true;
-                    }
-                    ui.label(RichText::new("Paste a localbeat://join/... link from the server admin (works at home and away).").small().color(p.dim));
-                });
-                ui.add_space(10.0);
-                ui.separator();
-                ui.add_space(6.0);
-                ui.label(RichText::new("Legacy home-network request:").small().color(p.faint));
-                ui.add_space(4.0);
-                egui::Grid::new("join").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-                    ui.label(RichText::new("This computer's name").color(p.dim));
-                    ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(260.0));
-                    ui.end_row();
-                    ui.label(RichText::new("Server").color(p.dim));
-                    ui.add(egui::TextEdit::singleline(&mut self.server).hint_text("e.g. 192.168.1.10").desired_width(260.0));
-                    ui.end_row();
-                    ui.label(RichText::new("Whose computer").color(p.dim));
-                    ui.add(egui::TextEdit::singleline(&mut self.user).hint_text("your user, e.g. alex (optional)").desired_width(260.0));
-                    ui.end_row();
-                });
-                if !join::valid_name(&self.name) {
-                    ui.small("Name: lowercase letters, digits and -, e.g. sam-laptop.");
+                ui.label("Connect to your music server with a one-time invite link from the server admin (works at home and away).");
+                ui.add_space(8.0);
+                if theme::button(ui, Some(theme::Icon::Server), "Join with an invite link…", theme::Kind::Primary).clicked() {
+                    self.open_invite_modal = true;
                 }
-                let user = self.user.trim().to_string();
-                let user_ok = user.is_empty() || join::valid_name(&user);
-                if !user_ok {
-                    ui.small("Whose computer: a user name, lowercase letters, digits and -, e.g. jim.");
-                } else {
-                    ui.small("All of a user's devices share their playlists. The admin can change it when approving.");
-                }
-                ui.add_space(6.0);
-                let label = if self.as_admin { "Ask to join as an admin" } else { "Ask to join" };
-                let can = join::valid_name(&self.name) && user_ok && !self.server.trim().is_empty();
-                if ui.add_enabled_ui(can, |ui| theme::button(ui, Some(theme::Icon::Server), label, theme::Kind::Primary)).inner.clicked() {
-                    self.join_error = None;
-                    self.busy = Some("Asking the server…");
-                    let (s, server, name) = (s.clone(), self.server.trim().to_string(), self.name.clone());
-                    let role = if self.as_admin { Role::Admin } else { Role::Listener };
-                    self.spawn(&ctx, move || Msg::Asked(joining::ask(&s, &server, &name, &user, role).map_err(|e| format!("{e:#}"))));
-                }
-                if self.as_admin {
-                    ui.small("An admin rips CDs on this computer and sends them to the server: the admin page shows that it asks for this.");
-                }
-                // Admin access: deliberately quiet.
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                    let text = if self.as_admin { "Join as a listener instead" } else { "Admin access" };
-                    if ui.add(egui::Label::new(RichText::new(text).small().color(p.faint)).sense(egui::Sense::click())).clicked() {
-                        self.as_admin = !self.as_admin;
-                    }
-                });
-            }
-            if let Some(e) = &self.join_error {
-                ui.colored_label(theme::ERR, e);
             }
         });
     }
@@ -589,7 +371,7 @@ impl SettingsTab {
             ui.label(RichText::new("Phone").font(theme::medium(16.0)).color(p.text));
             match self.checks.as_ref().map(|c| &c.adb) {
                 Some(Ok(v)) => ui.small(format!("adb found ({v}): sync over USB, or Wi-Fi after pairing once.")),
-                Some(Err(_)) => ui.small("adb isn't installed (see below): it's what syncs the phone."),
+                Some(Err(_)) => ui.small("adb isn't installed: needed only for USB/Wi-Fi file sync."),
                 None => ui.small("…"),
             };
             phone.wireless_ui(ui);
@@ -607,7 +389,7 @@ impl SettingsTab {
         theme::card(ui).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.label(RichText::new("What this computer needs").font(theme::medium(16.0)).color(p.text));
+                ui.label(RichText::new("Optional tools (admin)").font(theme::medium(16.0)).color(p.text));
                 if self.checking {
                     ui.spinner();
                 } else if theme::icon_button(ui, theme::Icon::Refresh, 22.0, "Check again").clicked() {
@@ -617,11 +399,10 @@ impl SettingsTab {
             let Some(c) = self.checks.clone() else { return };
             let linux = |pkg: &str| format!("Fedora: sudo dnf install {pkg}   Ubuntu: sudo apt install {pkg}");
             let mut rows: Vec<(&'static str, &str, bool, String)> = vec![
-                ("wireguard", "WireGuard: the tunnel, to play the library away from home", c.wireguard.is_ok(), c.wireguard.clone().err().unwrap_or_default()),
-                ("adb", "adb: syncing the phone", c.adb.is_ok(), if cfg!(windows) { String::new() } else { linux("android-tools") }),
+                ("adb", "adb: optional USB/Wi-Fi phone sync", c.adb.is_ok(), if cfg!(windows) { String::new() } else { linux("android-tools") }),
             ];
-            if prefs.is_admin() {
-                rows.push(("rsync", "rsync: sending rips to the server", c.rsync.is_ok(), c.rsync.clone().err().unwrap_or_default()));
+            if !prefs.server.is_local_loopback() {
+                rows.push(("rsync", "rsync: sending rips to a remote server", c.rsync.is_ok(), c.rsync.clone().err().unwrap_or_default()));
                 rows.push(("ssh", "OpenSSH: the key that sends rips", c.ssh_keygen.is_ok(), if cfg!(windows) { "Settings > System > Optional features > OpenSSH Client".into() } else { linux("openssh-clients") }));
             }
             for (what, label, ok, hint) in rows {

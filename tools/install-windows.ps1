@@ -55,9 +55,6 @@ if (-not (Have cmake)) {
 
 # --- 2. Programs Studio runs -------------------------------------------------
 if (-not $NoTools) {
-    if (-not (Test-Path (Join-Path $env:ProgramFiles 'WireGuard\wireguard.exe'))) { Install-Winget WireGuard.WireGuard }
-    Write-Host 'WireGuard: installed'
-
     $msysBin = 'C:\msys64\usr\bin'
     if (-not (Test-Path "$msysBin\rsync.exe") -or -not (Test-Path "$msysBin\ssh.exe")) {
         if (-not (Test-Path "$msysBin\bash.exe")) { Install-Winget MSYS2.MSYS2 }

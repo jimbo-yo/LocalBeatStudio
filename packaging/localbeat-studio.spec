@@ -30,10 +30,8 @@ Requires:       hicolor-icon-theme
 # Sending rips to the music server (rsync over SSH, the host key, the writer key).
 Recommends:     rsync
 Recommends:     openssh-clients
-# The phone over USB or wireless debugging; the tunnel to the server.
+# The phone over USB or wireless debugging; URI handler registration.
 Recommends:     android-tools
-Recommends:     NetworkManager
-Recommends:     wireguard-tools
 Recommends:     xdg-utils
 # Wi-Fi to the phone (KDE Connect's mount), and the Apple SuperDrive's wake-up.
 Suggests:       kde-connect

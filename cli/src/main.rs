@@ -263,22 +263,9 @@ enum Command {
         volume: Option<f32>,
     },
     /// Join a LocalBeat server using a one-time invite link (`localbeat://join/...`)
-    /// (also still accepts the legacy home-network `--server` request flow)
     Join {
-        /// Invite URI (`localbeat://join/...`), or legacy computer name
-        target: Option<String>,
-        /// Legacy: ask to rip CDs and send them to the server, not only to listen
-        #[arg(long)]
-        admin: bool,
-        /// Legacy: the server's home address
-        #[arg(long, default_value = localbeat_core::join::DEFAULT_SERVER)]
-        server: String,
-        /// Legacy: withdraw a waiting request
-        #[arg(long)]
-        cancel: bool,
-        /// Legacy: whose computer this is (a user on the server, e.g. jim)
-        #[arg(long)]
-        user: Option<String>,
+        /// Invite URI (`localbeat://join/...`, or pasted message containing one)
+        invite: String,
         /// Replace an existing server setup without confirmation
         #[arg(long)]
         force: bool,
@@ -380,9 +367,7 @@ fn main() -> ExitCode {
         Command::Library { covers, list } => library_cmd::run(covers, list),
         Command::Ctdb { dirs } => ctdb_cmd::run(dirs),
         Command::Repair { album, reads, write } => repair_cmd::run(album, reads, write),
-        Command::Join { target, admin, server, cancel, user, force } => {
-            join_cmd::run(join_cmd::JoinArgs { target, admin, server, cancel, user, force })
-        }
+        Command::Join { invite, force } => join_cmd::run(join_cmd::JoinArgs { invite, force }),
         Command::Invite { action } => join_cmd::run_invite(action),
         Command::Pair { address, code } => match code {
             Some(code) => localbeat_platform::phone::adb_pair(&address, &code).map(|msg| {
