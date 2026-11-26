@@ -7,7 +7,7 @@ use std::sync::mpsc::{Receiver, channel};
 
 use eframe::egui::{self, Color32, RichText, vec2};
 use localbeat_core::config::ServerPrefs;
-use localbeat_core::subsonic::{ServerDisk, ServerStatus, Subsonic};
+use localbeat_core::subsonic::{BackupStatus, ServerDisk, ServerStatus, Subsonic};
 
 use crate::theme;
 
@@ -146,6 +146,10 @@ fn body(ui: &mut egui::Ui, s: &ServerStatus) {
         (None, false) => "Not scanned yet".to_string(),
     };
     ui.label(RichText::new(scan).color(p.dim));
+    if let Some(b) = &s.backup {
+        let (text, color) = backup_summary(b, p.dim);
+        ui.label(RichText::new(text).color(color));
+    }
 
     ui.add_space(10.0);
     theme::section_label(ui, "Computer (fastfetch)");
@@ -235,6 +239,46 @@ fn when(iso: &str) -> String {
     }
 }
 
+fn backup_summary(b: &BackupStatus, dim: Color32) -> (String, Color32) {
+    let snaps = if b.snapshot_count == 1 {
+        "1 snapshot".to_string()
+    } else {
+        format!("{} snapshots", thousands(b.snapshot_count))
+    };
+    if b.running || b.state == "running" {
+        return (format!("Backup: running now… · {snaps}"), theme::ACCENT);
+    }
+    if b.paused || b.state == "paused" {
+        return (format!("Backup: paused · {snaps}"), theme::WARN);
+    }
+    if b.state == "error" || b.last_run_ok == Some(false) {
+        let err = b.last_error.as_deref().unwrap_or("check server logs");
+        return (format!("Backup: failed — {err}"), theme::ERR);
+    }
+    if !b.seeded && b.state == "seeding" {
+        let last = b.last_run_at.as_deref().map(|t| format!(" · last run {}", when(t))).unwrap_or_default();
+        return (
+            format!(
+                "Backup: seeding {:.1}% ({} / {}){last} · {snaps}",
+                b.seed_percent,
+                size(b.seed_included_bytes),
+                size(b.seed_total_bytes)
+            ),
+            dim,
+        );
+    }
+    if let Some(t) = &b.last_run_at {
+        let verified = match (&b.last_check_at, b.last_check_ok) {
+            (Some(ct), Some(true)) => format!(" · verified {}", when(ct)),
+            (Some(ct), Some(false)) => format!(" · verify failed {}", when(ct)),
+            _ => String::new(),
+        };
+        let color = if b.last_check_ok == Some(false) { theme::WARN } else { dim };
+        return (format!("Backup: up to date · last run {} · {snaps}{verified}", when(t)), color);
+    }
+    ("Backup: configured (not run yet)".to_string(), dim)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,5 +293,38 @@ mod tests {
         assert_eq!(duration(3 * 86400 + 4 * 3600 + 60), "3 d 4 h");
         assert_eq!(duration(3700), "1 h 1 min");
         assert_eq!(when("2026-11-19T10:00:05Z"), "2026-11-19 10:00 UTC");
+    }
+
+    #[test]
+    fn backup_summary_states() {
+        let dim = Color32::GRAY;
+        let b = BackupStatus {
+            state: "seeding".into(),
+            seeded: false,
+            seed_percent: 40.0,
+            seed_included_bytes: 100_000_000_000,
+            seed_total_bytes: 250_000_000_000,
+            last_run_at: Some("2026-11-25T07:00:00Z".into()),
+            last_run_ok: Some(true),
+            snapshot_count: 3,
+            ..Default::default()
+        };
+        let (txt, _) = backup_summary(&b, dim);
+        assert!(txt.contains("seeding 40.0%"));
+        assert!(txt.contains("3 snapshots"));
+
+        let ok = BackupStatus {
+            state: "ok".into(),
+            seeded: true,
+            last_run_at: Some("2026-11-25T07:00:00Z".into()),
+            last_run_ok: Some(true),
+            snapshot_count: 7,
+            last_check_at: Some("2026-11-24T08:30:00Z".into()),
+            last_check_ok: Some(true),
+            ..Default::default()
+        };
+        let (txt, _) = backup_summary(&ok, dim);
+        assert!(txt.contains("up to date"));
+        assert!(txt.contains("verified 2026-11-24 08:30 UTC"));
     }
 }

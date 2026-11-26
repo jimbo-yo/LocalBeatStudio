@@ -3,11 +3,12 @@
 
 use std::sync::Arc;
 
-use eframe::egui::{self, RichText, Sense};
+use eframe::egui::{self, Rect, RichText, Sense, Vec2, pos2, vec2};
 use localbeat_core::browse::{Browse, Group, decade_key};
 use localbeat_core::library::{Library, norm, sort_name};
 
-use super::{Action, LibraryUi, Page};
+use super::nav::NavView;
+use super::{Action, LibraryUi};
 use crate::theme::{self, Icon, Kind};
 
 /// Which genre, mood or decade page is open, and its filters.
@@ -76,13 +77,17 @@ impl LibraryUi {
                 self.actions.push(Action::Shuffle(lib.albums.iter().flat_map(|a| a.songs.iter().copied()).collect()));
             }
         });
-        egui::ScrollArea::vertical().id_salt("explore").auto_shrink([false, false]).show(ui, |ui| {
+        let out = self.scroll_area("explore").show(ui, |ui| {
             // ---- Recently added
             ui.horizontal(|ui| {
                 theme::section_label(ui, "Recently added");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(egui::Label::new(RichText::new("See all").color(theme::prism_at(0.3))).sense(Sense::click())).clicked() {
-                        self.page = Page::Recent;
+                    let see_all = ui.add(egui::Label::new(RichText::new("See all").color(theme::prism_at(0.3))).sense(Sense::click()));
+                    if see_all.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    if see_all.clicked() {
+                        self.push_nav(NavView::Recent);
                     }
                 });
             });
@@ -115,7 +120,7 @@ impl LibraryUi {
             }
             ui.add_space(16.0);
 
-            // ---- Genres, by size or A–Z
+            // ---- Genres, by size or A–Z, in an even multi-column grid with cover art
             ui.horizontal(|ui| {
                 theme::section_label(ui, "Genres");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -130,68 +135,116 @@ impl LibraryUi {
             ui.add_space(4.0);
             if b.genres.is_empty() {
                 ui.label(RichText::new("No genre tags yet.").color(p.dim));
-            }
-            let mut genres: Vec<_> = b.genres.iter().collect();
-            if self.genres_by_size {
-                genres.sort_by(|x, y| y.group.albums.len().cmp(&x.group.albums.len()).then_with(|| sort_name(&x.group.name).cmp(&sort_name(&y.group.name))));
-            }
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(12.0, 12.0);
-                for g in genres {
-                    let mut sub = format!("{} albums", g.group.albums.len());
-                    if !g.subgenres.is_empty() {
-                        let names: Vec<&str> = g.subgenres.iter().take(3).map(|s| s.name.as_str()).collect();
-                        sub = format!("{sub} · {}", names.join(", "));
-                        if g.subgenres.len() > 3 {
-                            sub.push_str(&format!(" +{}", g.subgenres.len() - 3));
+            } else {
+                let mut genres: Vec<_> = b.genres.iter().collect();
+                if self.genres_by_size {
+                    genres.sort_by(|x, y| y.group.albums.len().cmp(&x.group.albums.len()).then_with(|| sort_name(&x.group.name).cmp(&sort_name(&y.group.name))));
+                }
+                let gap = 12.0;
+                let avail = (ui.available_width() - 4.0).max(200.0);
+                let cols = ((avail + gap) / (280.0 + gap)).floor().max(1.0) as usize;
+                let card_w = (avail - gap * (cols - 1) as f32) / cols as f32;
+                for row in genres.chunks(cols) {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = gap;
+                        for g in row {
+                            let mut sub = format!("{} albums", g.group.albums.len());
+                            if !g.subgenres.is_empty() {
+                                let names: Vec<&str> = g.subgenres.iter().take(3).map(|s| s.name.as_str()).collect();
+                                sub = format!("{sub} · {}", names.join(", "));
+                                if g.subgenres.len() > 3 {
+                                    sub.push_str(&format!(" +{}", g.subgenres.len() - 3));
+                                }
+                            }
+                            let cover_album = g.group.albums.first().copied();
+                            if self.art_card(ui, lib, cover_album, &g.group.name, &sub, card_w, 72.0, 52.0).clicked() {
+                                self.actions.push(Action::OpenGroup(GroupView::new(GroupKind::Genre, g.group.key.clone())));
+                            }
                         }
-                    }
-                    if genre_card(ui, &g.group.name, &sub).clicked() {
-                        self.actions.push(Action::OpenGroup(GroupView::new(GroupKind::Genre, g.group.key.clone())));
-                    }
+                    });
+                    ui.add_space(gap - ui.spacing().item_spacing.y.min(gap));
                 }
-            });
-            ui.add_space(16.0);
+            }
+            ui.add_space(14.0);
 
-            // ---- Decades
-            theme::section_label(ui, "Decades");
-            ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                for d in &b.decades {
-                    if chip(ui, &format!("{}  {}", d.name, d.albums.len()), Tint::Plain, false).clicked() {
-                        self.actions.push(Action::OpenGroup(GroupView::new(GroupKind::Decade, d.key.clone())));
-                    }
+            // ---- Decades, in an even multi-column grid with cover art (like the phone's DecadeCard)
+            if !b.decades.is_empty() {
+                theme::section_label(ui, "Decades");
+                ui.add_space(4.0);
+                let gap = 12.0;
+                let avail = (ui.available_width() - 4.0).max(160.0);
+                let cols = ((avail + gap) / (190.0 + gap)).floor().max(1.0) as usize;
+                let card_w = (avail - gap * (cols - 1) as f32) / cols as f32;
+                for row in b.decades.chunks(cols) {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = gap;
+                        for d in row {
+                            let sub = if d.albums.len() == 1 { "1 album".into() } else { format!("{} albums", d.albums.len()) };
+                            let cover_album = d.albums.first().copied();
+                            if self.art_card(ui, lib, cover_album, &d.name, &sub, card_w, 64.0, 44.0).clicked() {
+                                self.actions.push(Action::OpenGroup(GroupView::new(GroupKind::Decade, d.key.clone())));
+                            }
+                        }
+                    });
+                    ui.add_space(gap - ui.spacing().item_spacing.y.min(gap));
                 }
-            });
+            }
             ui.add_space(24.0);
         });
+        self.nav.set_scroll(out.state.clamped_offset().y);
+    }
+
+    /// A card with a representative cover thumbnail on the left and title + subtitle on the right.
+    #[allow(clippy::too_many_arguments)]
+    fn art_card(&mut self, ui: &mut egui::Ui, lib: &Arc<Library>, cover_album: Option<usize>, name: &str, sub: &str, width: f32, height: f32, art_size: f32) -> egui::Response {
+        let p = theme::pal(ui);
+        let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click());
+        if !ui.is_rect_visible(rect) {
+            return resp;
+        }
+        let fill = if resp.hovered() { p.card_hover } else { p.card };
+        ui.painter().rect(rect, 10.0, fill, egui::Stroke::new(1.0, p.line), egui::StrokeKind::Inside);
+        let pad_y = (height - art_size) * 0.5;
+        let art_rect = Rect::from_min_size(pos2(rect.left() + 10.0, rect.top() + pad_y), Vec2::splat(art_size));
+        match cover_album {
+            Some(a) => self.paint_cover(ui, lib, a, art_rect, 128),
+            None => {
+                ui.painter().rect_filled(art_rect, 6.0, p.content);
+                theme::disc(ui.painter(), art_rect.center(), art_size * 0.36, None, None, ui.visuals().dark_mode);
+            }
+        }
+        let text_left = art_rect.right() + 12.0;
+        let text_w = (rect.right() - 12.0 - text_left).max(20.0);
+        let title = theme::one_line(ui, name, theme::bold(15.0), p.text, text_w);
+        let line = theme::one_line(ui, sub, egui::FontId::proportional(12.5), p.dim, text_w);
+        let truncated = title.elided || line.elided;
+        let text_h = title.size().y + 3.0 + line.size().y;
+        let top_y = rect.center().y - text_h * 0.5;
+        ui.painter().galley(pos2(text_left, top_y), title, p.text);
+        ui.painter().galley(pos2(text_left, top_y + 21.0), line, p.dim);
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if truncated { resp.on_hover_text(format!("{name}\n{sub}")) } else { resp }
     }
 
     /// A genre, mood or decade: Play, Shuffle, filter chips, then the albums.
     pub(super) fn group_page(&mut self, ui: &mut egui::Ui, lib: &Arc<Library>, mut view: GroupView) {
         let b = self.browse(lib);
-        let p = theme::pal(ui);
         let (name, base, subgenres): (String, &[usize], &[Group]) = match view.kind {
             GroupKind::Genre => match b.genre(&view.key) {
                 Some(g) => (g.group.name.clone(), &g.group.albums, &g.subgenres),
-                None => return self.close_group(),
+                None => return self.go_back(),
             },
             GroupKind::Mood => match b.mood(&view.key) {
                 Some(g) => (g.name.clone(), &g.albums, &[]),
-                None => return self.close_group(),
+                None => return self.go_back(),
             },
             GroupKind::Decade => match b.decade(&view.key) {
                 Some(g) => (g.name.clone(), &g.albums, &[]),
-                None => return self.close_group(),
+                None => return self.go_back(),
             },
         };
-
-        let back = if self.page == Page::Explore { "Explore".to_string() } else { page_name(self.page).to_string() };
-        let clicked = ui.add(egui::Label::new(RichText::new(format!("‹  {back}")).color(p.dim)).sense(Sense::click())).clicked();
-        let esc = ui.ctx().memory(|m| m.focused().is_none()) && ui.input(|i| i.key_pressed(egui::Key::Escape));
-        if clicked || esc {
-            return self.close_group();
-        }
 
         // The albums left after the subgenre and the two chip rows.
         let in_sub: Vec<usize> = match view.sub.as_ref().and_then(|s| subgenres.iter().find(|g| &g.key == s)) {
@@ -266,14 +319,10 @@ impl LibraryUi {
             ui.add_space(4.0);
         }
         if changed {
-            self.group = Some(view.clone());
+            self.nav.replace_current(NavView::Group(view.clone()));
         }
         ui.add_space(6.0);
         self.grid(ui, lib, &shown, &format!("group-{:?}-{}", view.kind, view.key));
-    }
-
-    fn close_group(&mut self) {
-        self.group = None;
     }
 
     /// Tappable genre, mood and decade chips for an album (its page, and Details).
@@ -329,19 +378,16 @@ impl LibraryUi {
         ui.horizontal_wrapped(|ui| {
             for m in moods {
                 if chip(ui, &m.name, Tint::Mood, false).clicked() {
-                    self.search.clear();
                     self.actions.push(Action::OpenGroup(GroupView::new(GroupKind::Mood, m.key.clone())));
                 }
             }
             for (name, v) in genres {
                 if chip(ui, &name, Tint::Plain, false).clicked() {
-                    self.search.clear();
                     self.actions.push(Action::OpenGroup(v));
                 }
             }
             for d in decades {
                 if chip(ui, &d.name, Tint::Plain, false).clicked() {
-                    self.search.clear();
                     self.actions.push(Action::OpenGroup(GroupView::new(GroupKind::Decade, d.key.clone())));
                 }
             }
@@ -419,32 +465,3 @@ fn chip(ui: &mut egui::Ui, text: &str, tint: Tint, on: bool) -> egui::Response {
     }
     r
 }
-
-/// A genre on Explore: its name, size and a few subgenres.
-fn genre_card(ui: &mut egui::Ui, name: &str, sub: &str) -> egui::Response {
-    let p = theme::pal(ui);
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(250.0, 64.0), Sense::click());
-    let fill = if resp.hovered() { p.card_hover } else { p.card };
-    ui.painter().rect(rect, 10.0, fill, egui::Stroke::new(1.0, p.line), egui::StrokeKind::Inside);
-    let inner = rect.shrink2(egui::vec2(14.0, 10.0));
-    let title = theme::one_line(ui, name, theme::bold(15.0), p.text, inner.width());
-    let line = theme::one_line(ui, sub, egui::FontId::proportional(12.5), p.dim, inner.width());
-    ui.painter().galley(inner.left_top(), title, p.text);
-    ui.painter().galley(inner.left_top() + egui::vec2(0.0, 24.0), line, p.dim);
-    if resp.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
-    resp
-}
-
-fn page_name(page: Page) -> &'static str {
-    match page {
-        Page::Explore => "Explore",
-        Page::Albums => "Albums",
-        Page::Recent => "Recently added",
-        Page::Artists => "Artists",
-        Page::Songs => "Songs",
-        Page::Playlists => "Playlists",
-    }
-}
-

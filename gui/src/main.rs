@@ -23,6 +23,7 @@ use localbeat_platform::phone_notify;
 mod ai_enrich_tab;
 mod cover_cache;
 mod cover_tab;
+mod invite_ui;
 mod library_ui;
 mod media_keys;
 mod phone_tab;
@@ -34,6 +35,7 @@ mod server_push;
 mod server_status;
 mod settings_tab;
 mod theme;
+mod welcome_ui;
 
 #[derive(PartialEq, Clone, Copy)]
 enum Tab {
@@ -259,6 +261,9 @@ struct App {
     server: server_tab::ServerTab,
     /// Joining the server, folders, phone, what's installed, drives.
     settings_page: settings_tab::SettingsTab,
+    welcome: welcome_ui::WelcomeUi,
+    welcome_fullscreen: bool,
+    invites: invite_ui::InviteWindow,
     drive_action: Option<(String, DriveAction)>,
 }
 
@@ -282,13 +287,16 @@ impl App {
             }),
         );
         let library = library_ui::LibraryUi::new(&settings, &ctx, hwnd);
-        // A new install (no settings file yet) opens on Settings.
+        // A new install (no settings file yet) opens on the Welcome screen.
         let first_run = !Prefs::exists(&settings);
         let mut app = App {
             library,
             pusher,
             server: server_tab::ServerTab::new(&settings),
             settings_page: settings_tab::SettingsTab::new(&settings, &prefs),
+            welcome: welcome_ui::WelcomeUi::new(),
+            welcome_fullscreen: first_run,
+            invites: invite_ui::InviteWindow::new(),
             ctx,
             settings,
             rx: None,
@@ -310,7 +318,7 @@ impl App {
             prefs,
             notifier,
             notes,
-            tab: if first_run { Tab::Settings } else { Tab::Library },
+            tab: Tab::Library,
             phone: phone_tab::PhoneTab::new(),
             ai_enrich: ai_enrich_tab::AiEnrichTab::new(),
             covers: cover_tab::CoverTab::new(),
@@ -363,11 +371,31 @@ impl App {
                 "1" | "sr2" | "choice" | "alert" => Tab::Rip,
                 _ => Tab::Library,
             };
+            if demo == "welcome" {
+                app.welcome_fullscreen = true;
+            } else {
+                app.welcome_fullscreen = false;
+            }
+            if demo == "invite" {
+                app.invites.open_demo();
+            }
             app.library.demo = Some(demo.clone());
             app.session = vec![(true, "Radiohead – OK Computer: 12/12".into()), (false, "Lenny Kravitz – Let Love Rule: 11/12".into())];
         } else if app.prefs.is_admin() {
             // Only an admin computer rips (docs/joining.md).
             app.start();
+        }
+        // If launched via a `localbeat://join/...` URI handler, pre-fill or open
+        // the invite-claim modal (with confirmation guard if already joined).
+        if let Some(uri) = std::env::args()
+            .skip(1)
+            .find_map(|a| localbeat_core::join::extract_invite_uri(&a).map(str::to_string))
+        {
+            if app.welcome_fullscreen {
+                app.welcome.prefill(uri);
+            } else {
+                app.welcome.open_modal(Some(uri), &app.prefs);
+            }
         }
         app
     }
@@ -551,11 +579,14 @@ impl App {
                     .inner
                 })
                 .inner;
-            if search.changed() && !self.library.search.is_empty() {
-                self.tab = Tab::Library;
+            if search.changed() {
+                if !self.library.search.trim().is_empty() {
+                    self.tab = Tab::Library;
+                }
+                self.library.on_search_changed();
             }
             if search.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                self.library.search.clear();
+                self.library.clear_search();
             }
             ui.add_space(16.0);
             // The pages scroll when the window is too short for them all;
@@ -574,12 +605,11 @@ impl App {
                 let playing = self.library.playing();
                 let has_song = self.library.has_song();
                 let status = playing.then_some(("", theme::prism_at(0.3)));
-                if theme::nav_item(ui, theme::Icon::Songs, "Now Playing", self.tab == Tab::Library && self.library.now_open, status)
+                if theme::nav_item(ui, theme::Icon::Songs, "Now Playing", self.tab == Tab::Library && self.library.is_now_open(), status)
                     .on_hover_text(if has_song { "The song playing, big" } else { "Nothing playing yet" })
                     .clicked()
                 {
                     self.tab = Tab::Library;
-                    self.library.search.clear();
                     self.library.open_now();
                 }
                 let lib_counts = self.library.lib.as_ref().map(|l| (l.albums.len(), l.artists.len(), l.songs.len()));
@@ -595,19 +625,12 @@ impl App {
                     if page == library_ui::Page::Playlists && !self.library.playlists.available() {
                         continue;
                     }
-                    let shown = if self.library.page == library_ui::Page::Recent { library_ui::Page::Explore } else { self.library.page };
-                    let selected = self.tab == Tab::Library && shown == page && self.library.search.is_empty() && !self.library.now_open;
+                    let selected = self.tab == Tab::Library && self.library.sidebar_page() == Some(page);
                     let n = count.map(|n| n.to_string()).unwrap_or_default();
                     let status = (!n.is_empty()).then_some((n.as_str(), p.faint));
                     if theme::nav_item(ui, icon, label, selected, status).clicked() {
                         self.tab = Tab::Library;
-                        self.library.page = page;
-                        self.library.group = None;
-                        self.library.now_open = false;
-                        self.library.album = None;
-                        self.library.album_from_search = None;
-                        self.library.playlist = None;
-                        self.library.search.clear();
+                        self.library.open_page(page);
                     }
                 }
                 ui.add_space(16.0);
@@ -705,9 +728,7 @@ impl App {
                 if theme::nav_item(ui, theme::Icon::Log, "Activity log", self.show_log, None).clicked() {
                     self.show_log = !self.show_log;
                 }
-                let joining = self.settings_page.waiting();
-                let status = joining.then_some(("…", theme::BRAND_GOLD));
-                if theme::nav_item(ui, theme::Icon::Gear, "Settings", self.tab == Tab::Settings, status)
+                if theme::nav_item(ui, theme::Icon::Gear, "Settings", self.tab == Tab::Settings, None)
                     .on_hover_text("The server, music folders, phone, what's installed")
                     .clicked()
                 {
@@ -1091,13 +1112,53 @@ impl eframe::App for App {
 }
 
 impl App {
+    fn handle_welcome_event(&mut self, ev: welcome_ui::WelcomeEvent, ctx: &egui::Context) {
+        match ev {
+            welcome_ui::WelcomeEvent::Claimed(outcome) => {
+                for line in outcome.log {
+                    self.log(format!("Onboarding: {line}"));
+                }
+                self.welcome_fullscreen = false;
+                self.tab = Tab::Library;
+                self.library.rescan(ctx);
+                if self.prefs.is_admin() && !self.running {
+                    self.start();
+                }
+            }
+            welcome_ui::WelcomeEvent::LocalOnly => {
+                self.welcome_fullscreen = false;
+                self.tab = Tab::Library;
+            }
+            welcome_ui::WelcomeEvent::Cancelled => {}
+        }
+    }
+
     fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = &ui.ctx().clone();
+        if let Some(ev) = self.welcome.poll(&mut self.prefs) {
+            self.handle_welcome_event(ev, ctx);
+        }
+        if self.welcome_fullscreen {
+            if let Some(ev) = self.welcome.show_fullscreen(ui, &self.settings, &mut self.prefs) {
+                self.handle_welcome_event(ev, ctx);
+            }
+            return;
+        }
+        if let Some(ev) = self.welcome.show_modal(ctx, &self.settings, &mut self.prefs) {
+            self.handle_welcome_event(ev, ctx);
+        }
+        self.invites.show(ctx, &self.settings, &self.prefs);
         for line in self.phone.poll(&self.settings, &mut self.prefs, ctx) {
             self.log(line);
         }
         for line in self.settings_page.poll(&self.settings, &mut self.prefs, ctx) {
             self.log(line);
+        }
+        if std::mem::take(&mut self.settings_page.open_invite_modal) {
+            self.welcome.open_modal(None, &self.prefs);
+        }
+        if std::mem::take(&mut self.settings_page.open_admin_invites) {
+            self.invites.open(&self.settings, &self.prefs, ctx);
         }
         if std::mem::take(&mut self.settings_page.restart_wanted) {
             // A fresh start reads the new folders and the server's library.
@@ -1158,7 +1219,7 @@ impl App {
 
         let p = theme::pal(ui);
         // The full-size Now Playing view has its own controls: no bar then.
-        let full_player = self.tab == Tab::Library && self.library.now_open;
+        let full_player = self.tab == Tab::Library && self.library.is_now_open();
         if !full_player {
         egui::Panel::bottom("player")
             .exact_size(94.0)

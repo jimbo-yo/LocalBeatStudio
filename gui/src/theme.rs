@@ -328,6 +328,7 @@ pub enum Icon {
     Lock,
     Info,
     Back,
+    Forward,
     Server,
     Gear,
 }
@@ -518,6 +519,9 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
         }
         Icon::Back => {
             painter.add(Shape::line(vec![c + vec2(0.25 * s, -0.6 * s), c + vec2(-0.35 * s, 0.0), c + vec2(0.25 * s, 0.6 * s)], Stroke::new(w * 1.2, color)));
+        }
+        Icon::Forward => {
+            painter.add(Shape::line(vec![c + vec2(-0.25 * s, -0.6 * s), c + vec2(0.35 * s, 0.0), c + vec2(-0.25 * s, 0.6 * s)], Stroke::new(w * 1.2, color)));
         }
         Icon::Lock => {
             painter.rect_filled(Rect::from_min_max(c + vec2(-0.55 * s, -0.1 * s), c + vec2(0.55 * s, 0.7 * s)), 2.0, color);
