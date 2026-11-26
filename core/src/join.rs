@@ -12,6 +12,9 @@ use ureq::Agent;
 
 /// Invite URI prefix (`localbeat://join/<base64url-no-pad>`).
 pub const INVITE_URI_PREFIX: &str = "localbeat://join/";
+/// Default static landing page base (`https://.../join#<base64url-no-pad>`)
+/// combining app downloads and one-tap enrollment on one page.
+pub const DEFAULT_SHARE_URL_BASE: &str = "https://jimbo-yo.github.io/LocalBeat/join#";
 /// Current invite payload schema version.
 pub const INVITE_SCHEMA_VERSION: u8 = 1;
 /// Fixed server IP inside the WireGuard tunnel.
@@ -178,29 +181,87 @@ pub struct Invite {
     pub role: Role,
 }
 
-/// Finds the first `localbeat://join/<base64url>` URI inside arbitrary pasted
-/// text (e.g. a full SMS/chat message). Scheme/prefix matching is ASCII
-/// case-insensitive; trailing punctuation and whitespace are ignored.
-pub fn extract_invite_uri(text: &str) -> Option<&str> {
+fn extract_invite_uri_and_payload(text: &str) -> Option<(&str, &str)> {
     let lower = text.to_ascii_lowercase();
-    let start = lower.find(INVITE_URI_PREFIX)?;
-    let payload_start = start + INVITE_URI_PREFIX.len();
-    let payload_len = text[payload_start..]
-        .bytes()
-        .take_while(|b| b.is_ascii_alphanumeric() || *b == b'-' || *b == b'_')
-        .count();
-    if payload_len == 0 {
-        return None;
+    if let Some(start) = lower.find(INVITE_URI_PREFIX) {
+        let payload_start = start + INVITE_URI_PREFIX.len();
+        let payload_len = text[payload_start..]
+            .bytes()
+            .take_while(|b| b.is_ascii_alphanumeric() || *b == b'-' || *b == b'_')
+            .count();
+        if payload_len > 0 {
+            let end = payload_start + payload_len;
+            return Some((&text[start..end], &text[payload_start..end]));
+        }
     }
-    Some(&text[start..payload_start + payload_len])
+
+    // Also accept clickable landing page URLs: `https://.../join#<base64url>`
+    // (or `/join/#<base64url>`).
+    let mut scan = 0usize;
+    while scan < lower.len() {
+        let rest = &lower[scan..];
+        let rel = match (rest.find("https://"), rest.find("http://")) {
+            (Some(a), Some(b)) => a.min(b),
+            (Some(a), None) => a,
+            (None, Some(b)) => b,
+            (None, None) => break,
+        };
+        let url_start = scan + rel;
+        let url_len = text[url_start..]
+            .bytes()
+            .take_while(|b| !b.is_ascii_whitespace() && !matches!(b, b')' | b']' | b'>' | b'"' | b'\'' | b',' | b';'))
+            .count();
+        let url_end = url_start + url_len;
+        let url_lower = &lower[url_start..url_end];
+        let marker = url_lower
+            .find("/join#")
+            .map(|i| i + "/join#".len())
+            .or_else(|| url_lower.find("/join/#").map(|i| i + "/join/#".len()));
+        if let Some(offset) = marker {
+            let payload_start = url_start + offset;
+            let payload_len = text[payload_start..url_end]
+                .bytes()
+                .take_while(|b| b.is_ascii_alphanumeric() || *b == b'-' || *b == b'_')
+                .count();
+            if payload_len > 0 {
+                let end = payload_start + payload_len;
+                return Some((&text[url_start..end], &text[payload_start..end]));
+            }
+        }
+        scan = url_end.max(url_start + 1);
+    }
+
+    None
+}
+
+/// Finds the first LocalBeat invite URI (`localbeat://join/<base64url>` or
+/// `https://.../join#<base64url>`) inside arbitrary pasted text (e.g. a full
+/// SMS/chat message). Scheme/path matching is ASCII case-insensitive; trailing
+/// punctuation and whitespace are ignored.
+pub fn extract_invite_uri(text: &str) -> Option<&str> {
+    extract_invite_uri_and_payload(text).map(|(uri, _)| uri)
+}
+
+/// Extracts the base64url invite payload from either `localbeat://join/<payload>`
+/// or `https://.../join#<payload>` inside arbitrary text.
+pub fn extract_invite_payload(text: &str) -> Option<&str> {
+    extract_invite_uri_and_payload(text).map(|(_, payload)| payload)
+}
+
+/// Wraps a `localbeat://join/<payload>` URI in the default clickable landing
+/// page URL (`https://jimbo-yo.github.io/LocalBeat/join#<payload>`).
+pub fn share_url_for_uri(uri: &str) -> String {
+    match extract_invite_payload(uri) {
+        Some(payload) => format!("{DEFAULT_SHARE_URL_BASE}{payload}"),
+        None => uri.to_string(),
+    }
 }
 
 impl Invite {
     /// Extracts and decodes an invite from a URI or arbitrary pasted text.
     pub fn parse(input: &str) -> Result<Invite> {
-        let uri = extract_invite_uri(input)
-            .context("no LocalBeat invite found (expected a localbeat://join/... link)")?;
-        let payload = &uri[INVITE_URI_PREFIX.len()..];
+        let payload = extract_invite_payload(input)
+            .context("no LocalBeat invite found (expected an invite link)")?;
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(payload)
             .context("invalid invite link (corrupted encoding)")?;
@@ -372,6 +433,20 @@ pub struct InviteSummary {
     pub created_at: String,
     pub expires_at: String,
     pub uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share_url: Option<String>,
+}
+
+impl InviteSummary {
+    /// Clickable `https://.../join#<payload>` link for QR codes and sharing,
+    /// preferring the server-provided `share_url` and falling back to
+    /// `DEFAULT_SHARE_URL_BASE` + the payload from `uri`.
+    pub fn share_url(&self) -> String {
+        if let Some(url) = self.share_url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            return url.to_string();
+        }
+        share_url_for_uri(&self.uri)
+    }
 }
 
 /// Authenticates an admin Studio session using the admin password.
@@ -511,6 +586,33 @@ mod tests {
         let sms = format!("Hey Mom! Tap or paste this: {}! Love you.", uri.replacen("localbeat://join/", "LocalBeat://JOIN/", 1));
         assert!(extract_invite_uri(&sms).is_some());
         assert_eq!(Invite::parse(&sms).unwrap(), inv);
+
+        // Clickable HTTPS landing page URL (standalone, embedded after another URL, and /join/# variant).
+        let web = share_url_for_uri(&uri);
+        assert!(web.starts_with(DEFAULT_SHARE_URL_BASE));
+        assert_eq!(extract_invite_uri(&web), Some(web.as_str()));
+        assert_eq!(Invite::parse(&web).unwrap(), inv);
+
+        let sms_web = format!("Check https://example.com first, then tap ({web})!");
+        assert_eq!(extract_invite_uri(&sms_web), Some(web.as_str()));
+        assert_eq!(Invite::parse(&sms_web).unwrap(), inv);
+
+        let slash_variant = web.replacen("/join#", "/JOIN/#", 1);
+        assert_eq!(Invite::parse(&slash_variant).unwrap(), inv);
+
+        // InviteSummary::share_url prefers server-provided share_url and falls back to DEFAULT_SHARE_URL_BASE.
+        let mut summary = InviteSummary {
+            id: "inv1".into(),
+            user: "sarah".into(),
+            role: Role::Listener,
+            created_at: String::new(),
+            expires_at: "2026-12-01T00:00:00Z".into(),
+            uri: uri.clone(),
+            share_url: None,
+        };
+        assert_eq!(summary.share_url(), web);
+        summary.share_url = Some("https://music.example.com/join#custom".into());
+        assert_eq!(summary.share_url(), "https://music.example.com/join#custom");
 
         // LAN-only invite (no DDNS / port-forwarding on a desktop server).
         let mut lan_only = sample_invite();

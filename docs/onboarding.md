@@ -171,13 +171,32 @@ Version 11–13 QR code with Medium error correction):
   desktop servers that haven't configured DDNS / port forwarding yet).
 - `r`: intended role (`"listener"` or `"admin"`).
 
-**Smart paste extraction:** Because many SMS/chat apps do not linkify
-`localbeat://` and users often copy an entire message (*"Hey Mom, paste
-this: localbeat://join/eyJ..."*), both apps extract
-`localbeat://join/[A-Za-z0-9_-]+` from anywhere inside pasted/clipboard
-text. (A future optional static `https://.../join#<payload>` landing page
-can wrap this same payload for clickable SMS links + app download buttons
-without any server changes.)
+**Smart paste extraction & shareable landing page:** Because many SMS/chat
+apps do not linkify `localbeat://` and recipients often need to download the
+app first, invites are shared (and encoded into QR codes) as a static HTTPS
+landing page URL:
+
+```
+https://jimbo-yo.github.io/LocalBeat/join#<base64url-no-pad>
+```
+
+- Because `<payload>` lives in the URL `#fragment`, browsers **never** send
+  the bootstrap WireGuard key or claim token to GitHub Pages or CDN logs.
+- Scanning the QR code with a phone's built-in camera (or tapping the link in
+  SMS/email) opens a single page with **Step 1: Download & install** (latest
+  Android APK / Windows Inno Setup installer / Linux RPM fetched dynamically
+  from GitHub Releases, auto-highlighting the visitor's OS, with an Android
+  sideload tip) and **Step 2: Connect** (`localbeat://join/<payload>` button +
+  Copy fallback). Opening the page without `#<payload>` displays a plain
+  Download LocalBeat page. If an `admin` invite is opened on a phone, the page
+  highlights Desktop Studio and notes that admin invites are for a computer.
+- Both `LocalBeat` (Android) and `LocalBeatStudio` accept **either**
+  `localbeat://join/<payload>` or `https://.../join#<payload>` from anywhere
+  inside pasted/clipboard text or a scanned QR code.
+- `LocalBeatServer` returns an optional `share_url` alongside `uri` in
+  `POST /invites` and `GET /invites` as the single source of truth; clients
+  fall back to `https://jimbo-yo.github.io/LocalBeat/join#<payload>` when
+  `share_url` is absent.
 
 ---
 

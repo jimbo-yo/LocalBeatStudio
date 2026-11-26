@@ -82,7 +82,7 @@ pub fn run_invite(action: Option<InviteAction>) -> Result<bool> {
             let inv = engine_join::create_invite(&s, &prefs, &session.session_token, &user, role)?;
             println!("Invite {} created for {} ({}), expires {}:", inv.id, inv.user, inv.role.as_str(), inv.expires_at);
             println!();
-            println!("  {}", inv.uri);
+            println!("  {}", inv.share_url());
             println!();
         }
         InviteAction::List => {
@@ -92,7 +92,7 @@ pub fn run_invite(action: Option<InviteAction>) -> Result<bool> {
             } else {
                 for inv in list {
                     println!("{}  user={}  role={}  expires={}", inv.id, inv.user, inv.role.as_str(), inv.expires_at);
-                    println!("  {}", inv.uri);
+                    println!("  {}", inv.share_url());
                 }
             }
         }

@@ -84,6 +84,7 @@ impl InviteWindow {
             created_at: "2026-11-24T13:00:00Z".into(),
             expires_at: "2026-12-01T13:00:00Z".into(),
             uri: "localbeat://join/eyJ2IjoxLCJ0IjoiZGVtby10b2tlbi0xMjM0NTY3ODkwIiwiayI6IkJQUklWIiwicCI6IkJQU0siLCJhIjoiMTAuOC4yNTAuMi8zMiIsInMiOiJTUFVCIiwiZSI6InZwbi5leGFtcGxlLmNvbTo1MTgyMCIsImwiOiIxOTIuMTY4LjEuMTA6NTE4MjAiLCJyIjoibGlzdGVuZXIifQ".into(),
+            share_url: None,
         };
         self.invites = vec![demo_inv.clone()];
         self.active_qr = Some(demo_inv);
@@ -328,8 +329,9 @@ impl InviteWindow {
             ui.add_space(12.0);
             ui.separator();
             ui.add_space(8.0);
+            let share_url = inv.share_url();
             ui.horizontal(|ui| {
-                draw_qr(ui, &inv.uri, 180.0);
+                draw_qr(ui, &share_url, 180.0);
                 ui.add_space(14.0);
                 ui.vertical(|ui| {
                     let who = if inv.user.is_empty() { "new user" } else { inv.user.as_str() };
@@ -340,7 +342,7 @@ impl InviteWindow {
                     );
                     ui.add_space(4.0);
                     ui.label(
-                        RichText::new("Scan this QR code in LocalBeat on a phone, or copy the link to text or paste into another LocalBeat Studio.")
+                        RichText::new("Scan with a phone camera (or inside LocalBeat) to download the app and connect, or copy the link to text or email.")
                             .small()
                             .color(p.dim),
                     );
@@ -350,7 +352,7 @@ impl InviteWindow {
                     let copied = self.copied_id.as_deref() == Some(inv.id.as_str());
                     let label = if copied { "Copied!" } else { "Copy invite link" };
                     if theme::button(ui, None, label, theme::Kind::Primary).clicked() {
-                        ctx.copy_text(inv.uri.clone());
+                        ctx.copy_text(share_url.clone());
                         self.copied_id = Some(inv.id.clone());
                     }
                 });
@@ -379,7 +381,7 @@ impl InviteWindow {
                                 self.active_qr = Some(inv.clone());
                             }
                             if theme::button(ui, None, "Copy", theme::Kind::Secondary).clicked() {
-                                ctx.copy_text(inv.uri.clone());
+                                ctx.copy_text(inv.share_url());
                                 self.copied_id = Some(inv.id.clone());
                             }
                         });
