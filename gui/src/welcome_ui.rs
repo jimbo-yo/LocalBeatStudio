@@ -270,7 +270,7 @@ impl WelcomeUi {
             egui::TextEdit::multiline(&mut self.input)
                 .desired_rows(3)
                 .desired_width(f32::INFINITY)
-                .hint_text("Paste your localbeat://join/... link (or the whole text message)"),
+                .hint_text("Paste your invite link (or the whole text message)"),
         );
         ui.add_space(6.0);
 
